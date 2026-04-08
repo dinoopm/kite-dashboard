@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { format, parseISO } from 'date-fns'
-import ReactMarkdown from 'react-markdown'
 
 function Instrument() {
   const { token } = useParams()
@@ -15,8 +14,6 @@ function Instrument() {
   const [indicators, setIndicators] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [needsAuth, setNeedsAuth] = useState(false)
-  const [loginMsg, setLoginMsg] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
 
   // Fetch live quote
@@ -75,11 +72,6 @@ function Instrument() {
         const resData = await res.json()
 
         if (resData.isError || resData.error) {
-          if (resData.isError) {
-            setNeedsAuth(true);
-            setLoading(false);
-            return;
-          }
           let msg = resData.content?.[0]?.text || resData.error || "Unknown error";
           if (msg.includes("Failed to get historical data")) {
             msg = "Market data for the selected timeframe is unavailable or restricted by Kite.";
@@ -134,21 +126,6 @@ function Instrument() {
     fetchHistoricalData()
   }, [token, timeframe])
 
-  const handleLogin = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch('http://localhost:3001/api/login', { method: 'POST' });
-      const responseData = await res.json();
-      if (responseData?.content?.[0]?.text) {
-        setLoginMsg(responseData.content[0].text);
-      }
-    } catch (err) {
-      setError('Login request failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const tfOptions = ['1D', '1W', '1M', '3M', '6M', '1Y', '5Y'];
 
   const todayChange = quote ? (quote.last_price - quote.ohlc.close) : null;
@@ -195,33 +172,6 @@ function Instrument() {
   };
 
   if (loading) return <div className="loader"></div>;
-
-  if (needsAuth) {
-    return (
-      <div className="dashboard-layout" style={{ maxWidth: '600px' }}>
-        <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
-          <h2>Authentication Required</h2>
-          <p>Please authorize the local dashboard to access your Kite data.</p>
-          {!loginMsg ? (
-            <button onClick={handleLogin} style={{ padding: '0.75rem 1.5rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', marginTop: '1rem', transition: 'all 0.2s' }}>
-              Login to Kite
-            </button>
-          ) : (
-            <div style={{ textAlign: 'left', background: 'var(--bg-dark)', padding: '1rem', borderRadius: '8px', marginTop: '1.5rem', lineHeight: '1.5' }}>
-              <ReactMarkdown components={{ a: ({ node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" /> }}>{loginMsg}</ReactMarkdown>
-              <br />
-              <button
-                onClick={() => { setNeedsAuth(false); window.location.reload(); }}
-                style={{ padding: '0.5rem 1rem', background: 'var(--success)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem' }}
-              >
-                I have logged in
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="dashboard-layout">

@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import ReactMarkdown from 'react-markdown'
 
 function Dashboard() {
   const [data, setData] = useState({
@@ -10,111 +9,66 @@ function Dashboard() {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [needsAuth, setNeedsAuth] = useState(false);
-  const [loginMsg, setLoginMsg] = useState(null);
 
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        setLoading(true);
-        const profileRes = await fetch('http://localhost:3001/api/profile');
-        const profileData = await profileRes.json();
-
-        if (profileData.isError || profileData.error) {
-          setNeedsAuth(true);
-          setLoading(false);
-          return;
-        }
-
-        const holdingsRes = await fetch('http://localhost:3001/api/holdings');
-        const holdingsData = await holdingsRes.json();
-
-        const mfRes = await fetch('http://localhost:3001/api/mf-holdings');
-        const mfData = await mfRes.json();
-
-        const marginsRes = await fetch('http://localhost:3001/api/margins');
-        const marginsData = await marginsRes.json();
-
-        let p = null, h = null, m = null, cash = null;
-
-        if (profileData?.content?.[0]?.text) {
-          try { p = JSON.parse(profileData.content[0].text); } catch(e) {}
-        }
-        if (holdingsData?.content?.[0]?.text) {
-          try { 
-            const parsed = JSON.parse(holdingsData.content[0].text);
-            h = parsed.data || parsed;
-          } catch(e) {}
-        }
-        if (mfData?.content?.[0]?.text) {
-          try { 
-            const parsed = JSON.parse(mfData.content[0].text);
-            m = parsed.data || parsed;
-          } catch(e) {}
-        }
-        if (marginsData?.content?.[0]?.text) {
-          try { 
-            const parsed = JSON.parse(marginsData.content[0].text);
-            cash = parsed.data || parsed;
-          } catch(e) {}
-        }
-
-        setData({ profile: p, holdings: h, mfHoldings: m, margins: cash });
-
-      } catch (err) {
-        console.error(err)
-        setError('Failed to aggregate dashboard data');
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchData();
-  }, [])
-
-  const handleLogin = async () => {
+  const fetchData = async (signal) => {
     try {
       setLoading(true);
-      const res = await fetch('http://localhost:3001/api/login', { method: 'POST' });
-      const responseData = await res.json();
-      if (responseData?.content?.[0]?.text) {
-        setLoginMsg(responseData.content[0].text);
+      setError(null);
+
+      const [profileRes, holdingsRes, mfRes, marginsRes] = await Promise.all([
+        fetch('http://localhost:3001/api/profile', { signal }),
+        fetch('http://localhost:3001/api/holdings', { signal }),
+        fetch('http://localhost:3001/api/mf-holdings', { signal }),
+        fetch('http://localhost:3001/api/margins', { signal }),
+      ]);
+      const profileData = await profileRes.json();
+      const holdingsData = await holdingsRes.json();
+      const mfData = await mfRes.json();
+      const marginsData = await marginsRes.json();
+
+      let p = null, h = null, m = null, cash = null;
+
+      if (profileData?.content?.[0]?.text) {
+        try { p = JSON.parse(profileData.content[0].text); } catch(e) {}
       }
+      if (holdingsData?.content?.[0]?.text) {
+        try { 
+          const parsed = JSON.parse(holdingsData.content[0].text);
+          h = parsed.data || parsed;
+        } catch(e) {}
+      }
+      if (mfData?.content?.[0]?.text) {
+        try { 
+          const parsed = JSON.parse(mfData.content[0].text);
+          m = parsed.data || parsed;
+        } catch(e) {}
+      }
+      if (marginsData?.content?.[0]?.text) {
+        try { 
+          const parsed = JSON.parse(marginsData.content[0].text);
+          cash = parsed.data || parsed;
+        } catch(e) {}
+      }
+
+      setData({ profile: p, holdings: h, mfHoldings: m, margins: cash });
+
     } catch (err) {
-      setError('Login request failed');
+      if (err.name === 'AbortError') return;
+      console.error(err)
+      setError(err.message || 'Failed to aggregate dashboard data');
     } finally {
       setLoading(false);
     }
   };
 
-  if (loading) return <div className="loader"></div>;
-  if (error) return <div className="glass-panel"><p className="negative">{error}</p></div>;
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchData(controller.signal);
+    return () => controller.abort();
+  }, [])
 
-  if (needsAuth) {
-    return (
-      <div className="dashboard-layout" style={{ maxWidth: '600px' }}>
-        <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
-          <h2>Authentication Required</h2>
-          <p>Please authorize the local dashboard to access your Kite data.</p>
-          {!loginMsg ? (
-            <button onClick={handleLogin} style={{padding: '0.75rem 1.5rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', marginTop: '1rem', transition: 'all 0.2s'}}>
-              Login to Kite
-            </button>
-          ) : (
-            <div style={{ textAlign: 'left', background: 'var(--bg-dark)', padding: '1rem', borderRadius: '8px', marginTop: '1.5rem', lineHeight: '1.5' }}>
-              <ReactMarkdown components={{ a: ({node, ...props}) => <a {...props} target="_blank" rel="noopener noreferrer" /> }}>{loginMsg}</ReactMarkdown>
-              <br />
-              <button 
-                onClick={() => { setNeedsAuth(false); window.location.reload(); }} 
-                style={{padding: '0.5rem 1rem', background: 'var(--success)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem'}}
-              >
-                I have logged in
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <div className="loader"></div>;
+  if (error) return <div className="dashboard-layout"><div className="glass-panel"><p className="negative">{error}</p><button onClick={() => fetchData()} style={{padding: '0.5rem 1rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem'}}>Retry</button></div></div>;
 
   // Aggregating Stocks
   const stocks = Array.isArray(data.holdings) ? data.holdings : [];

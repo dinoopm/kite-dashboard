@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import ReactMarkdown from 'react-markdown'
 
 function Portfolio() {
   const [profile, setProfile] = useState(null)
@@ -8,8 +7,6 @@ function Portfolio() {
   const [mfHoldings, setMfHoldings] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [needsAuth, setNeedsAuth] = useState(false)
-  const [loginMsg, setLoginMsg] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [sortField, setSortField] = useState('tradingsymbol')
   const [sortDirection, setSortDirection] = useState('asc')
@@ -17,19 +14,19 @@ function Portfolio() {
   
   const navigate = useNavigate()
 
-  const fetchData = async () => {
+  const fetchData = async (signal) => {
     try {
       setLoading(true)
-      const profileRes = await fetch('http://localhost:3001/api/profile')
+      setError(null)
+
+      const [profileRes, holdingsRes, mfRes] = await Promise.all([
+        fetch('http://localhost:3001/api/profile', { signal }),
+        fetch('http://localhost:3001/api/holdings', { signal }),
+        fetch('http://localhost:3001/api/mf-holdings', { signal }),
+      ]);
       const profileData = await profileRes.json()
-      
-      if (profileData.isError || profileData.error) {
-        setNeedsAuth(true)
-        return;
-      }
-      
-      const holdingsRes = await fetch('http://localhost:3001/api/holdings')
       const holdingsData = await holdingsRes.json()
+      const mfData = await mfRes.json()
 
       if (profileData?.content?.[0]?.text) {
         try { setProfile(JSON.parse(profileData.content[0].text)) } catch(e) {}
@@ -42,9 +39,6 @@ function Portfolio() {
         } catch(e) {}
       }
 
-      const mfRes = await fetch('http://localhost:3001/api/mf-holdings')
-      const mfData = await mfRes.json()
-
       if (mfData?.content?.[0]?.text) {
         try { 
           const parsed = JSON.parse(mfData.content[0].text) 
@@ -52,58 +46,22 @@ function Portfolio() {
         } catch(e) {}
       }
     } catch (err) {
+      if (err.name === 'AbortError') return;
       console.error(err)
-      setError('Failed to fetch data from backend.')
+      setError(err.message || 'Failed to fetch data from backend.')
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchData()
+    const controller = new AbortController();
+    fetchData(controller.signal);
+    return () => controller.abort();
   }, [])
 
-  const handleLogin = async () => {
-    try {
-      setLoading(true)
-      const res = await fetch('http://localhost:3001/api/login', { method: 'POST' })
-      const data = await res.json()
-      if (data?.content?.[0]?.text) {
-        setLoginMsg(data.content[0].text)
-      }
-    } catch (err) {
-      setError('Login request failed')
-    } finally {
-      setLoading(false)
-    }
-  }
-
   if (loading) return <div className="loader"></div>
-  if (error) return <div className="dashboard-layout"><div className="glass-panel"><p className="negative">{error}</p><button onClick={() => window.location.reload()} style={{padding: '0.5rem 1rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem'}}>Retry</button></div></div>
-  
-  if (needsAuth) {
-    return (
-      <div className="dashboard-layout" style={{ maxWidth: '600px' }}>
-        <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
-          <h2>Authentication Required</h2>
-          <p>Please authorize the local dashboard to access your Kite data.</p>
-          {!loginMsg ? (
-            <button onClick={handleLogin} style={{padding: '0.75rem 1.5rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', marginTop: '1rem', transition: 'all 0.2s'}}>
-              Login to Kite
-            </button>
-          ) : (
-            <div style={{ textAlign: 'left', background: 'var(--bg-dark)', padding: '1rem', borderRadius: '8px', marginTop: '1.5rem', lineHeight: '1.5' }}>
-              <ReactMarkdown components={{ a: ({node, ...props}) => <a {...props} target="_blank" rel="noopener noreferrer" /> }}>{loginMsg}</ReactMarkdown>
-              <br />
-              <button onClick={() => { setNeedsAuth(false); fetchData(); }} style={{padding: '0.5rem 1rem', background: 'var(--success)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem'}}>
-                I have logged in
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    )
-  }
+  if (error) return <div className="dashboard-layout"><div className="glass-panel"><p className="negative">{error}</p><button onClick={() => fetchData()} style={{padding: '0.5rem 1rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem'}}>Retry</button></div></div>
 
   const getTotalInvestment = () => {
     if (!holdings || !Array.isArray(holdings)) return 0;

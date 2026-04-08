@@ -175,6 +175,11 @@ app.post('/api/disconnect', async (req, res) => {
 app.post('/api/login', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
   try {
+    // Clear all API caches so the next fetch gets fresh data after authentication
+    Object.keys(apiCache).forEach(k => {
+      apiCache[k].data = null;
+      apiCache[k].timestamp = 0;
+    });
     const result = await mcpClient.callTool({ name: "login", arguments: {} });
     res.json(result);
   } catch (err) {
@@ -183,7 +188,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 // Cache map to prevent MCP hammering from rapid React Navigation
-const CACHE_TTL = 10000; // 10 seconds
+const CACHE_TTL = 60000; // 60 seconds
 const apiCache = {
   profile: { data: null, timestamp: 0 },
   holdings: { data: null, timestamp: 0 },
@@ -206,7 +211,10 @@ async function fetchWithCache(toolName, cacheKey, args = {}) {
 
   apiPromises[cacheKey] = mcpClient.callTool({ name: toolName, arguments: args })
     .then(result => {
-      apiCache[cacheKey] = { data: result, timestamp: Date.now() };
+      // Only cache successful responses — never cache errors
+      if (!result.isError) {
+        apiCache[cacheKey] = { data: result, timestamp: Date.now() };
+      }
       apiPromises[cacheKey] = null;
       return result;
     })
