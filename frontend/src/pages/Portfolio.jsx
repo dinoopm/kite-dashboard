@@ -342,6 +342,12 @@ function Portfolio() {
                     ₹{mfTotalInv.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                   </span>
                 </div>
+                <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: '3px solid #a29bfe' }}>
+                  <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Current Value</span>
+                  <span className="value" style={{ fontSize: '1.5rem', fontWeight: '700' }}>
+                    ₹{mfCurrentVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                  </span>
+                </div>
                 <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: `3px solid ${mfPL >= 0 ? 'var(--success)' : 'var(--danger)'}` }}>
                   <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Total Returns</span>
                   <span className={`value ${mfPL >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.5rem', fontWeight: '700' }}>
