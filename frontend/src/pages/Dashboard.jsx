@@ -124,8 +124,8 @@ function Dashboard() {
   const stockPlPct = totalStockInv ? ((stockPl / totalStockInv) * 100).toFixed(2) : 0;
 
   // Calculate Top Movers
-  let topGainer = null;
-  let topLoser = null;
+  let topWinners = [];
+  let topLosers = [];
   if (stocks.length > 0) {
     const movers = stocks.map(item => {
       const pChg = item.last_price - (item.close_price || item.last_price);
@@ -133,8 +133,8 @@ function Dashboard() {
       return { ...item, pChg, pChgPct };
     }).sort((a, b) => b.pChgPct - a.pChgPct);
     
-    if (movers[0].pChgPct > 0) topGainer = movers[0];
-    if (movers[movers.length - 1].pChgPct < 0) topLoser = movers[movers.length - 1];
+    topWinners = movers.filter(m => m.pChgPct > 0).slice(0, 3);
+    topLosers = movers.filter(m => m.pChgPct < 0).reverse().slice(0, 3);
   }
 
   // Aggregating MFs
@@ -264,32 +264,34 @@ function Dashboard() {
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0 }}>Today's Movers</h3>
-            <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>Equity</span>
+            <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>Equity Top 3</span>
           </div>
           <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }} />
           
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span className="label" style={{ color: 'var(--success)' }}>Top Gainer</span>
-            {topGainer ? (
-              <div style={{ textAlign: 'right' }}>
-                <strong style={{ display: 'block' }}>{topGainer.tradingsymbol}</strong>
-                <span className="positive">+{topGainer.pChgPct.toFixed(2)}%</span>
-              </div>
-            ) : (
-              <span className="value" style={{ fontSize: '1rem' }}>--</span>
-            )}
-          </div>
-          
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem' }}>
-            <span className="label" style={{ color: 'var(--danger)' }}>Top Loser</span>
-            {topLoser ? (
-              <div style={{ textAlign: 'right' }}>
-                <strong style={{ display: 'block' }}>{topLoser.tradingsymbol}</strong>
-                <span className="negative">{topLoser.pChgPct.toFixed(2)}%</span>
-              </div>
-            ) : (
-              <span className="value" style={{ fontSize: '1rem' }}>--</span>
-            )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            <div>
+              <span className="label" style={{ color: 'var(--success)', display: 'block', marginBottom: '0.5rem' }}>Top 3 Winners</span>
+              {topWinners.length > 0 ? topWinners.map((gainer, idx) => (
+                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+                  <strong>{gainer.tradingsymbol}</strong>
+                  <span className="positive">+{gainer.pChgPct.toFixed(2)}%</span>
+                </div>
+              )) : (
+                <div className="value" style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>--</div>
+              )}
+            </div>
+            
+            <div>
+               <span className="label" style={{ color: 'var(--danger)', display: 'block', marginBottom: '0.5rem' }}>Top 3 Losers</span>
+               {topLosers.length > 0 ? topLosers.map((loser, idx) => (
+                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+                  <strong>{loser.tradingsymbol}</strong>
+                  <span className="negative">{loser.pChgPct.toFixed(2)}%</span>
+                </div>
+              )) : (
+                <div className="value" style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>--</div>
+              )}
+            </div>
           </div>
         </div>
 
