@@ -3,6 +3,8 @@ const cors = require('cors');
 const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
 const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio.js");
 const { SMA, EMA, RSI, MACD, BollingerBands } = require('technicalindicators');
+const YahooFinance = require('yahoo-finance2').default;
+const yahooFinance = new YahooFinance();
 
 const app = express();
 app.use(cors());
@@ -19,6 +21,18 @@ let holdingsCache = [];    // raw holdings array
 let cacheReady = false;
 
 // ─── Helpers ───────────────────────────────────────────────────
+const toYahooSymbol = (symbol) => {
+  if (!symbol) return '';
+  // Remove NSE: or BSE: prefix if present
+  let cleanSymbol = symbol.replace(/^(NSE|BSE):/, '');
+  // Unless it's an index or explicitly a global ticker, append .NS for Indian equities
+  // (We assume NSE as default for Kite stocks if not specified)
+  if (!cleanSymbol.includes('.') && cleanSymbol !== 'NIFTY 50' && cleanSymbol !== 'NIFTY BANK') {
+    return `${cleanSymbol}.NS`;
+  }
+  return cleanSymbol;
+};
+
 const formatDate = (d, isEnd) => {
   const dateStr = d.toISOString().split('T')[0];
   return `${dateStr} ${isEnd ? '23:59:59' : '00:00:00'}`;
@@ -535,6 +549,25 @@ app.get('/api/indicators/:token', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: "Failed to compute indicators: " + err.message });
+  }
+});
+
+app.get('/api/fundamentals/:symbol', async (req, res) => {
+  try {
+    const symbol = req.params.symbol;
+    if (!symbol) return res.status(400).json({ error: "Symbol required" });
+
+    const yahooSymbol = toYahooSymbol(symbol);
+    
+    // Fetch fundamental data from Yahoo Finance
+    const quoteSummary = await yahooFinance.quoteSummary(yahooSymbol, {
+      modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData', 'price', 'assetProfile']
+    });
+
+    res.json(quoteSummary);
+  } catch (err) {
+    console.error("Yahoo Finance error:", err);
+    res.status(500).json({ error: "Failed to fetch fundamental data: " + err.message });
   }
 });
 

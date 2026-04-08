@@ -12,6 +12,7 @@ function Instrument() {
   const [data, setData] = useState([])
   const [quote, setQuote] = useState(null)
   const [indicators, setIndicators] = useState(null)
+  const [fundamentals, setFundamentals] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
@@ -61,6 +62,23 @@ function Instrument() {
     }
     fetchIndicators()
   }, [token])
+
+  // Fetch fundamentals
+  useEffect(() => {
+    if (!symbol) return;
+    const fetchFundamentals = async () => {
+      try {
+        const res = await fetch(`http://localhost:3001/api/fundamentals/${symbol}`);
+        if (res.ok) {
+          const data = await res.json();
+          setFundamentals(data);
+        }
+      } catch (e) {
+        console.error("Failed to fetch fundamentals", e);
+      }
+    };
+    fetchFundamentals();
+  }, [symbol]);
 
   // Fetch historical data
   useEffect(() => {
@@ -396,6 +414,69 @@ function Instrument() {
                 </div>
               </>
             )}
+          </div>
+        </section>
+      )}
+
+      {/* Fundamental Analysis */}
+      {fundamentals && (
+        <section className="glass-panel" style={{ marginTop: '1rem', background: 'linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%)' }}>
+          <h2 style={{ marginBottom: '1rem' }}>Fundamental Analysis (Yahoo Finance)</h2>
+          
+          {fundamentals.assetProfile?.longBusinessSummary && (
+            <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'var(--bg-dark)', borderRadius: '8px', lineHeight: '1.6', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+              <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: '0.5rem' }}>Company Overview</strong>
+              {fundamentals.assetProfile.longBusinessSummary}
+            </div>
+          )}
+
+          <div className="grid" style={{ gap: '0.75rem' }}>
+            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+              <span className="label" style={{ fontSize: '0.85rem' }}>Market Cap</span>
+              <span className="value" style={{ fontSize: '1.25rem' }}>{fundamentals.summaryDetail?.marketCap ? `₹${(fundamentals.summaryDetail.marketCap / 10000000).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr` : '—'}</span>
+            </div>
+            
+            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+              <span className="label" style={{ fontSize: '0.85rem' }}>Trailing P/E</span>
+              <span className="value" style={{ fontSize: '1.25rem' }}>{fmtNum(fundamentals.summaryDetail?.trailingPE)}</span>
+            </div>
+            
+            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+              <span className="label" style={{ fontSize: '0.85rem' }}>Forward P/E</span>
+              <span className="value" style={{ fontSize: '1.25rem' }}>{fmtNum(fundamentals.summaryDetail?.forwardPE)}</span>
+            </div>
+
+            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+              <span className="label" style={{ fontSize: '0.85rem' }}>Price to Book (P/B)</span>
+              <span className="value" style={{ fontSize: '1.25rem' }}>{fmtNum(fundamentals.defaultKeyStatistics?.priceToBook)}</span>
+            </div>
+
+            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+              <span className="label" style={{ fontSize: '0.85rem' }}>Dividend Yield</span>
+              <span className="value" style={{ fontSize: '1.25rem' }}>{fundamentals.summaryDetail?.dividendYield !== undefined ? `${(fundamentals.summaryDetail.dividendYield * 100).toFixed(2)}%` : '—'}</span>
+            </div>
+
+            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+              <span className="label" style={{ fontSize: '0.85rem' }}>PEG Ratio</span>
+              <span className="value" style={{ fontSize: '1.25rem' }}>{fmtNum(fundamentals.defaultKeyStatistics?.pegRatio)}</span>
+            </div>
+
+            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+              <span className="label" style={{ fontSize: '0.85rem' }}>52W High</span>
+              <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(fundamentals.summaryDetail?.fiftyTwoWeekHigh)}</span>
+            </div>
+
+            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+              <span className="label" style={{ fontSize: '0.85rem' }}>52W Low</span>
+              <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(fundamentals.summaryDetail?.fiftyTwoWeekLow)}</span>
+            </div>
+            
+            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+              <span className="label" style={{ fontSize: '0.85rem' }}>Profit Margin</span>
+              <span className={`value ${fundamentals.financialData?.profitMargins >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.25rem' }}>
+                {fundamentals.financialData?.profitMargins !== undefined ? `${(fundamentals.financialData.profitMargins * 100).toFixed(2)}%` : '—'}
+              </span>
+            </div>
           </div>
         </section>
       )}

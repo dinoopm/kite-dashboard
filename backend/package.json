@@ -15,6 +15,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.1",
     "express": "^5.2.1",
-    "technicalindicators": "^3.1.0"
+    "technicalindicators": "^3.1.0",
+    "yahoo-finance2": "^3.14.0"
   }
 }
