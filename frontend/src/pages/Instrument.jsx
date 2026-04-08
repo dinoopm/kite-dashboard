@@ -334,7 +334,7 @@ function Instrument() {
       {/* Technical Indicators */}
       {indicators && (
         <section className="glass-panel" style={{ marginTop: '1rem' }}>
-          <h2 style={{ marginBottom: '1rem' }}>Technical Indicators</h2>
+          <h2 style={{ marginBottom: '1rem' }}>Technical Indicators (1D time frame)</h2>
           <div className="grid" style={{ gap: '0.75rem' }}>
             {/* RSI */}
             <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
