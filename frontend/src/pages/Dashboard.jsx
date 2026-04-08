@@ -1,0 +1,301 @@
+import { useState, useEffect } from 'react'
+import ReactMarkdown from 'react-markdown'
+
+function Dashboard() {
+  const [data, setData] = useState({
+    profile: null,
+    holdings: null,
+    mfHoldings: null,
+    margins: null
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [needsAuth, setNeedsAuth] = useState(false);
+  const [loginMsg, setLoginMsg] = useState(null);
+
+  useEffect(() => {
+    async function fetchData() {
+      try {
+        setLoading(true);
+        const profileRes = await fetch('http://localhost:3001/api/profile');
+        const profileData = await profileRes.json();
+
+        if (profileData.isError || profileData.error) {
+          setNeedsAuth(true);
+          setLoading(false);
+          return;
+        }
+
+        const holdingsRes = await fetch('http://localhost:3001/api/holdings');
+        const holdingsData = await holdingsRes.json();
+
+        const mfRes = await fetch('http://localhost:3001/api/mf-holdings');
+        const mfData = await mfRes.json();
+
+        const marginsRes = await fetch('http://localhost:3001/api/margins');
+        const marginsData = await marginsRes.json();
+
+        let p = null, h = null, m = null, cash = null;
+
+        if (profileData?.content?.[0]?.text) {
+          try { p = JSON.parse(profileData.content[0].text); } catch(e) {}
+        }
+        if (holdingsData?.content?.[0]?.text) {
+          try { 
+            const parsed = JSON.parse(holdingsData.content[0].text);
+            h = parsed.data || parsed;
+          } catch(e) {}
+        }
+        if (mfData?.content?.[0]?.text) {
+          try { 
+            const parsed = JSON.parse(mfData.content[0].text);
+            m = parsed.data || parsed;
+          } catch(e) {}
+        }
+        if (marginsData?.content?.[0]?.text) {
+          try { 
+            const parsed = JSON.parse(marginsData.content[0].text);
+            cash = parsed.data || parsed;
+          } catch(e) {}
+        }
+
+        setData({ profile: p, holdings: h, mfHoldings: m, margins: cash });
+
+      } catch (err) {
+        console.error(err)
+        setError('Failed to aggregate dashboard data');
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchData();
+  }, [])
+
+  const handleLogin = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch('http://localhost:3001/api/login', { method: 'POST' });
+      const responseData = await res.json();
+      if (responseData?.content?.[0]?.text) {
+        setLoginMsg(responseData.content[0].text);
+      }
+    } catch (err) {
+      setError('Login request failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) return <div className="loader"></div>;
+  if (error) return <div className="glass-panel"><p className="negative">{error}</p></div>;
+
+  if (needsAuth) {
+    return (
+      <div className="dashboard-layout" style={{ maxWidth: '600px' }}>
+        <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem 2rem' }}>
+          <h2>Authentication Required</h2>
+          <p>Please authorize the local dashboard to access your Kite data.</p>
+          {!loginMsg ? (
+            <button onClick={handleLogin} style={{padding: '0.75rem 1.5rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', marginTop: '1rem', transition: 'all 0.2s'}}>
+              Login to Kite
+            </button>
+          ) : (
+            <div style={{ textAlign: 'left', background: 'var(--bg-dark)', padding: '1rem', borderRadius: '8px', marginTop: '1.5rem', lineHeight: '1.5' }}>
+              <ReactMarkdown components={{ a: ({node, ...props}) => <a {...props} target="_blank" rel="noopener noreferrer" /> }}>{loginMsg}</ReactMarkdown>
+              <br />
+              <button 
+                onClick={() => { setNeedsAuth(false); window.location.reload(); }} 
+                style={{padding: '0.5rem 1rem', background: 'var(--success)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem'}}
+              >
+                I have logged in
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Aggregating Stocks
+  const stocks = Array.isArray(data.holdings) ? data.holdings : [];
+  const totalStockInv = stocks.reduce((sum, h) => sum + (h.average_price * h.quantity), 0);
+  const totalStockVal = stocks.reduce((sum, h) => sum + (h.last_price * h.quantity), 0);
+  const stockPl = totalStockVal - totalStockInv;
+  const stockPlPct = totalStockInv ? ((stockPl / totalStockInv) * 100).toFixed(2) : 0;
+
+  // Calculate Top Movers
+  let topGainer = null;
+  let topLoser = null;
+  if (stocks.length > 0) {
+    const movers = stocks.map(item => {
+      const pChg = item.last_price - (item.close_price || item.last_price);
+      const pChgPct = item.close_price ? ((pChg / item.close_price) * 100) : 0;
+      return { ...item, pChg, pChgPct };
+    }).sort((a, b) => b.pChgPct - a.pChgPct);
+    
+    if (movers[0].pChgPct > 0) topGainer = movers[0];
+    if (movers[movers.length - 1].pChgPct < 0) topLoser = movers[movers.length - 1];
+  }
+
+  // Aggregating MFs
+  const mfs = Array.isArray(data.mfHoldings) ? data.mfHoldings : [];
+  const totalMfInv = mfs.reduce((sum, m) => sum + (m.average_price * m.quantity), 0);
+  const totalMfVal = mfs.reduce((sum, m) => sum + (m.last_price * m.quantity), 0);
+  const mfPl = totalMfVal - totalMfInv;
+  const mfPlPct = totalMfInv ? ((mfPl / totalMfInv) * 100).toFixed(2) : 0;
+
+  // Overall Total
+  const totalInv = totalStockInv + totalMfInv;
+  const totalVal = totalStockVal + totalMfVal;
+  const totalPl = totalVal - totalInv;
+  const totalPlPct = totalInv ? ((totalPl / totalInv) * 100).toFixed(2) : 0;
+
+  // Cash / Margins
+  const marginsObj = data.margins || {};
+  const availableMargin = marginsObj?.equity?.available?.live_balance || marginsObj?.equity?.net || 0;
+  const openingBalance = marginsObj?.equity?.available?.opening_balance || 0;
+
+  const fmt = (num) => num.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+  return (
+    <div className="dashboard-layout">
+      <header className="header">
+        <div>
+          <h1>Overview Dashboard</h1>
+          <p>Welcome back, {data.profile?.user_name || "Trader"}</p>
+        </div>
+        <div className="glass-panel" style={{ padding: '0.5rem 1rem' }}>
+          <span className="label">User ID: </span>
+          <strong>{data.profile?.user_id}</strong>
+        </div>
+      </header>
+
+      {/* Net Worth / Grand Totals */}
+      <section className="glass-panel" style={{ marginBottom: '2rem', background: 'linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%)', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+        <h2 style={{ marginBottom: '1.5rem', color: 'var(--text-primary)' }}>Net Portfolio</h2>
+        <div className="grid">
+          <div>
+             <span className="label">Total Invested</span>
+             <span className="value" style={{ fontSize: '1.5rem' }}>₹{fmt(totalInv)}</span>
+          </div>
+          <div>
+             <span className="label">Total Current Value</span>
+             <span className="value" style={{ fontSize: '1.5rem', color: 'var(--accent)' }}>₹{fmt(totalVal)}</span>
+          </div>
+          <div>
+             <span className="label">Total P&L</span>
+             <span className={`value ${totalPl >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.5rem' }}>
+                {totalPl >= 0 ? '+' : ''}₹{fmt(totalPl)} ({totalPlPct}%)
+             </span>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid" style={{ marginBottom: '2rem', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
+        
+        {/* Stocks Card */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0 }}>Equities</h3>
+            <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>{stocks.length} Assets</span>
+          </div>
+          <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span className="label">Invested</span>
+            <strong>₹{fmt(totalStockInv)}</strong>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span className="label">Current</span>
+            <strong>₹{fmt(totalStockVal)}</strong>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span className="label">P&L</span>
+            <strong className={stockPl >= 0 ? 'positive' : 'negative'}>
+              {stockPl >= 0 ? '+' : ''}₹{fmt(stockPl)} ({stockPlPct}%)
+            </strong>
+          </div>
+        </div>
+
+        {/* Mutual Funds Card */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0 }}>Mutual Funds</h3>
+            <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>{mfs.length} Assets</span>
+          </div>
+          <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span className="label">Invested</span>
+            <strong>₹{fmt(totalMfInv)}</strong>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span className="label">Current</span>
+            <strong>₹{fmt(totalMfVal)}</strong>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span className="label">P&L</span>
+            <strong className={mfPl >= 0 ? 'positive' : 'negative'}>
+              {mfPl >= 0 ? '+' : ''}₹{fmt(mfPl)} ({mfPlPct}%)
+            </strong>
+          </div>
+        </div>
+
+        {/* Cash Margins Card */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0 }}>Cash & Margins</h3>
+            <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>Equity</span>
+          </div>
+          <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span className="label">Available Margin (Live)</span>
+            <strong style={{ color: 'var(--accent)' }}>₹{fmt(availableMargin)}</strong>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span className="label">Opening Balance</span>
+            <strong>₹{fmt(openingBalance)}</strong>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+             <span className="label">Utilised</span>
+             <strong>₹{fmt(marginsObj?.equity?.utilised?.debits || 0)}</strong>
+          </div>
+        </div>
+
+        {/* Today's Movers Card */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0 }}>Today's Movers</h3>
+            <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>Equity</span>
+          </div>
+          <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }} />
+          
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="label" style={{ color: 'var(--success)' }}>Top Gainer</span>
+            {topGainer ? (
+              <div style={{ textAlign: 'right' }}>
+                <strong style={{ display: 'block' }}>{topGainer.tradingsymbol}</strong>
+                <span className="positive">+{topGainer.pChgPct.toFixed(2)}%</span>
+              </div>
+            ) : (
+              <span className="value" style={{ fontSize: '1rem' }}>--</span>
+            )}
+          </div>
+          
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem' }}>
+            <span className="label" style={{ color: 'var(--danger)' }}>Top Loser</span>
+            {topLoser ? (
+              <div style={{ textAlign: 'right' }}>
+                <strong style={{ display: 'block' }}>{topLoser.tradingsymbol}</strong>
+                <span className="negative">{topLoser.pChgPct.toFixed(2)}%</span>
+              </div>
+            ) : (
+              <span className="value" style={{ fontSize: '1rem' }}>--</span>
+            )}
+          </div>
+        </div>
+
+      </section>
+    </div>
+  )
+}
+
+export default Dashboard
