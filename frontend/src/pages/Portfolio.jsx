@@ -65,12 +65,13 @@ function Portfolio() {
 
   const getTotalInvestment = () => {
     if (!holdings || !Array.isArray(holdings)) return 0;
-    return holdings.reduce((sum, h) => sum + (h.average_price * h.quantity), 0);
+    // Use t1_quantity + realised_quantity to get the true portfolio quantity as it matches Kite Console
+    return holdings.reduce((sum, h) => sum + (h.average_price * ((h.t1_quantity || 0) + (h.realised_quantity || 0))), 0);
   };
 
   const getCurrentValue = () => {
     if (!holdings || !Array.isArray(holdings)) return 0;
-    return holdings.reduce((sum, h) => sum + (h.last_price * h.quantity), 0);
+    return holdings.reduce((sum, h) => sum + (h.last_price * ((h.t1_quantity || 0) + (h.realised_quantity || 0))), 0);
   };
 
   const totalInv = getTotalInvestment();
@@ -81,13 +82,14 @@ function Portfolio() {
   const filteredAndSortedHoldings = (holdings || [])
     .filter(item => item.tradingsymbol.toLowerCase().includes(searchTerm.toLowerCase()))
     .map(item => {
-      const currentValue = item.quantity * item.last_price;
-      const investment = item.quantity * item.average_price;
-      const itemPL = currentValue - investment;
+      const q = (item.t1_quantity || 0) + (item.realised_quantity || 0);
+      const currentValue = q * item.last_price;
+      const investment = q * item.average_price;
+      const itemPL = item.pnl !== undefined ? item.pnl : (currentValue - investment);
       const itemPLPercent = investment ? (itemPL / investment) * 100 : 0;
-      const dayChange = item.last_price - (item.close_price || item.last_price);
-      const dayChangePct = item.close_price ? (dayChange / item.close_price) * 100 : 0;
-      return { ...item, currentValue, investment, itemPL, itemPLPercent, dayChange, dayChangePct };
+      const dayChange = item.day_change !== undefined ? item.day_change : (item.last_price - (item.close_price || item.last_price));
+      const dayChangePct = item.day_change_percentage !== undefined ? item.day_change_percentage : (item.close_price ? (dayChange / item.close_price) * 100 : 0);
+      return { ...item, displayQuantity: q, currentValue, investment, itemPL, itemPLPercent, dayChange, dayChangePct };
     })
     .sort((a, b) => {
       let valA = a[sortField];
@@ -120,11 +122,12 @@ function Portfolio() {
         return searchStr.includes(searchTerm.toLowerCase());
       })
       .map(item => {
-        const currentValue = item.quantity * item.last_price;
-        const investment = item.quantity * item.average_price;
+        const q = (item.t1_quantity || 0) + (item.realised_quantity || 0);
+        const currentValue = q * item.last_price;
+        const investment = q * item.average_price;
         const itemPL = currentValue - investment;
         const itemPLPercent = investment ? (itemPL / investment) * 100 : 0;
-        return { ...item, currentValue, investment, itemPL, itemPLPercent };
+        return { ...item, displayQuantity: q, currentValue, investment, itemPL, itemPLPercent };
       })
       .sort((a, b) => {
         let valA = a[sortField];
@@ -201,8 +204,8 @@ function Portfolio() {
           {/* Portfolio Summary Stats */}
           {(() => {
             const todaysReturn = (holdings || []).reduce((sum, h) => {
-              const closePrice = h.close_price || h.last_price;
-              return sum + ((h.last_price - closePrice) * h.quantity);
+              const dayChange = h.day_change !== undefined ? h.day_change : (h.last_price - (h.close_price || h.last_price));
+              return sum + (dayChange * ((h.t1_quantity || 0) + (h.realised_quantity || 0)));
             }, 0);
             const todaysReturnPct = currentVal ? ((todaysReturn / (currentVal - todaysReturn)) * 100) : 0;
 
@@ -260,7 +263,7 @@ function Portfolio() {
                   {filteredAndSortedHoldings.map((item, index) => (
                     <tr key={index} onClick={() => navigate(`/instrument/${item.instrument_token}?symbol=${item.tradingsymbol}`)} style={{cursor: 'pointer'}}>
                       <td><strong>{item.tradingsymbol}</strong></td>
-                      <td>{item.quantity}</td>
+                      <td>{item.displayQuantity}</td>
                       <td>₹{item.average_price}</td>
                       <td>₹{item.last_price}</td>
                       <td className={item.dayChange >= 0 ? 'positive' : 'negative'}>
@@ -340,7 +343,7 @@ function Portfolio() {
                         <strong>{item.fund || item.tradingsymbol}</strong>
                         <div style={{ fontSize: '0.75rem', opacity: 0.6 }}>{item.tradingsymbol}</div>
                       </td>
-                      <td>{item.quantity}</td>
+                      <td>{item.displayQuantity}</td>
                       <td>₹{item.average_price}</td>
                       <td>₹{item.last_price}</td>
                       <td>₹{item.investment.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>

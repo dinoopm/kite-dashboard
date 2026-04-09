@@ -177,11 +177,20 @@ app.post('/api/disconnect', async (req, res) => {
     console.error("Error closing transport:", err.message);
   }
 
+  try {
+    // Force kill any dangling mcp-remote child processes to prevent Invalid Session conflicts
+    require('child_process').execSync('pkill -f "mcp-remote"');
+  } catch (e) {
+    // Ignore if no process found
+  }
+
   mcpClient = null;
   mcpTransport = null;
 
-  // 3. Restart MCP process (fire and forget)
-  connectToKiteMcp().catch(e => console.error(e));
+  // 3. Restart MCP process (with delay to ensure clean kill)
+  setTimeout(() => {
+    connectToKiteMcp().catch(e => console.error(e));
+  }, 1000);
 
   res.json({ success: true, message: "Disconnected successfully" });
 });
@@ -194,7 +203,7 @@ app.post('/api/login', async (req, res) => {
       apiCache[k].data = null;
       apiCache[k].timestamp = 0;
     });
-    const result = await mcpClient.callTool({ name: "login", arguments: {} });
+    const result = await callWithTimeout({ name: "login", arguments: {} }, 30000); // login can take slightly longer
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -213,6 +222,19 @@ const apiPromises = {
   profile: null, holdings: null, mfHoldings: null, margins: null
 };
 
+// Timeout for MCP client calls (15s) to avoid hanging forever when mcp-remote hangs
+const callWithTimeout = (cmdObj, ms = 15000) => {
+  if (!mcpClient) return Promise.reject(new Error("MCP not connected"));
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`MCP Request Timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([
+    mcpClient.callTool(cmdObj),
+    timeoutPromise
+  ]).finally(() => clearTimeout(timeoutId));
+};
+
 // Track instrument indicator fetches to prevent duplicate/race conditions
 const indicatorPromises = {};
 
@@ -223,7 +245,7 @@ async function fetchWithCache(toolName, cacheKey, args = {}) {
   }
   if (apiPromises[cacheKey]) return apiPromises[cacheKey];
 
-  apiPromises[cacheKey] = mcpClient.callTool({ name: toolName, arguments: args })
+  apiPromises[cacheKey] = callWithTimeout({ name: toolName, arguments: args }, 15000)
     .then(result => {
       // Only cache successful responses — never cache errors
       if (!result.isError) {
@@ -576,7 +598,7 @@ app.post('/api/quotes', async (req, res) => {
   try {
     const { instruments } = req.body;
     if (!instruments || !instruments.length) return res.json({ content: [{text: "{}"}] });
-    const result = await mcpClient.callTool({
+    const result = await callWithTimeout({
       name: "get_quotes",
       arguments: { instruments }
     });

@@ -72,9 +72,9 @@ function Dashboard() {
 
   // Aggregating Stocks
   const stocks = Array.isArray(data.holdings) ? data.holdings : [];
-  const totalStockInv = stocks.reduce((sum, h) => sum + (h.average_price * h.quantity), 0);
-  const totalStockVal = stocks.reduce((sum, h) => sum + (h.last_price * h.quantity), 0);
-  const stockPl = totalStockVal - totalStockInv;
+  const totalStockInv = stocks.reduce((sum, h) => sum + (h.average_price * ((h.t1_quantity || 0) + (h.realised_quantity || 0))), 0);
+  const totalStockVal = stocks.reduce((sum, h) => sum + (h.last_price * ((h.t1_quantity || 0) + (h.realised_quantity || 0))), 0);
+  const stockPl = stocks.reduce((sum, h) => sum + (h.pnl !== undefined ? h.pnl : ((h.last_price - h.average_price) * ((h.t1_quantity || 0) + (h.realised_quantity || 0)))), 0);
   const stockPlPct = totalStockInv ? ((stockPl / totalStockInv) * 100).toFixed(2) : 0;
 
   // Calculate Top Movers
@@ -82,8 +82,8 @@ function Dashboard() {
   let topLosers = [];
   if (stocks.length > 0) {
     const movers = stocks.map(item => {
-      const pChg = item.last_price - (item.close_price || item.last_price);
-      const pChgPct = item.close_price ? ((pChg / item.close_price) * 100) : 0;
+      const pChg = item.day_change !== undefined ? item.day_change : (item.last_price - (item.close_price || item.last_price));
+      const pChgPct = item.day_change_percentage !== undefined ? item.day_change_percentage : (item.close_price ? ((pChg / item.close_price) * 100) : 0);
       return { ...item, pChg, pChgPct };
     }).sort((a, b) => b.pChgPct - a.pChgPct);
     
@@ -93,9 +93,9 @@ function Dashboard() {
 
   // Aggregating MFs
   const mfs = Array.isArray(data.mfHoldings) ? data.mfHoldings : [];
-  const totalMfInv = mfs.reduce((sum, m) => sum + (m.average_price * m.quantity), 0);
-  const totalMfVal = mfs.reduce((sum, m) => sum + (m.last_price * m.quantity), 0);
-  const mfPl = totalMfVal - totalMfInv;
+  const totalMfInv = mfs.reduce((sum, m) => sum + (m.average_price * ((m.t1_quantity || 0) + (m.realised_quantity || 0))), 0);
+  const totalMfVal = mfs.reduce((sum, m) => sum + (m.last_price * ((m.t1_quantity || 0) + (m.realised_quantity || 0))), 0);
+  const mfPl = mfs.reduce((sum, m) => sum + (m.pnl !== undefined ? m.pnl : ((m.last_price - m.average_price) * ((m.t1_quantity || 0) + (m.realised_quantity || 0)))), 0);
   const mfPlPct = totalMfInv ? ((mfPl / totalMfInv) * 100).toFixed(2) : 0;
 
   // Overall Total

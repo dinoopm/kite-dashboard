@@ -13,7 +13,8 @@ function App() {
   const checkAuth = useCallback(async () => {
     try {
       setAuthState('loading')
-      const res = await fetch('http://localhost:3001/api/profile')
+      // Fail fast if backend is completely frozen or stuck after 10s
+      const res = await fetch('http://localhost:3001/api/profile', { signal: AbortSignal.timeout(10000) })
       const data = await res.json()
 
       if (!res.ok || data.isError || data.error) {
@@ -42,6 +43,8 @@ function App() {
       const data = await res.json()
       if (data?.content?.[0]?.text) {
         setLoginMsg(data.content[0].text)
+      } else if (data?.error) {
+        setLoginMsg("❌ **Error generating login URL:** " + data.error + "\n\nPlease wait a few seconds and try again. If it persists, restart the backend server.")
       }
     } catch (err) {
       // ignore
