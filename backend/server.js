@@ -593,6 +593,36 @@ app.get('/api/fundamentals/:symbol', async (req, res) => {
   }
 });
 
+app.get('/api/cashflow/:symbol', async (req, res) => {
+  try {
+    const symbol = req.params.symbol;
+    if (!symbol) return res.status(400).json({ error: "Symbol required" });
+
+    const yahooSymbol = toYahooSymbol(symbol);
+    
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 4); // Get last 4 years approx
+    
+    const ts = await yahooFinance.fundamentalsTimeSeries(yahooSymbol, {
+      period1: d.toISOString().split('T')[0],
+      module: 'all'
+    });
+    
+    const cashflowData = ts.map(item => ({
+      date: item.date,
+      operatingCashFlow: item.operatingCashFlow || 0,
+      investingCashFlow: item.investingCashFlow || 0,
+      financingCashFlow: item.financingCashFlow || 0,
+      freeCashFlow: item.freeCashFlow || 0
+    })).filter(item => item.operatingCashFlow !== 0 || item.investingCashFlow !== 0 || item.financingCashFlow !== 0);
+
+    res.json(cashflowData);
+  } catch (err) {
+    console.error("Yahoo Finance cashflow error:", err);
+    res.status(500).json({ error: "Failed to fetch cashflow data: " + err.message });
+  }
+});
+
 app.post('/api/quotes', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
   try {

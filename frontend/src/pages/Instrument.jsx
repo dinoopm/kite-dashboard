@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { format, parseISO } from 'date-fns'
 
 function Instrument() {
@@ -13,6 +13,7 @@ function Instrument() {
   const [quote, setQuote] = useState(null)
   const [indicators, setIndicators] = useState(null)
   const [fundamentals, setFundamentals] = useState(null)
+  const [cashflow, setCashflow] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
@@ -78,7 +79,19 @@ function Instrument() {
         console.error("Failed to fetch fundamentals", e);
       }
     };
+    const fetchCashflow = async () => {
+      try {
+        const res = await fetch(`http://localhost:3001/api/cashflow/${symbol}`);
+        if (res.ok) {
+          const data = await res.json();
+          setCashflow(data);
+        }
+      } catch (e) {
+        console.error("Failed to fetch cashflow", e);
+      }
+    };
     fetchFundamentals();
+    fetchCashflow();
   }, [symbol]);
 
   // Fetch historical data
@@ -276,6 +289,22 @@ function Instrument() {
           }}
         >
           Fundamentals
+        </button>
+        <button
+          onClick={() => setActiveTab('cashflow')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'cashflow' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'cashflow' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '0.5rem 1rem',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'cashflow' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+            fontSize: '1rem'
+          }}
+        >
+          Cashflow Chart
         </button>
       </div>
 
@@ -533,6 +562,40 @@ function Instrument() {
             <p style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>Fundamental data is not available for this instrument.</p>
           )}
         </>
+      )}
+
+      {activeTab === 'cashflow' && (
+        <section className="glass-panel" style={{ marginTop: '1rem', height: '500px' }}>
+          <h2 style={{ marginBottom: '1rem' }}>Cashflow Analysis (Yahoo Finance)</h2>
+          {cashflow && cashflow.length > 0 ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={cashflow.slice().reverse()} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis 
+                  dataKey="date" 
+                  stroke="var(--text-secondary)" 
+                  tickFormatter={(val) => new Date(val).getFullYear()} 
+                />
+                <YAxis 
+                  stroke="var(--text-secondary)" 
+                  tickFormatter={(val) => `₹${(val / 10000000).toFixed(0)}Cr`} 
+                />
+                <Tooltip
+                  contentStyle={{ backgroundColor: 'var(--bg-dark)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+                  formatter={(value, name) => [`₹${(value / 10000000).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr`, name]}
+                  labelFormatter={(label) => new Date(label).toDateString()}
+                />
+                <Legend />
+                <Bar dataKey="operatingCashFlow" name="Operating Cashflow" fill="var(--accent)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="investingCashFlow" name="Investing Cashflow" fill="#a29bfe" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="financingCashFlow" name="Financing Cashflow" fill="var(--danger)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="freeCashFlow" name="Free Cashflow" fill="var(--success)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <p style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>Cashflow data is not available for this instrument.</p>
+          )}
+        </section>
       )}
     </div>
   )
