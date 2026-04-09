@@ -613,8 +613,16 @@ app.get('/api/cashflow/:symbol', async (req, res) => {
       operatingCashFlow: item.operatingCashFlow || 0,
       investingCashFlow: item.investingCashFlow || 0,
       financingCashFlow: item.financingCashFlow || 0,
-      freeCashFlow: item.freeCashFlow || 0
-    })).filter(item => item.operatingCashFlow !== 0 || item.investingCashFlow !== 0 || item.financingCashFlow !== 0);
+      freeCashFlow: item.freeCashFlow || 0,
+      netIncome: item.netIncome || 0,
+      totalRevenue: item.totalRevenue || 0
+    })).filter(item => 
+      item.operatingCashFlow !== 0 || 
+      item.investingCashFlow !== 0 || 
+      item.financingCashFlow !== 0 ||
+      item.netIncome !== 0 ||
+      item.totalRevenue !== 0
+    );
 
     res.json(cashflowData);
   } catch (err) {

@@ -566,7 +566,7 @@ function Instrument() {
 
       {activeTab === 'cashflow' && (
         <section className="glass-panel" style={{ marginTop: '1rem', height: '500px' }}>
-          <h2 style={{ marginBottom: '1rem' }}>Cashflow Analysis (Yahoo Finance)</h2>
+          <h2 style={{ marginBottom: '1rem' }}>Financials / Cashflow Analysis (Yahoo Finance)</h2>
           {cashflow && cashflow.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={cashflow.slice().reverse()} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
@@ -586,6 +586,8 @@ function Instrument() {
                   labelFormatter={(label) => new Date(label).toDateString()}
                 />
                 <Legend />
+                <Bar dataKey="totalRevenue" name="Total Revenue" fill="#3498db" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="netIncome" name="Net Income" fill="#f39c12" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="operatingCashFlow" name="Operating Cashflow" fill="var(--accent)" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="investingCashFlow" name="Investing Cashflow" fill="#a29bfe" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="financingCashFlow" name="Financing Cashflow" fill="var(--danger)" radius={[4, 4, 0, 0]} />
