@@ -603,9 +603,12 @@ app.get('/api/cashflow/:symbol', async (req, res) => {
     const d = new Date();
     d.setFullYear(d.getFullYear() - 4); // Get last 4 years approx
     
+    const type = req.query.type === 'annual' ? 'annual' : 'quarterly';
+    
     const ts = await yahooFinance.fundamentalsTimeSeries(yahooSymbol, {
       period1: d.toISOString().split('T')[0],
-      module: 'all'
+      module: 'all',
+      type: type
     });
     
     const cashflowData = ts.map(item => ({
