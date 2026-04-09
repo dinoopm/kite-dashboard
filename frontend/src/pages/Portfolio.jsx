@@ -122,10 +122,10 @@ function Portfolio() {
         return searchStr.includes(searchTerm.toLowerCase());
       })
       .map(item => {
-        const q = (item.t1_quantity || 0) + (item.realised_quantity || 0);
+        const q = item.quantity || 0;
         const currentValue = q * item.last_price;
         const investment = q * item.average_price;
-        const itemPL = currentValue - investment;
+        const itemPL = item.pnl !== undefined ? item.pnl : (currentValue - investment);
         const itemPLPercent = investment ? (itemPL / investment) * 100 : 0;
         return { ...item, displayQuantity: q, currentValue, investment, itemPL, itemPLPercent };
       })
