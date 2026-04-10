@@ -670,6 +670,7 @@ app.get('/api/alerts', async (req, res) => {
       if (stockAlerts.length > 0) {
         alerts.push({
           symbol,
+          token,
           price: currentPrice,
           rsi: rsi14 ? +rsi14.toFixed(2) : null,
           sma5: sma5 ? +sma5.toFixed(2) : null,

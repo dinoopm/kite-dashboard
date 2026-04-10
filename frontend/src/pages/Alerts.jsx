@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
-
+import { Link } from 'react-router-dom'
 function Alerts() {
   const [alerts, setAlerts] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [filter, setFilter] = useState('all') // 'all' | 'bullish' | 'bearish' | 'warning'
   const [expandedStocks, setExpandedStocks] = useState({})
+  const [searchQuery, setSearchQuery] = useState('')
 
   useEffect(() => {
     const fetchAlerts = async () => {
@@ -89,18 +90,37 @@ function Alerts() {
   const infoCount = allAlertsList.filter(a => a.severity === 'info').length
 
   // Filter stocks
-  const filteredAlerts = (alerts || []).map(stock => ({
-    ...stock,
-    alerts: stock.alerts.filter(a => filter === 'all' || a.severity === filter)
-  })).filter(stock => stock.alerts.length > 0)
+  const filteredAlerts = (alerts || [])
+    .filter(stock => stock.symbol.toLowerCase().includes(searchQuery.toLowerCase()))
+    .map(stock => ({
+      ...stock,
+      alerts: stock.alerts.filter(a => filter === 'all' || a.severity === filter)
+    }))
+    .filter(stock => stock.alerts.length > 0)
 
   return (
     <div className="dashboard-layout">
-      <header className="header" style={{ marginBottom: '1.5rem' }}>
+      <header className="header" style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1>Portfolio Alerts</h1>
           <p style={{ color: 'var(--text-secondary)' }}>Technical signals across your holdings based on RSI and SMA analysis</p>
         </div>
+        <input 
+          type="text" 
+          placeholder="Search instrument..." 
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          style={{
+            padding: '0.6rem 1rem',
+            borderRadius: '8px',
+            border: '1px solid var(--border)',
+            background: 'var(--bg-panel)',
+            color: 'var(--text-primary)',
+            maxWidth: '300px',
+            width: '100%',
+            outline: 'none'
+          }}
+        />
       </header>
 
       {/* Summary Cards */}
@@ -206,7 +226,15 @@ function Alerts() {
                   color: 'var(--text-secondary)'
                 }}>▶</span>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '1.2rem' }}>{stock.symbol}</h3>
+                  <h3 style={{ margin: 0, fontSize: '1.2rem' }}>
+                    <Link 
+                      to={`/instrument/${stock.token}?symbol=${stock.symbol}`} 
+                      style={{ color: 'var(--accent)', textDecoration: 'none' }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {stock.symbol}
+                    </Link>
+                  </h3>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                     CMP: ₹{stock.price?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                     {stock.rsi && <> &nbsp;|&nbsp; RSI: <span style={{ color: stock.rsi <= 30 ? 'var(--success)' : stock.rsi >= 70 ? 'var(--danger)' : 'var(--text-primary)' }}>{stock.rsi}</span></>}
