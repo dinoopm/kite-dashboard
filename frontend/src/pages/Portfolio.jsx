@@ -211,11 +211,18 @@ function Portfolio() {
 
             return (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
-                {/* Total Invested */}
                 <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: '3px solid var(--accent)' }}>
                   <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Total Invested</span>
                   <span className="value" style={{ fontSize: '1.5rem', fontWeight: '700' }}>
                     ₹{totalInv.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+
+                {/* Total Current Value */}
+                <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: '3px solid var(--text-primary)' }}>
+                  <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Current Value</span>
+                  <span className="value" style={{ fontSize: '1.5rem', fontWeight: '700' }}>
+                    ₹{currentVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                   </span>
                 </div>
 
