@@ -9,6 +9,7 @@ import Navbar from './components/Navbar'
 function App() {
   const [authState, setAuthState] = useState('loading') // 'loading' | 'authenticated' | 'unauthenticated'
   const [loginMsg, setLoginMsg] = useState(null)
+  const [isLoggingIn, setIsLoggingIn] = useState(false)
 
   const checkAuth = useCallback(async () => {
     try {
@@ -39,6 +40,7 @@ function App() {
 
   const handleLogin = async () => {
     try {
+      setIsLoggingIn(true)
       const res = await fetch('http://localhost:3001/api/login', { method: 'POST' })
       const data = await res.json()
       if (data?.content?.[0]?.text) {
@@ -48,6 +50,8 @@ function App() {
       }
     } catch (err) {
       // ignore
+    } finally {
+      setIsLoggingIn(false)
     }
   }
 
@@ -81,8 +85,22 @@ function App() {
             <h3>Authentication Required</h3>
             <p>Please authorize the local dashboard to access your Kite data.</p>
             {!loginMsg ? (
-              <button onClick={handleLogin} style={{padding: '0.75rem 1.5rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', marginTop: '1rem', transition: 'all 0.2s'}}>
-                Login to Kite
+              <button 
+                onClick={handleLogin} 
+                disabled={isLoggingIn}
+                style={{
+                  padding: '0.75rem 1.5rem', 
+                  background: isLoggingIn ? 'var(--bg-light)' : 'var(--accent)', 
+                  color: isLoggingIn ? 'var(--text-secondary)' : '#fff', 
+                  border: 'none', 
+                  borderRadius: '8px', 
+                  cursor: isLoggingIn ? 'wait' : 'pointer', 
+                  fontWeight: 'bold', 
+                  marginTop: '1rem', 
+                  transition: 'all 0.2s'
+                }}
+              >
+                {isLoggingIn ? 'Generating Link...' : 'Login to Kite'}
               </button>
             ) : (
               <div style={{ textAlign: 'left', background: 'var(--bg-dark)', padding: '1rem', borderRadius: '8px', marginTop: '1.5rem', lineHeight: '1.5' }}>
