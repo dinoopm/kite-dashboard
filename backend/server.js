@@ -652,11 +652,18 @@ app.get('/api/alerts', async (req, res) => {
         } else if (currentPrice > sma50 && currentPrice < sma200) {
           stockAlerts.push({ type: 'sma_long', severity: 'warning', message: `Trading above SMA 50 but below SMA 200 — Mid-term recovery, but long-term trend still bearish.` });
         }
-        // Golden Cross / Death Cross
-        if (sma50 > sma200) {
-          stockAlerts.push({ type: 'cross', severity: 'bullish', message: `Golden Cross detected — SMA 50 (₹${sma50.toFixed(1)}) is above SMA 200 (₹${sma200.toFixed(1)}). Major bullish signal.` });
-        } else if (sma50 < sma200) {
-          stockAlerts.push({ type: 'cross', severity: 'bearish', message: `Death Cross detected — SMA 50 (₹${sma50.toFixed(1)}) is below SMA 200 (₹${sma200.toFixed(1)}). Major bearish signal.` });
+        // Golden Cross / Death Cross — only alert if the cross happened within the last 5 trading days
+        if (sma50Arr.length >= 6 && sma200Arr.length >= 6) {
+          const prevSma50 = sma50Arr[sma50Arr.length - 6];
+          const prevSma200 = sma200Arr[sma200Arr.length - 6];
+          const wasSma50Above = prevSma50 > prevSma200;
+          const isSma50Above = sma50 > sma200;
+          
+          if (isSma50Above && !wasSma50Above) {
+            stockAlerts.push({ type: 'cross', severity: 'bullish', message: `Golden Cross detected — SMA 50 (₹${sma50.toFixed(1)}) recently crossed above SMA 200 (₹${sma200.toFixed(1)}). Major bullish signal.` });
+          } else if (!isSma50Above && wasSma50Above) {
+            stockAlerts.push({ type: 'cross', severity: 'bearish', message: `Death Cross detected — SMA 50 (₹${sma50.toFixed(1)}) recently crossed below SMA 200 (₹${sma200.toFixed(1)}). Major bearish signal.` });
+          }
         }
       }
 
