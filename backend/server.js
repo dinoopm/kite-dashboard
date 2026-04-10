@@ -574,6 +574,113 @@ app.get('/api/indicators/:token', async (req, res) => {
   }
 });
 
+// ─── Portfolio Alerts ──────────────────────────────────────────
+app.get('/api/alerts', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
+
+  try {
+    // Get holdings list
+    const holdingsResult = await fetchWithCache("get_holdings", "holdings", { limit: 50 });
+    let holdings = [];
+    if (holdingsResult?.content?.[0]?.text) {
+      const parsed = JSON.parse(holdingsResult.content[0].text);
+      holdings = parsed.data || parsed;
+    }
+    if (!Array.isArray(holdings) || holdings.length === 0) {
+      return res.json([]);
+    }
+
+    const alerts = [];
+
+    for (const h of holdings) {
+      const token = h.instrument_token;
+      const symbol = h.tradingsymbol;
+      const lastPrice = h.last_price;
+      let cached = historyCache[token];
+
+      // Skip if no cached data and we can't compute
+      if (!cached || cached.length < 15) continue;
+
+      const closes = cached.map(c => c.close);
+      const currentPrice = lastPrice || closes[closes.length - 1];
+
+      // Compute indicators
+      const sma5Arr = SMA.calculate({ period: 5, values: closes });
+      const sma20Arr = SMA.calculate({ period: 20, values: closes });
+      const sma50Arr = SMA.calculate({ period: 50, values: closes });
+      const sma200Arr = SMA.calculate({ period: 200, values: closes });
+      const rsi14Arr = RSI.calculate({ period: 14, values: closes });
+
+      const sma5 = sma5Arr.length > 0 ? sma5Arr[sma5Arr.length - 1] : null;
+      const sma20 = sma20Arr.length > 0 ? sma20Arr[sma20Arr.length - 1] : null;
+      const sma50 = sma50Arr.length > 0 ? sma50Arr[sma50Arr.length - 1] : null;
+      const sma200 = sma200Arr.length > 0 ? sma200Arr[sma200Arr.length - 1] : null;
+      const rsi14 = rsi14Arr.length > 0 ? rsi14Arr[rsi14Arr.length - 1] : null;
+
+      const stockAlerts = [];
+
+      // RSI Alerts
+      if (rsi14 !== null) {
+        if (rsi14 <= 30) {
+          stockAlerts.push({ type: 'rsi', severity: 'bullish', message: `RSI is ${rsi14.toFixed(1)} — Stock is oversold/undervalued. Potential buying opportunity.` });
+        } else if (rsi14 >= 70) {
+          stockAlerts.push({ type: 'rsi', severity: 'bearish', message: `RSI is ${rsi14.toFixed(1)} — Stock is overbought/overvalued. Consider booking profits.` });
+        } else if (rsi14 <= 40) {
+          stockAlerts.push({ type: 'rsi', severity: 'warning', message: `RSI is ${rsi14.toFixed(1)} — Approaching oversold zone. Watch for reversal.` });
+        } else if (rsi14 >= 60) {
+          stockAlerts.push({ type: 'rsi', severity: 'info', message: `RSI is ${rsi14.toFixed(1)} — Strong bullish momentum zone.` });
+        }
+      }
+
+      // Short-term Momentum (SMA 5 & SMA 20)
+      if (sma5 !== null && sma20 !== null) {
+        if (currentPrice > sma5 && currentPrice > sma20) {
+          stockAlerts.push({ type: 'sma_short', severity: 'bullish', message: `Trading above SMA 5 (₹${sma5.toFixed(1)}) and SMA 20 (₹${sma20.toFixed(1)}) — Short-term momentum is bullish.` });
+        } else if (currentPrice < sma5 && currentPrice < sma20) {
+          stockAlerts.push({ type: 'sma_short', severity: 'bearish', message: `Trading below SMA 5 (₹${sma5.toFixed(1)}) and SMA 20 (₹${sma20.toFixed(1)}) — Short-term momentum is bearish.` });
+        } else if (currentPrice > sma5 && currentPrice < sma20) {
+          stockAlerts.push({ type: 'sma_short', severity: 'warning', message: `Trading above SMA 5 but below SMA 20 — Short-term recovery attempt; trend not yet confirmed.` });
+        }
+      }
+
+      // Long-term Momentum (SMA 50 & SMA 200)
+      if (sma50 !== null && sma200 !== null) {
+        if (currentPrice > sma50 && currentPrice > sma200) {
+          stockAlerts.push({ type: 'sma_long', severity: 'bullish', message: `Trading above SMA 50 (₹${sma50.toFixed(1)}) and SMA 200 (₹${sma200.toFixed(1)}) — Long-term trend is strongly bullish.` });
+        } else if (currentPrice < sma50 && currentPrice < sma200) {
+          stockAlerts.push({ type: 'sma_long', severity: 'bearish', message: `Trading below SMA 50 (₹${sma50.toFixed(1)}) and SMA 200 (₹${sma200.toFixed(1)}) — Long-term trend is bearish. Caution.` });
+        } else if (currentPrice > sma50 && currentPrice < sma200) {
+          stockAlerts.push({ type: 'sma_long', severity: 'warning', message: `Trading above SMA 50 but below SMA 200 — Mid-term recovery, but long-term trend still bearish.` });
+        }
+        // Golden Cross / Death Cross
+        if (sma50 > sma200) {
+          stockAlerts.push({ type: 'cross', severity: 'bullish', message: `Golden Cross detected — SMA 50 (₹${sma50.toFixed(1)}) is above SMA 200 (₹${sma200.toFixed(1)}). Major bullish signal.` });
+        } else if (sma50 < sma200) {
+          stockAlerts.push({ type: 'cross', severity: 'bearish', message: `Death Cross detected — SMA 50 (₹${sma50.toFixed(1)}) is below SMA 200 (₹${sma200.toFixed(1)}). Major bearish signal.` });
+        }
+      }
+
+      if (stockAlerts.length > 0) {
+        alerts.push({
+          symbol,
+          price: currentPrice,
+          rsi: rsi14 ? +rsi14.toFixed(2) : null,
+          sma5: sma5 ? +sma5.toFixed(2) : null,
+          sma20: sma20 ? +sma20.toFixed(2) : null,
+          sma50: sma50 ? +sma50.toFixed(2) : null,
+          sma200: sma200 ? +sma200.toFixed(2) : null,
+          alerts: stockAlerts
+        });
+      }
+    }
+
+    res.json(alerts);
+  } catch (err) {
+    console.error("Alerts computation error:", err);
+    res.status(500).json({ error: "Failed to compute alerts: " + err.message });
+  }
+});
+
 app.get('/api/fundamentals/:symbol', async (req, res) => {
   try {
     const symbol = req.params.symbol;

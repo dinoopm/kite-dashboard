@@ -28,6 +28,17 @@ function Navbar({ onDisconnect }) {
       >
         Portfolio
       </Link>
+      <Link 
+        to="/alerts" 
+        style={{ 
+          textDecoration: 'none', 
+          color: location.pathname === '/alerts' ? 'white' : 'var(--text-secondary)',
+          fontWeight: location.pathname === '/alerts' ? 'bold' : 'normal',
+          transition: 'color 0.2s'
+        }}
+      >
+        Alerts
+      </Link>
 
       <div style={{ flex: 1 }}></div>
 
