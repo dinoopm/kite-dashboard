@@ -29,25 +29,25 @@ function Dashboard() {
       let p = null, h = null, m = null, cash = null;
 
       if (profileData?.content?.[0]?.text) {
-        try { p = JSON.parse(profileData.content[0].text); } catch(e) {}
+        try { p = JSON.parse(profileData.content[0].text); } catch (e) { }
       }
       if (holdingsData?.content?.[0]?.text) {
-        try { 
+        try {
           const parsed = JSON.parse(holdingsData.content[0].text);
           h = parsed.data || parsed;
-        } catch(e) {}
+        } catch (e) { }
       }
       if (mfData?.content?.[0]?.text) {
-        try { 
+        try {
           const parsed = JSON.parse(mfData.content[0].text);
           m = parsed.data || parsed;
-        } catch(e) {}
+        } catch (e) { }
       }
       if (marginsData?.content?.[0]?.text) {
-        try { 
+        try {
           const parsed = JSON.parse(marginsData.content[0].text);
           cash = parsed.data || parsed;
-        } catch(e) {}
+        } catch (e) { }
       }
 
       setData({ profile: p, holdings: h, mfHoldings: m, margins: cash });
@@ -68,7 +68,7 @@ function Dashboard() {
   }, [])
 
   if (loading) return <div className="loader"></div>;
-  if (error) return <div className="dashboard-layout"><div className="glass-panel"><p className="negative">{error}</p><button onClick={() => fetchData()} style={{padding: '0.5rem 1rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem'}}>Retry</button></div></div>;
+  if (error) return <div className="dashboard-layout"><div className="glass-panel"><p className="negative">{error}</p><button onClick={() => fetchData()} style={{ padding: '0.5rem 1rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem' }}>Retry</button></div></div>;
 
   // Aggregating Stocks
   const stocks = Array.isArray(data.holdings) ? data.holdings : [];
@@ -82,16 +82,11 @@ function Dashboard() {
   let topLosers = [];
   if (stocks.length > 0) {
     const movers = stocks.map(item => {
-      const q = (item.t1_quantity || 0) + (item.realised_quantity || 0);
-      const currentValue = q * item.last_price;
-      const investment = q * item.average_price;
-      const itemPL = item.pnl !== undefined ? item.pnl : (currentValue - investment);
-      const itemPLPercent = investment ? (itemPL / investment) * 100 : 0;
       const pChg = item.day_change !== undefined ? item.day_change : (item.last_price - (item.close_price || item.last_price));
       const pChgPct = item.day_change_percentage !== undefined ? item.day_change_percentage : (item.close_price ? ((pChg / item.close_price) * 100) : 0);
-      return { ...item, displayQuantity: q, currentValue, investment, itemPL, itemPLPercent, pChg, pChgPct };
+      return { ...item, pChg, pChgPct };
     }).sort((a, b) => b.pChgPct - a.pChgPct);
-    
+
     topWinners = movers.filter(m => m.pChgPct > 0).slice(0, 3);
     topLosers = movers.filter(m => m.pChgPct < 0).reverse().slice(0, 3);
   }
@@ -134,24 +129,24 @@ function Dashboard() {
         <h2 style={{ marginBottom: '1.5rem', color: 'var(--text-primary)' }}>Net Portfolio</h2>
         <div className="grid">
           <div>
-             <span className="label">Total Invested</span>
-             <span className="value" style={{ fontSize: '1.5rem' }}>₹{fmt(totalInv)}</span>
+            <span className="label">Total Invested</span>
+            <span className="value" style={{ fontSize: '1.5rem' }}>₹{fmt(totalInv)}</span>
           </div>
           <div>
-             <span className="label">Total Current Value</span>
-             <span className="value" style={{ fontSize: '1.5rem', color: 'var(--accent)' }}>₹{fmt(totalVal)}</span>
+            <span className="label">Total Current Value</span>
+            <span className="value" style={{ fontSize: '1.5rem', color: 'var(--accent)' }}>₹{fmt(totalVal)}</span>
           </div>
           <div>
-             <span className="label">Total P&L</span>
-             <span className={`value ${totalPl >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.5rem' }}>
-                {totalPl >= 0 ? '+' : ''}₹{fmt(totalPl)} ({totalPlPct}%)
-             </span>
+            <span className="label">Total P&L</span>
+            <span className={`value ${totalPl >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.5rem' }}>
+              {totalPl >= 0 ? '+' : ''}₹{fmt(totalPl)} ({totalPlPct}%)
+            </span>
           </div>
         </div>
       </section>
 
       <section className="grid" style={{ marginBottom: '2rem', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
-        
+
         {/* Stocks Card */}
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -177,7 +172,7 @@ function Dashboard() {
 
         {/* Mutual Funds Card */}
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h3 style={{ margin: 0 }}>Mutual Funds</h3>
             <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>{mfs.length} Assets</span>
           </div>
@@ -214,8 +209,8 @@ function Dashboard() {
             <strong>₹{fmt(openingBalance)}</strong>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-             <span className="label">Utilised</span>
-             <strong>₹{fmt(marginsObj?.equity?.utilised?.debits || 0)}</strong>
+            <span className="label">Utilised</span>
+            <strong>₹{fmt(marginsObj?.equity?.utilised?.debits || 0)}</strong>
           </div>
         </div>
 
@@ -226,7 +221,7 @@ function Dashboard() {
             <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>Equity Top 3</span>
           </div>
           <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }} />
-          
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             <div>
               <span className="label" style={{ color: 'var(--success)', display: 'block', marginBottom: '0.5rem' }}>Top 3 Winners</span>
@@ -239,10 +234,10 @@ function Dashboard() {
                 <div className="value" style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>--</div>
               )}
             </div>
-            
+
             <div>
-               <span className="label" style={{ color: 'var(--danger)', display: 'block', marginBottom: '0.5rem' }}>Top 3 Losers</span>
-               {topLosers.length > 0 ? topLosers.map((loser, idx) => (
+              <span className="label" style={{ color: 'var(--danger)', display: 'block', marginBottom: '0.5rem' }}>Top 3 Losers</span>
+              {topLosers.length > 0 ? topLosers.map((loser, idx) => (
                 <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
                   <strong>{loser.tradingsymbol}</strong>
                   <span className="negative">{loser.pChgPct.toFixed(2)}%</span>
