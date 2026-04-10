@@ -218,26 +218,6 @@ function Instrument() {
             &larr; Back to Dashboard
           </button>
           <h1>{symbol || 'Instrument'}</h1>
-          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
-            {tfOptions.map(tf => (
-              <button
-                key={tf}
-                onClick={() => setTimeframe(tf)}
-                style={{
-                  background: timeframe === tf ? 'var(--accent)' : 'var(--bg-panel)',
-                  color: timeframe === tf ? '#fff' : 'var(--text-primary)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '4px',
-                  padding: '0.4rem 0.8rem',
-                  cursor: 'pointer',
-                  fontWeight: timeframe === tf ? 'bold' : 'normal',
-                  transition: 'all 0.2s'
-                }}
-              >
-                {tf}
-              </button>
-            ))}
-          </div>
         </div>
       </header>
 
@@ -347,8 +327,31 @@ function Instrument() {
         </section>
       )}
 
+      {/* Chart Configuration */}
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontWeight: 'bold', color: 'var(--text-secondary)', marginRight: '0.5rem' }}>Timeframe:</span>
+        {tfOptions.map(tf => (
+          <button
+            key={tf}
+            onClick={() => setTimeframe(tf)}
+            style={{
+              background: timeframe === tf ? 'var(--accent)' : 'var(--bg-panel)',
+              color: timeframe === tf ? '#fff' : 'var(--text-primary)',
+              border: '1px solid var(--border)',
+              borderRadius: '4px',
+              padding: '0.4rem 0.8rem',
+              cursor: 'pointer',
+              fontWeight: timeframe === tf ? 'bold' : 'normal',
+              transition: 'all 0.2s'
+            }}
+          >
+            {tf}
+          </button>
+        ))}
+      </div>
+
       {/* Chart */}
-      <section className="glass-panel" style={{ height: '400px' }}>
+      <section className="glass-panel" style={{ height: '400px', padding: '1.5rem 1rem 1rem 1rem' }}>
         {loading ? (
           <div className="loader"></div>
         ) : error ? (
