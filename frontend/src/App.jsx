@@ -63,10 +63,10 @@ function App() {
 
   const handleDisconnect = async () => {
     if (window.confirm('Disconnect the kite dashboard? You will need to login again.')) {
+      setAuthState('unauthenticated')
+      setLoginMsg(null)
       try {
         await fetch('http://localhost:3001/api/disconnect', { method: 'POST' })
-        setAuthState('unauthenticated')
-        setLoginMsg(null)
       } catch (err) {
         console.error('Failed to disconnect', err)
       }
