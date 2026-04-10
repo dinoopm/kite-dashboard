@@ -86,6 +86,7 @@ function Alerts() {
   const bullishCount = allAlertsList.filter(a => a.severity === 'bullish').length
   const bearishCount = allAlertsList.filter(a => a.severity === 'bearish').length
   const warningCount = allAlertsList.filter(a => a.severity === 'warning').length
+  const infoCount = allAlertsList.filter(a => a.severity === 'info').length
 
   // Filter stocks
   const filteredAlerts = (alerts || []).map(stock => ({
@@ -103,7 +104,7 @@ function Alerts() {
       </header>
 
       {/* Summary Cards */}
-      <section className="grid" style={{ marginBottom: '1.5rem', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+      <section className="grid" style={{ marginBottom: '1.5rem', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' }}>
         <div
           className="glass-panel stat-card"
           onClick={() => setFilter('all')}
@@ -159,6 +160,20 @@ function Alerts() {
         >
           <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>🟡 Warning</span>
           <span className="value" style={{ fontSize: '1.8rem', fontWeight: '700', color: '#f39c12' }}>{warningCount}</span>
+        </div>
+        <div
+          className="glass-panel stat-card"
+          onClick={() => setFilter('info')}
+          style={{
+            padding: '1.25rem',
+            cursor: 'pointer',
+            borderLeft: filter === 'info' ? '3px solid var(--accent)' : '3px solid transparent',
+            opacity: filter === 'info' ? 1 : 0.7,
+            transition: 'all 0.2s'
+          }}
+        >
+          <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>🔵 Momentum</span>
+          <span className="value" style={{ fontSize: '1.8rem', fontWeight: '700', color: 'var(--accent)' }}>{infoCount}</span>
         </div>
       </section>
 
