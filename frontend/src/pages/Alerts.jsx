@@ -5,6 +5,7 @@ function Alerts() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [filter, setFilter] = useState('all') // 'all' | 'bullish' | 'bearish' | 'warning'
+  const [expandedStocks, setExpandedStocks] = useState({})
 
   useEffect(() => {
     const fetchAlerts = async () => {
@@ -15,6 +16,10 @@ function Alerts() {
         if (!res.ok) throw new Error('Failed to fetch alerts')
         const data = await res.json()
         setAlerts(data)
+        // Auto-expand the first stock
+        if (data.length > 0) {
+          setExpandedStocks({ [data[0].symbol]: true })
+        }
       } catch (err) {
         setError(err.message)
       } finally {
@@ -167,60 +172,80 @@ function Alerts() {
           </p>
         </div>
       ) : (
-        filteredAlerts.map((stock) => (
+        filteredAlerts.map((stock, stockIdx) => {
+          const isExpanded = expandedStocks[stock.symbol] ?? false
+          const toggleExpand = () => setExpandedStocks(prev => ({ ...prev, [stock.symbol]: !prev[stock.symbol] }))
+
+          return (
           <section key={stock.symbol} className="glass-panel" style={{ marginBottom: '1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <div>
-                <h3 style={{ margin: 0, fontSize: '1.2rem' }}>{stock.symbol}</h3>
-                <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                  CMP: ₹{stock.price?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-                  {stock.rsi && <> &nbsp;|&nbsp; RSI: <span style={{ color: stock.rsi <= 30 ? 'var(--success)' : stock.rsi >= 70 ? 'var(--danger)' : 'var(--text-primary)' }}>{stock.rsi}</span></>}
-                </span>
+            <div
+              onClick={toggleExpand}
+              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span style={{
+                  display: 'inline-block',
+                  transition: 'transform 0.2s',
+                  transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                  fontSize: '0.9rem',
+                  color: 'var(--text-secondary)'
+                }}>▶</span>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.2rem' }}>{stock.symbol}</h3>
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                    CMP: ₹{stock.price?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    {stock.rsi && <> &nbsp;|&nbsp; RSI: <span style={{ color: stock.rsi <= 30 ? 'var(--success)' : stock.rsi >= 70 ? 'var(--danger)' : 'var(--text-primary)' }}>{stock.rsi}</span></>}
+                    &nbsp;|&nbsp; {stock.alerts.length} alert{stock.alerts.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                 {stock.alerts.some(a => a.severity === 'bullish') && <span style={{ background: 'rgba(16,185,129,0.15)', color: 'var(--success)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold' }}>BULLISH</span>}
                 {stock.alerts.some(a => a.severity === 'bearish') && <span style={{ background: 'rgba(239,68,68,0.15)', color: 'var(--danger)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold' }}>BEARISH</span>}
                 {stock.alerts.some(a => a.severity === 'warning') && <span style={{ background: 'rgba(243,156,18,0.15)', color: '#f39c12', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold' }}>WATCH</span>}
               </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              {stock.alerts.map((alert, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: '0.75rem',
-                    padding: '0.75rem 1rem',
-                    borderRadius: '8px',
-                    borderLeft: `3px solid ${severityBorder(alert.severity)}`,
-                    background: severityBg(alert.severity),
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  <span style={{ fontSize: '1.1rem', flexShrink: 0 }}>{severityIcon(alert.severity)}</span>
-                  <div style={{ flex: 1 }}>
-                    <span style={{
-                      fontSize: '0.7rem',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.5px',
-                      color: severityBorder(alert.severity),
-                      fontWeight: 'bold',
-                      display: 'block',
-                      marginBottom: '0.25rem'
-                    }}>
-                      {typeLabel(alert.type)}
-                    </span>
-                    <span style={{ color: 'var(--text-primary)', fontSize: '0.9rem', lineHeight: '1.4' }}>
-                      {alert.message}
-                    </span>
+            {isExpanded && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1rem' }}>
+                {stock.alerts.map((alert, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '0.75rem',
+                      padding: '0.75rem 1rem',
+                      borderRadius: '8px',
+                      borderLeft: `3px solid ${severityBorder(alert.severity)}`,
+                      background: severityBg(alert.severity),
+                      transition: 'all 0.2s'
+                    }}
+                  >
+                    <span style={{ fontSize: '1.1rem', flexShrink: 0 }}>{severityIcon(alert.severity)}</span>
+                    <div style={{ flex: 1 }}>
+                      <span style={{
+                        fontSize: '0.7rem',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.5px',
+                        color: severityBorder(alert.severity),
+                        fontWeight: 'bold',
+                        display: 'block',
+                        marginBottom: '0.25rem'
+                      }}>
+                        {typeLabel(alert.type)}
+                      </span>
+                      <span style={{ color: 'var(--text-primary)', fontSize: '0.9rem', lineHeight: '1.4' }}>
+                        {alert.message}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </section>
-        ))
+          )
+        })
       )}
     </div>
   )
