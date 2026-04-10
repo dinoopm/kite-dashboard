@@ -8,35 +8,72 @@ function Alerts() {
   const [expandedStocks, setExpandedStocks] = useState({})
   const [searchQuery, setSearchQuery] = useState('')
 
+  const [cacheProgress, setCacheProgress] = useState(null)
+
   useEffect(() => {
-    const fetchAlerts = async () => {
+    let pollInterval;
+    
+    const checkAndFetchAlerts = async () => {
       try {
-        setLoading(true)
         setError(null)
+        // First check if cache is ready
+        const statusRes = await fetch('http://localhost:3001/api/cache-status')
+        if (!statusRes.ok) throw new Error('Failed to check cache status')
+        const status = await statusRes.json()
+
+        if (!status.ready) {
+          setCacheProgress(`Warming up analysis engine... (${status.instrumentsCached}/${status.totalHoldings || '?'})`)
+          // Trigger alerts endpoint so it safely kicks off the warmup if it hasn't started
+          fetch('http://localhost:3001/api/alerts').catch(() => {})
+          return // Still warming up, effect will poll again
+        }
+
+        // Cache is ready, fetch actual alerts
         const res = await fetch('http://localhost:3001/api/alerts')
         if (!res.ok) throw new Error('Failed to fetch alerts')
         const data = await res.json()
         setAlerts(data)
+        setCacheProgress(null)
+        setLoading(false)
+        
         // Auto-expand the first stock
         if (data.length > 0) {
           setExpandedStocks({ [data[0].symbol]: true })
         }
+        
+        // Stop polling
+        clearInterval(pollInterval)
+        
       } catch (err) {
         setError(err.message)
-      } finally {
         setLoading(false)
+        clearInterval(pollInterval)
       }
     }
-    fetchAlerts()
+
+    // Run immediately
+    setLoading(true)
+    checkAndFetchAlerts()
+    
+    // Setup polling every 2 seconds until cache is ready
+    pollInterval = setInterval(checkAndFetchAlerts, 2000)
+
+    return () => clearInterval(pollInterval)
   }, [])
 
-  if (loading) return <div className="loader"></div>
+  if (loading || cacheProgress) return (
+    <div className="dashboard-layout" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '50vh', gap: '1rem' }}>
+      <div className="loader"></div>
+      {cacheProgress && <p style={{ color: 'var(--accent)', fontWeight: 'bold' }}>{cacheProgress}</p>}
+    </div>
+  )
+  
   if (error) return (
     <div className="dashboard-layout">
       <div className="glass-panel">
         <p className="negative">{error}</p>
         <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
-          Make sure the backend cache has warmed up. Visit the Dashboard first, then return here.
+          Please ensure the backend is running and you are logged into Kite.
         </p>
       </div>
     </div>

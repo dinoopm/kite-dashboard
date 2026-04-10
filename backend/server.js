@@ -19,6 +19,7 @@ let mcpTransport = null;
 const historyCache = {};   // { instrument_token: [ {date, open, high, low, close, volume} ] }
 let holdingsCache = [];    // raw holdings array
 let cacheReady = false;
+let cacheWarming = false;
 
 // ─── Helpers ───────────────────────────────────────────────────
 const toYahooSymbol = (symbol) => {
@@ -63,6 +64,9 @@ async function fetchHistorical(token, fromDate, toDate, interval = 'day') {
 
 // ─── Cache warm-up ─────────────────────────────────────────────
 async function warmCache(retries = 3) {
+  if (cacheReady || cacheWarming) return;
+  cacheWarming = true;
+
   console.log("⏳ Warming cache: fetching holdings...");
   try {
     let holdings = null;
@@ -117,8 +121,10 @@ async function warmCache(retries = 3) {
       await new Promise(r => setTimeout(r, 1000));
     }
     cacheReady = true;
+    cacheWarming = false;
     console.log(`✅ Cache warm-up complete: ${cached}/${holdings.length} instruments cached`);
   } catch (err) {
+    cacheWarming = false;
     console.error("❌ Cache warm-up failed:", err.message);
   }
 }
@@ -586,6 +592,13 @@ app.get('/api/alerts', async (req, res) => {
       const parsed = JSON.parse(holdingsResult.content[0].text);
       holdings = parsed.data || parsed;
     }
+    
+    // Trigger cache warmup safely if needed
+    if (!cacheReady && !holdingsResult.isError) {
+      console.log("⏳ Alerts API: Triggering cache warm-up...");
+      warmCache();
+    }
+
     if (!Array.isArray(holdings) || holdings.length === 0) {
       return res.json([]);
     }
