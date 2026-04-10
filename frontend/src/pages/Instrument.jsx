@@ -329,25 +329,25 @@ function Instrument() {
 
           {/* Chart Configuration */}
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontWeight: 'bold', color: 'var(--text-secondary)', marginRight: '0.5rem' }}>
-              {tfOptions.map(tf => (
-                <button
-                  key={tf}
-                  onClick={() => setTimeframe(tf)}
-                  style={{
-                    background: timeframe === tf ? 'var(--accent)' : 'var(--bg-panel)',
-                    color: timeframe === tf ? '#fff' : 'var(--text-primary)',
-                    border: '1px solid var(--border)',
-                    borderRadius: '4px',
-                    padding: '0.4rem 0.8rem',
-                    cursor: 'pointer',
-                    fontWeight: timeframe === tf ? 'bold' : 'normal',
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  {tf}
-                </button>
-              ))}
+            <span style={{ fontWeight: 'bold', color: 'var(--text-secondary)', marginRight: '0.5rem' }}></span>
+            {tfOptions.map(tf => (
+              <button
+                key={tf}
+                onClick={() => setTimeframe(tf)}
+                style={{
+                  background: timeframe === tf ? 'var(--accent)' : 'var(--bg-panel)',
+                  color: timeframe === tf ? '#fff' : 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '4px',
+                  padding: '0.4rem 0.8rem',
+                  cursor: 'pointer',
+                  fontWeight: timeframe === tf ? 'bold' : 'normal',
+                  transition: 'all 0.2s'
+                }}
+              >
+                {tf}
+              </button>
+            ))}
           </div>
 
           {/* Chart */}
