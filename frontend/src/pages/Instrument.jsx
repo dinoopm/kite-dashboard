@@ -297,210 +297,210 @@ function Instrument() {
         <>
           {/* Period stats */}
           {!loading && !error && data.length > 0 && timeframe !== '1D' && (
-        <section className="grid" style={{ marginBottom: '1rem' }}>
-          {(() => {
-            const startPrice = data[0].close;
-            const endPrice = quote ? quote.last_price : data[data.length - 1].close;
-            const maxHigh = Math.max(...data.map(d => d.high));
-            const minLow = Math.min(...data.map(d => d.low));
-            const ret = endPrice - startPrice;
-            const retPct = ((ret / startPrice) * 100).toFixed(2);
-            return (
-              <>
-                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-                  <span className="label" style={{ fontSize: '0.85rem' }}>Period High</span>
-                  <span className="value" style={{ fontSize: '1.25rem' }}>₹{maxHigh.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-                  <span className="label" style={{ fontSize: '0.85rem' }}>Period Low</span>
-                  <span className="value" style={{ fontSize: '1.25rem' }}>₹{minLow.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-                  <span className="label" style={{ fontSize: '0.85rem' }}>Period Returns</span>
-                  <span className={`value ${ret >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.25rem' }}>
-                    {ret >= 0 ? '+' : ''}₹{ret.toLocaleString('en-IN', { maximumFractionDigits: 2 })} ({retPct}%)
-                  </span>
-                </div>
-              </>
-            );
-          })()}
-        </section>
-      )}
+            <section className="grid" style={{ marginBottom: '1rem' }}>
+              {(() => {
+                const startPrice = data[0].close;
+                const endPrice = quote ? quote.last_price : data[data.length - 1].close;
+                const maxHigh = Math.max(...data.map(d => d.high));
+                const minLow = Math.min(...data.map(d => d.low));
+                const ret = endPrice - startPrice;
+                const retPct = ((ret / startPrice) * 100).toFixed(2);
+                return (
+                  <>
+                    <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                      <span className="label" style={{ fontSize: '0.85rem' }}>Period High</span>
+                      <span className="value" style={{ fontSize: '1.25rem' }}>₹{maxHigh.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                      <span className="label" style={{ fontSize: '0.85rem' }}>Period Low</span>
+                      <span className="value" style={{ fontSize: '1.25rem' }}>₹{minLow.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                      <span className="label" style={{ fontSize: '0.85rem' }}>Period Returns</span>
+                      <span className={`value ${ret >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.25rem' }}>
+                        {ret >= 0 ? '+' : ''}₹{ret.toLocaleString('en-IN', { maximumFractionDigits: 2 })} ({retPct}%)
+                      </span>
+                    </div>
+                  </>
+                );
+              })()}
+            </section>
+          )}
 
-      {/* Chart Configuration */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={{ fontWeight: 'bold', color: 'var(--text-secondary)', marginRight: '0.5rem' }}>Timeframe:</span>
-        {tfOptions.map(tf => (
-          <button
-            key={tf}
-            onClick={() => setTimeframe(tf)}
-            style={{
-              background: timeframe === tf ? 'var(--accent)' : 'var(--bg-panel)',
-              color: timeframe === tf ? '#fff' : 'var(--text-primary)',
-              border: '1px solid var(--border)',
-              borderRadius: '4px',
-              padding: '0.4rem 0.8rem',
-              cursor: 'pointer',
-              fontWeight: timeframe === tf ? 'bold' : 'normal',
-              transition: 'all 0.2s'
-            }}
-          >
-            {tf}
-          </button>
-        ))}
-      </div>
-
-      {/* Chart */}
-      <section className="glass-panel" style={{ height: '400px', padding: '1.5rem 1rem 1rem 1rem' }}>
-        {loading ? (
-          <div className="loader"></div>
-        ) : error ? (
-          <p className="negative">{error}</p>
-        ) : data.length === 0 ? (
-          <p>No historical data available for this timeline.</p>
-        ) : (
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-              <XAxis dataKey="date" stroke="var(--text-secondary)" tick={{ fill: 'var(--text-secondary)' }} />
-              <YAxis domain={['auto', 'auto']} stroke="var(--text-secondary)" tick={{ fill: 'var(--text-secondary)' }} />
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-              <Tooltip
-                contentStyle={{ backgroundColor: 'var(--bg-dark)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
-                itemStyle={{ color: 'var(--accent)' }}
-              />
-              <Legend />
-              <Line type="monotone" name="Price" dataKey="close" stroke="var(--accent)" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        )}
-      </section>
-
-      {/* Technical Indicators */}
-      {indicators && (
-        <section className="glass-panel" style={{ marginTop: '1rem' }}>
-          <h2 style={{ marginBottom: '1rem' }}>Technical Indicators (1D time frame)</h2>
-          <div className="grid" style={{ gap: '0.75rem' }}>
-            {/* RSI */}
-            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-              <span className="label" style={{ fontSize: '0.85rem' }}>RSI (14)</span>
-              <span className={`value ${rsiColor(indicators.indicators.rsi.rsi14)}`} style={{ fontSize: '1.25rem' }}>
-                {fmtNum(indicators.indicators.rsi.rsi14)}
-              </span>
-              <span className="label" style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                {rsiLabel(indicators.indicators.rsi.rsi14)}
-              </span>
-            </div>
-
-            {/* SMA 5 */}
-            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-              <span className="label" style={{ fontSize: '0.85rem' }}>SMA 5</span>
-              <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.sma.sma5)}</span>
-              <span className={`label ${maSignal(indicators.indicators.sma.sma5).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                {maSignal(indicators.indicators.sma.sma5).text}
-              </span>
-            </div>
-
-            {/* SMA 20 */}
-            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-              <span className="label" style={{ fontSize: '0.85rem' }}>SMA 20</span>
-              <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.sma.sma20)}</span>
-              <span className={`label ${maSignal(indicators.indicators.sma.sma20).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                {maSignal(indicators.indicators.sma.sma20).text}
-              </span>
-            </div>
-
-            {/* SMA 50 */}
-            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-              <span className="label" style={{ fontSize: '0.85rem' }}>SMA 50</span>
-              <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.sma.sma50)}</span>
-              <span className={`label ${maSignal(indicators.indicators.sma.sma50).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                {maSignal(indicators.indicators.sma.sma50).text}
-              </span>
-            </div>
-
-            {/* SMA 200 */}
-            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-              <span className="label" style={{ fontSize: '0.85rem' }}>SMA 200</span>
-              <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.sma.sma200)}</span>
-              <span className={`label ${maSignal(indicators.indicators.sma.sma200).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                {maSignal(indicators.indicators.sma.sma200).text}
-              </span>
-            </div>
-
-            {/* EMA 12 */}
-            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-              <span className="label" style={{ fontSize: '0.85rem' }}>EMA 12</span>
-              <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.ema.ema12)}</span>
-              <span className={`label ${maSignal(indicators.indicators.ema.ema12).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                {maSignal(indicators.indicators.ema.ema12).text}
-              </span>
-            </div>
-
-            {/* EMA 26 */}
-            <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-              <span className="label" style={{ fontSize: '0.85rem' }}>EMA 26</span>
-              <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.ema.ema26)}</span>
-              <span className={`label ${maSignal(indicators.indicators.ema.ema26).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                {maSignal(indicators.indicators.ema.ema26).text}
-              </span>
-            </div>
-
-            {/* MACD */}
-            {indicators.indicators.macd && (
-              <>
-                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-                  <span className="label" style={{ fontSize: '0.85rem' }}>MACD Line</span>
-                  <span className={`value ${indicators.indicators.macd.MACD >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.25rem' }}>
-                    {fmtNum(indicators.indicators.macd.MACD)}
-                  </span>
-                  <span className={`label ${macdSignal(indicators.indicators.macd.MACD, indicators.indicators.macd.signal).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                    {macdSignal(indicators.indicators.macd.MACD, indicators.indicators.macd.signal).text}
-                  </span>
-                </div>
-                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-                  <span className="label" style={{ fontSize: '0.85rem' }}>MACD Signal</span>
-                  <span className="value" style={{ fontSize: '1.25rem' }}>{fmtNum(indicators.indicators.macd.signal)}</span>
-                </div>
-                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-                  <span className="label" style={{ fontSize: '0.85rem' }}>MACD Histogram</span>
-                  <span className={`value ${indicators.indicators.macd.histogram >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.25rem' }}>
-                    {fmtNum(indicators.indicators.macd.histogram)}
-                  </span>
-                </div>
-              </>
-            )}
-
-            {/* Bollinger Bands */}
-            {indicators.indicators.bollingerBands && (
-              <>
-                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-                  <span className="label" style={{ fontSize: '0.85rem' }}>BB Upper</span>
-                  <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.bollingerBands.upper)}</span>
-                  <span className={`label ${bbSignal(indicators.indicators.bollingerBands).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                    {bbSignal(indicators.indicators.bollingerBands).text}
-                  </span>
-                </div>
-                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-                  <span className="label" style={{ fontSize: '0.85rem' }}>BB Middle</span>
-                  <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.bollingerBands.middle)}</span>
-                </div>
-                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-                  <span className="label" style={{ fontSize: '0.85rem' }}>BB Lower</span>
-                  <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.bollingerBands.lower)}</span>
-                </div>
-              </>
-            )}
+          {/* Chart Configuration */}
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontWeight: 'bold', color: 'var(--text-secondary)', marginRight: '0.5rem' }}>
+              {tfOptions.map(tf => (
+                <button
+                  key={tf}
+                  onClick={() => setTimeframe(tf)}
+                  style={{
+                    background: timeframe === tf ? 'var(--accent)' : 'var(--bg-panel)',
+                    color: timeframe === tf ? '#fff' : 'var(--text-primary)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '4px',
+                    padding: '0.4rem 0.8rem',
+                    cursor: 'pointer',
+                    fontWeight: timeframe === tf ? 'bold' : 'normal',
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  {tf}
+                </button>
+              ))}
           </div>
-        </section>
-      )}
 
-      {activeTab === 'technicals' && !indicators && !loading && !error && (
-        <section className="glass-panel" style={{ marginTop: '1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          <p>Calculated technical indicators are currently loading or unavailable for this instrument.</p>
-        </section>
-      )}
+          {/* Chart */}
+          <section className="glass-panel" style={{ height: '400px', padding: '1.5rem 1rem 1rem 1rem' }}>
+            {loading ? (
+              <div className="loader"></div>
+            ) : error ? (
+              <p className="negative">{error}</p>
+            ) : data.length === 0 ? (
+              <p>No historical data available for this timeline.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                  <XAxis dataKey="date" stroke="var(--text-secondary)" tick={{ fill: 'var(--text-secondary)' }} />
+                  <YAxis domain={['auto', 'auto']} stroke="var(--text-secondary)" tick={{ fill: 'var(--text-secondary)' }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: 'var(--bg-dark)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+                    itemStyle={{ color: 'var(--accent)' }}
+                  />
+                  <Legend />
+                  <Line type="monotone" name="Price" dataKey="close" stroke="var(--accent)" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </section>
 
-      </>
+          {/* Technical Indicators */}
+          {indicators && (
+            <section className="glass-panel" style={{ marginTop: '1rem' }}>
+              <h2 style={{ marginBottom: '1rem' }}>Technical Indicators (1D timeframe)</h2>
+              <div className="grid" style={{ gap: '0.75rem' }}>
+                {/* RSI */}
+                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                  <span className="label" style={{ fontSize: '0.85rem' }}>RSI (14)</span>
+                  <span className={`value ${rsiColor(indicators.indicators.rsi.rsi14)}`} style={{ fontSize: '1.25rem' }}>
+                    {fmtNum(indicators.indicators.rsi.rsi14)}
+                  </span>
+                  <span className="label" style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                    {rsiLabel(indicators.indicators.rsi.rsi14)}
+                  </span>
+                </div>
+
+                {/* SMA 5 */}
+                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                  <span className="label" style={{ fontSize: '0.85rem' }}>SMA 5</span>
+                  <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.sma.sma5)}</span>
+                  <span className={`label ${maSignal(indicators.indicators.sma.sma5).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                    {maSignal(indicators.indicators.sma.sma5).text}
+                  </span>
+                </div>
+
+                {/* SMA 20 */}
+                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                  <span className="label" style={{ fontSize: '0.85rem' }}>SMA 20</span>
+                  <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.sma.sma20)}</span>
+                  <span className={`label ${maSignal(indicators.indicators.sma.sma20).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                    {maSignal(indicators.indicators.sma.sma20).text}
+                  </span>
+                </div>
+
+                {/* SMA 50 */}
+                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                  <span className="label" style={{ fontSize: '0.85rem' }}>SMA 50</span>
+                  <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.sma.sma50)}</span>
+                  <span className={`label ${maSignal(indicators.indicators.sma.sma50).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                    {maSignal(indicators.indicators.sma.sma50).text}
+                  </span>
+                </div>
+
+                {/* SMA 200 */}
+                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                  <span className="label" style={{ fontSize: '0.85rem' }}>SMA 200</span>
+                  <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.sma.sma200)}</span>
+                  <span className={`label ${maSignal(indicators.indicators.sma.sma200).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                    {maSignal(indicators.indicators.sma.sma200).text}
+                  </span>
+                </div>
+
+                {/* EMA 12 */}
+                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                  <span className="label" style={{ fontSize: '0.85rem' }}>EMA 12</span>
+                  <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.ema.ema12)}</span>
+                  <span className={`label ${maSignal(indicators.indicators.ema.ema12).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                    {maSignal(indicators.indicators.ema.ema12).text}
+                  </span>
+                </div>
+
+                {/* EMA 26 */}
+                <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                  <span className="label" style={{ fontSize: '0.85rem' }}>EMA 26</span>
+                  <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.ema.ema26)}</span>
+                  <span className={`label ${maSignal(indicators.indicators.ema.ema26).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                    {maSignal(indicators.indicators.ema.ema26).text}
+                  </span>
+                </div>
+
+                {/* MACD */}
+                {indicators.indicators.macd && (
+                  <>
+                    <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                      <span className="label" style={{ fontSize: '0.85rem' }}>MACD Line</span>
+                      <span className={`value ${indicators.indicators.macd.MACD >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.25rem' }}>
+                        {fmtNum(indicators.indicators.macd.MACD)}
+                      </span>
+                      <span className={`label ${macdSignal(indicators.indicators.macd.MACD, indicators.indicators.macd.signal).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                        {macdSignal(indicators.indicators.macd.MACD, indicators.indicators.macd.signal).text}
+                      </span>
+                    </div>
+                    <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                      <span className="label" style={{ fontSize: '0.85rem' }}>MACD Signal</span>
+                      <span className="value" style={{ fontSize: '1.25rem' }}>{fmtNum(indicators.indicators.macd.signal)}</span>
+                    </div>
+                    <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                      <span className="label" style={{ fontSize: '0.85rem' }}>MACD Histogram</span>
+                      <span className={`value ${indicators.indicators.macd.histogram >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.25rem' }}>
+                        {fmtNum(indicators.indicators.macd.histogram)}
+                      </span>
+                    </div>
+                  </>
+                )}
+
+                {/* Bollinger Bands */}
+                {indicators.indicators.bollingerBands && (
+                  <>
+                    <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                      <span className="label" style={{ fontSize: '0.85rem' }}>BB Upper</span>
+                      <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.bollingerBands.upper)}</span>
+                      <span className={`label ${bbSignal(indicators.indicators.bollingerBands).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                        {bbSignal(indicators.indicators.bollingerBands).text}
+                      </span>
+                    </div>
+                    <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                      <span className="label" style={{ fontSize: '0.85rem' }}>BB Middle</span>
+                      <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.bollingerBands.middle)}</span>
+                    </div>
+                    <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                      <span className="label" style={{ fontSize: '0.85rem' }}>BB Lower</span>
+                      <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.bollingerBands.lower)}</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </section>
+          )}
+
+          {activeTab === 'technicals' && !indicators && !loading && !error && (
+            <section className="glass-panel" style={{ marginTop: '1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              <p>Calculated technical indicators are currently loading or unavailable for this instrument.</p>
+            </section>
+          )}
+
+        </>
       )}
 
       {activeTab === 'fundamentals' && (
@@ -509,7 +509,7 @@ function Instrument() {
           {fundamentals ? (
             <section className="glass-panel" style={{ marginTop: '1rem', background: 'linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%)' }}>
               <h2 style={{ marginBottom: '1rem' }}>Fundamental Analysis (Yahoo Finance)</h2>
-              
+
               {fundamentals.assetProfile?.longBusinessSummary && (
                 <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'var(--bg-dark)', borderRadius: '8px', lineHeight: '1.6', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
                   <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: '0.5rem' }}>Company Overview</strong>
@@ -522,12 +522,12 @@ function Instrument() {
                   <span className="label" style={{ fontSize: '0.85rem' }}>Market Cap</span>
                   <span className="value" style={{ fontSize: '1.25rem' }}>{fundamentals.summaryDetail?.marketCap ? `₹${(fundamentals.summaryDetail.marketCap / 10000000).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr` : '—'}</span>
                 </div>
-                
+
                 <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
                   <span className="label" style={{ fontSize: '0.85rem' }}>Trailing P/E</span>
                   <span className="value" style={{ fontSize: '1.25rem' }}>{fmtNum(fundamentals.summaryDetail?.trailingPE)}</span>
                 </div>
-                
+
                 <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
                   <span className="label" style={{ fontSize: '0.85rem' }}>Forward P/E</span>
                   <span className="value" style={{ fontSize: '1.25rem' }}>{fmtNum(fundamentals.summaryDetail?.forwardPE)}</span>
@@ -557,7 +557,7 @@ function Instrument() {
                   <span className="label" style={{ fontSize: '0.85rem' }}>52W Low</span>
                   <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(fundamentals.summaryDetail?.fiftyTwoWeekLow)}</span>
                 </div>
-                
+
                 <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
                   <span className="label" style={{ fontSize: '0.85rem' }}>Profit Margin</span>
                   <span className={`value ${fundamentals.financialData?.profitMargins >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.25rem' }}>
@@ -607,23 +607,23 @@ function Instrument() {
               </button>
             </div>
           </div>
-          
+
           {cashflow && cashflow.length > 0 ? (
             <div style={{ flex: 1, minHeight: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={cashflow.slice().reverse()} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                  <XAxis 
-                    dataKey="date" 
-                    stroke="var(--text-secondary)" 
+                  <XAxis
+                    dataKey="date"
+                    stroke="var(--text-secondary)"
                     tickFormatter={(val) => {
                       const d = new Date(val);
-                      return cashflowType === 'quarterly' ? `${d.getFullYear()}-Q${Math.floor(d.getMonth()/3)+1}` : d.getFullYear();
-                    }} 
+                      return cashflowType === 'quarterly' ? `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}` : d.getFullYear();
+                    }}
                   />
-                  <YAxis 
-                    stroke="var(--text-secondary)" 
-                    tickFormatter={(val) => `₹${(val / 10000000).toFixed(0)}Cr`} 
+                  <YAxis
+                    stroke="var(--text-secondary)"
+                    tickFormatter={(val) => `₹${(val / 10000000).toFixed(0)}Cr`}
                   />
                   <Tooltip
                     contentStyle={{ backgroundColor: 'var(--bg-dark)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
