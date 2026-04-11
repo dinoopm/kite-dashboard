@@ -61,15 +61,14 @@ function App() {
     checkAuth()
   }
 
-  const handleDisconnect = async () => {
-    if (window.confirm('Disconnect the kite dashboard? You will need to login again.')) {
-      setAuthState('unauthenticated')
-      setLoginMsg(null)
-      try {
-        await fetch('http://localhost:3001/api/disconnect', { method: 'POST' })
-      } catch (err) {
-        console.error('Failed to disconnect', err)
-      }
+  const handleDisconnect = async (e) => {
+    if (e) e.preventDefault();
+    setAuthState('unauthenticated');
+    setLoginMsg(null);
+    try {
+      await fetch('http://localhost:3001/api/disconnect', { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to disconnect', err);
     }
   }
 
