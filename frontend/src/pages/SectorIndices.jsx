@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { LineChart, Line, ResponsiveContainer } from 'recharts';
 
 const INDICES_MAP = {
   "NSE:NIFTY 50": "NIFTY 50",
@@ -85,6 +86,8 @@ function SectorIndices() {
               '1Y': null,
               '3Y': null,
               '5Y': null,
+              sparkline: null,
+              aboveSma50: null,
             };
           });
           
@@ -123,16 +126,28 @@ function SectorIndices() {
           if (Array.isArray(parsed) && parsed.length > 0) {
             const latestPrice = index.price;
             const historyObj = calculateHistoricalReturns(parsed, latestPrice);
+
+            // Compute SMA50
+            const sorted = [...parsed].sort((a,b) => new Date(a.date) - new Date(b.date));
+            let aboveSma50 = null;
+            if (sorted.length >= 50) {
+              const last50 = sorted.slice(-50).map(c => c.close);
+              const sma50 = last50.reduce((s, v) => s + v, 0) / 50;
+              aboveSma50 = latestPrice > sma50;
+            }
+
+            // Last 30 candles for sparkline
+            const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
             
             setData(prevData => prevData.map(item => 
               item.id === index.id 
-                ? { ...item, ...historyObj }
+                ? { ...item, ...historyObj, sparkline, aboveSma50 }
                 : item
             ));
           } else {
              setData(prevData => prevData.map(item => 
               item.id === index.id 
-                ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '3Y': 0, '5Y': 0 }
+                ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '3Y': 0, '5Y': 0, sparkline: null, aboveSma50: null }
                 : item
             ));
           }
@@ -239,6 +254,31 @@ function SectorIndices() {
     );
   };
 
+  const Sparkline = ({ data, aboveSma50 }) => {
+    if (!data || data.length === 0) {
+      return <td style={{ padding: '0.5rem 1rem' }}><div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div></td>;
+    }
+    const color = aboveSma50 === null ? '#888' : aboveSma50 ? '#22c55e' : '#ef4444';
+    return (
+      <td style={{ padding: '0.5rem 1rem' }}>
+        <div style={{ width: '100px', height: '36px' }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data}>
+              <Line
+                type="monotone"
+                dataKey="v"
+                stroke={color}
+                strokeWidth={1.5}
+                dot={false}
+                isAnimationActive={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </td>
+    );
+  };
+
   if (loading) return <div className="loader"></div>;
 
   if (error) {
@@ -313,6 +353,9 @@ function SectorIndices() {
               <th onClick={() => requestSort('5Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
                 5Y {renderSortIndicator('5Y')}
               </th>
+              <th style={{ borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                Trend (30d)
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -334,10 +377,11 @@ function SectorIndices() {
                 <Cell value={row['1Y']} />
                 <Cell value={row['3Y']} />
                 <Cell value={row['5Y']} />
+                <Sparkline data={row.sparkline} aboveSma50={row.aboveSma50} />
               </tr>
             )) : (
               <tr>
-                <td colSpan="9" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
+                <td colSpan="10" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
               </tr>
             )}
           </tbody>
