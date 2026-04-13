@@ -34,6 +34,7 @@ function SectorIndices() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
   
   // Sorting state
   const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'asc' });
@@ -78,6 +79,7 @@ function SectorIndices() {
               price: lastPrice,
               '1D': pct1D,
               '1W': null,
+              '1M': null,
               '3M': null,
               '6M': null,
               '1Y': null,
@@ -112,13 +114,14 @@ function SectorIndices() {
       if (!mountedRef.current) break;
       
       try {
-        const res = await fetch(`http://localhost:3001/api/historical/${index.token}?tf=5Y`);
+        // Use the multi-year endpoint that fetches 5Y data in yearly chunks
+        const res = await fetch(`http://localhost:3001/api/historical-full/${index.token}`);
         const resData = await res.json();
         
         if (resData?.content?.[0]?.text) {
           let parsed = JSON.parse(resData.content[0].text);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            const latestPrice = index.price; // Approximate against live price
+            const latestPrice = index.price;
             const historyObj = calculateHistoricalReturns(parsed, latestPrice);
             
             setData(prevData => prevData.map(item => 
@@ -127,10 +130,9 @@ function SectorIndices() {
                 : item
             ));
           } else {
-             // If data format failed or empty, set to - or 0
              setData(prevData => prevData.map(item => 
               item.id === index.id 
-                ? { ...item, '1W': 0, '3M': 0, '6M': 0, '1Y': 0, '3Y': 0, '5Y': 0 }
+                ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '3Y': 0, '5Y': 0 }
                 : item
             ));
           }
@@ -139,41 +141,45 @@ function SectorIndices() {
         console.error("Failed history for", index.name, e);
       }
       
-      // Sleep for 1.2s to strictly avoid Kite's 3 req/sec limit
+      // Each historical-full call triggers ~5 MCP requests internally,
+      // so wait longer between indices to avoid rate limits
       if (mountedRef.current) {
-        await new Promise(r => setTimeout(r, 1200));
+        await new Promise(r => setTimeout(r, 3000));
       }
     }
   };
 
   const calculateHistoricalReturns = (candles, currentPrice) => {
-    // candles are sorted oldest -> newest usually, check dates:
     const series = candles.sort((a,b) => new Date(a.date) - new Date(b.date));
     const now = new Date();
+    now.setHours(0,0,0,0);
     
-    const getPriceAgo = (days) => {
-      const targetDate = new Date();
-      targetDate.setDate(now.getDate() - days);
-      
-      // Find the closest candle before or on the target date
-      // Start from end to find the most recent one satisfying condition
-      let closestClose = series[0].close; // fallback to oldest available
-      for (let i = series.length - 1; i >= 0; i--) {
-        const cDate = new Date(series[i].date);
-        if (cDate <= targetDate) {
-          closestClose = series[i].close;
+    // Find the closing price on the nearest available trading day to the target date.
+    // Uses absolute closest match to minimize error from weekends/holidays.
+    const getPriceAtDate = (targetDate) => {
+      if (!series || series.length === 0) return 0;
+      let bestClose = series[0].close;
+      let bestDiff = Math.abs(new Date(series[0].date) - targetDate);
+      for (let i = 1; i < series.length; i++) {
+        const diff = Math.abs(new Date(series[i].date) - targetDate);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestClose = series[i].close;
+        } else if (diff > bestDiff) {
+          // Since series is sorted by date, once diff starts increasing we can stop
           break;
         }
       }
-      return closestClose;
+      return bestClose;
     };
 
-    const c1W = getPriceAgo(7);
-    const c3M = getPriceAgo(90);
-    const c6M = getPriceAgo(180);
-    const c1Y = getPriceAgo(365);
-    const c3Y = getPriceAgo(365 * 3);
-    const c5Y = getPriceAgo(365 * 5);
+    const d1W = new Date(now); d1W.setDate(now.getDate() - 7);
+    const d1M = new Date(now); d1M.setMonth(now.getMonth() - 1);
+    const d3M = new Date(now); d3M.setMonth(now.getMonth() - 3);
+    const d6M = new Date(now); d6M.setMonth(now.getMonth() - 6);
+    const d1Y = new Date(now); d1Y.setFullYear(now.getFullYear() - 1);
+    const d3Y = new Date(now); d3Y.setFullYear(now.getFullYear() - 3);
+    const d5Y = new Date(now); d5Y.setFullYear(now.getFullYear() - 5);
 
     const calcPct = (oldPrice) => {
       if (!oldPrice || oldPrice === 0) return 0;
@@ -181,12 +187,13 @@ function SectorIndices() {
     };
 
     return {
-      '1W': calcPct(c1W),
-      '3M': calcPct(c3M),
-      '6M': calcPct(c6M),
-      '1Y': calcPct(c1Y),
-      '3Y': calcPct(c3Y),
-      '5Y': calcPct(c5Y),
+      '1W': calcPct(getPriceAtDate(d1W)),
+      '1M': calcPct(getPriceAtDate(d1M)),
+      '3M': calcPct(getPriceAtDate(d3M)),
+      '6M': calcPct(getPriceAtDate(d6M)),
+      '1Y': calcPct(getPriceAtDate(d1Y)),
+      '3Y': calcPct(getPriceAtDate(d3Y)),
+      '5Y': calcPct(getPriceAtDate(d5Y)),
     };
   };
 
@@ -210,6 +217,10 @@ function SectorIndices() {
     if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
     return 0;
   });
+
+  const filteredData = sortedData.filter(row => 
+    row.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   const renderSortIndicator = (key) => {
     if (sortConfig.key === key) {
@@ -243,10 +254,28 @@ function SectorIndices() {
 
   return (
     <div className="dashboard-layout">
-      <header className="header" style={{ marginBottom: '1.5rem', borderBottom: 'none' }}>
+      <header className="header" style={{ marginBottom: '1.5rem', borderBottom: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1>Sector Indices</h1>
           <p>Real-time & Historical performance of market sectors</p>
+        </div>
+        <div>
+          <input
+            type="text"
+            placeholder="Search indices..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              padding: '0.6rem 1rem',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-dark)',
+              color: 'var(--text-primary)',
+              width: '250px',
+              fontSize: '1rem',
+              outline: 'none'
+            }}
+          />
         </div>
       </header>
 
@@ -266,6 +295,9 @@ function SectorIndices() {
               <th onClick={() => requestSort('1W')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
                 1W {renderSortIndicator('1W')}
               </th>
+              <th onClick={() => requestSort('1M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
+                1M {renderSortIndicator('1M')}
+              </th>
               <th onClick={() => requestSort('3M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
                 3M {renderSortIndicator('3M')}
               </th>
@@ -284,11 +316,11 @@ function SectorIndices() {
             </tr>
           </thead>
           <tbody>
-            {sortedData.map((row, idx) => (
+            {filteredData.length > 0 ? filteredData.map((row, idx) => (
               <tr 
                 key={row.id} 
                 onClick={() => row.token && navigate(`/instrument/${row.token}?symbol=${row.id.split(':')[1]}`)}
-                style={{ cursor: row.token ? 'pointer' : 'default', borderBottom: idx !== sortedData.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none', transition: 'background 0.2s' }}
+                style={{ cursor: row.token ? 'pointer' : 'default', borderBottom: idx !== filteredData.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none', transition: 'background 0.2s' }}
                 onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
                 onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
               >
@@ -296,13 +328,18 @@ function SectorIndices() {
                 <td style={{ padding: '1rem', color: 'var(--text-primary)' }}>₹{row.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                 <Cell value={row['1D']} />
                 <Cell value={row['1W']} />
+                <Cell value={row['1M']} />
                 <Cell value={row['3M']} />
                 <Cell value={row['6M']} />
                 <Cell value={row['1Y']} />
                 <Cell value={row['3Y']} />
                 <Cell value={row['5Y']} />
               </tr>
-            ))}
+            )) : (
+              <tr>
+                <td colSpan="9" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </section>

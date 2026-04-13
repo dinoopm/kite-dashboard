@@ -62,6 +62,43 @@ async function fetchHistorical(token, fromDate, toDate, interval = 'day') {
   return parseMcpText(result);
 }
 
+// Kite MCP returns at most ~1 year of daily candles per request.
+// To get multi-year data we fetch in 1-year chunks and concatenate.
+async function fetchHistoricalMultiYear(token, years = 5) {
+  const allCandles = [];
+  const now = new Date();
+
+  for (let y = years; y > 0; y--) {
+    const chunkEnd = new Date(now);
+    chunkEnd.setFullYear(now.getFullYear() - (y - 1));
+    const chunkStart = new Date(now);
+    chunkStart.setFullYear(now.getFullYear() - y);
+
+    try {
+      const data = await fetchHistorical(parseInt(token, 10), chunkStart, chunkEnd, 'day');
+      if (Array.isArray(data)) {
+        allCandles.push(...data);
+      }
+    } catch (err) {
+      console.log(`  ⚠️  Chunk ${y}Y-${y-1}Y failed for token ${token}: ${err.message}`);
+    }
+    // Respect rate limit
+    await new Promise(r => setTimeout(r, 400));
+  }
+
+  // Deduplicate by date and sort
+  const seen = new Set();
+  const deduped = [];
+  for (const c of allCandles) {
+    const key = c.date;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(c);
+    }
+  }
+  return deduped.sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+
 // ─── Cache warm-up ─────────────────────────────────────────────
 async function warmCache(retries = 3) {
   if (cacheReady || cacheWarming) return;
@@ -389,18 +426,22 @@ app.get('/api/historical/:token', async (req, res) => {
       const cutoff = new Date();
       cutoff.setDate(now.getDate() - daysBack);
 
-      const filtered = alignedCached.filter(c => {
-         const d = new Date(c.date);
-         return d >= cutoff;
-      });
+      const oldestDateInCache = new Date(cached[0].date);
+      
+      // Only use cache if it actually covers the requested timeframe
+      if (oldestDateInCache <= cutoff) {
+        const filtered = alignedCached.filter(c => {
+           const d = new Date(c.date);
+           return d >= cutoff;
+        });
 
-    // Wrap back in MCP-like response so frontend parsing stays the same
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    if (filtered && filtered.length > 0) {
-      return res.json({
-        content: [{ type: "text", text: JSON.stringify(filtered) }]
-      });
-    }
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        if (filtered && filtered.length > 0) {
+          return res.json({
+            content: [{ type: "text", text: JSON.stringify(filtered) }]
+          });
+        }
+      }
     }
 
     // Cache miss: fetch live
@@ -460,6 +501,10 @@ app.get('/api/historical/:token', async (req, res) => {
          const d = new Date(c.date);
          return d >= cutoff;
       });
+
+      // Since we just fetched live data that might be longer than what's in cache,
+      // let's update the cache with this new, longer dataset so subsequent requests benefit from it.
+      historyCache[token] = parsed;
 
       // Wrap back in MCP-like response so frontend parsing stays the same
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -759,6 +804,26 @@ app.get('/api/cashflow/:symbol', async (req, res) => {
   } catch (err) {
     console.error("Yahoo Finance cashflow error:", err);
     res.status(500).json({ error: "Failed to fetch cashflow data: " + err.message });
+  }
+});
+
+// ─── Multi-year historical data (for Sector Indices) ──────────
+app.get('/api/historical-full/:token', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
+  try {
+    const { token } = req.params;
+    console.log(`📊 Fetching full 5Y history for token ${token}...`);
+    const data = await fetchHistoricalMultiYear(token, 5);
+    if (Array.isArray(data) && data.length > 0) {
+      console.log(`  ✅ Got ${data.length} candles from ${data[0].date.substring(0,10)} to ${data[data.length-1].date.substring(0,10)}`);
+      return res.json({
+        content: [{ type: "text", text: JSON.stringify(data) }]
+      });
+    }
+    res.json({ content: [{ type: "text", text: "[]" }] });
+  } catch (err) {
+    console.error("Historical-full error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
