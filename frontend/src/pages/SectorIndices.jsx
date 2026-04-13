@@ -88,6 +88,7 @@ function SectorIndices() {
               '5Y': null,
               sparkline: null,
               aboveSma50: null,
+              rsi14: null,
             };
           });
           
@@ -136,18 +137,35 @@ function SectorIndices() {
               aboveSma50 = latestPrice > sma50;
             }
 
+            // Compute RSI-14 (Wilder's smoothed method)
+            let rsi14 = null;
+            const closes = sorted.map(c => c.close);
+            if (closes.length >= 15) {
+              const changes = closes.slice(1).map((v, i) => v - closes[i]);
+              let avgGain = changes.slice(0, 14).filter(x => x > 0).reduce((s, v) => s + v, 0) / 14;
+              let avgLoss = changes.slice(0, 14).filter(x => x < 0).reduce((s, v) => s + Math.abs(v), 0) / 14;
+              for (let i = 14; i < changes.length; i++) {
+                const gain = changes[i] > 0 ? changes[i] : 0;
+                const loss = changes[i] < 0 ? Math.abs(changes[i]) : 0;
+                avgGain = (avgGain * 13 + gain) / 14;
+                avgLoss = (avgLoss * 13 + loss) / 14;
+              }
+              const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+              rsi14 = parseFloat((100 - 100 / (1 + rs)).toFixed(1));
+            }
+
             // Last 30 candles for sparkline
             const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
             
             setData(prevData => prevData.map(item => 
               item.id === index.id 
-                ? { ...item, ...historyObj, sparkline, aboveSma50 }
+                ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14 }
                 : item
             ));
           } else {
              setData(prevData => prevData.map(item => 
               item.id === index.id 
-                ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '3Y': 0, '5Y': 0, sparkline: null, aboveSma50: null }
+                ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '3Y': 0, '5Y': 0, sparkline: null, aboveSma50: null, rsi14: null }
                 : item
             ));
           }
@@ -354,7 +372,10 @@ function SectorIndices() {
                 5Y {renderSortIndicator('5Y')}
               </th>
               <th style={{ borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
-                Trend (30d)
+                Trend (vs SMA50)
+              </th>
+              <th style={{ borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                RSI(14)
               </th>
             </tr>
           </thead>
@@ -378,10 +399,32 @@ function SectorIndices() {
                 <Cell value={row['3Y']} />
                 <Cell value={row['5Y']} />
                 <Sparkline data={row.sparkline} aboveSma50={row.aboveSma50} />
+                <td style={{ padding: '0.5rem 1rem', textAlign: 'center' }}>
+                  {row.rsi14 === null ? (
+                    <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
+                  ) : (
+                    <span style={{
+                      display: 'inline-block',
+                      padding: '0.2rem 0.5rem',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem',
+                      fontWeight: '600',
+                      background: row.rsi14 >= 70 ? 'rgba(239,68,68,0.15)'
+                               : row.rsi14 <= 30 ? 'rgba(34,197,94,0.15)'
+                               : 'rgba(255,255,255,0.07)',
+                      color: row.rsi14 >= 70 ? '#ef4444'
+                           : row.rsi14 <= 30 ? '#22c55e'
+                           : 'var(--text-secondary)',
+                      border: `1px solid ${row.rsi14 >= 70 ? 'rgba(239,68,68,0.3)' : row.rsi14 <= 30 ? 'rgba(34,197,94,0.3)' : 'rgba(255,255,255,0.1)'}`
+                    }}>
+                      {row.rsi14}
+                    </span>
+                  )}
+                </td>
               </tr>
             )) : (
               <tr>
-                <td colSpan="10" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
+                <td colSpan="11" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
               </tr>
             )}
           </tbody>
