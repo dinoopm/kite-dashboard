@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard'
 import Portfolio from './pages/Portfolio'
 import Instrument from './pages/Instrument'
 import Alerts from './pages/Alerts'
+import SectorIndices from './pages/SectorIndices'
 import Navbar from './components/Navbar'
 
 function App() {
@@ -128,6 +129,7 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/alerts" element={<Alerts />} />
+          <Route path="/indices" element={<SectorIndices />} />
           <Route path="/instrument/:token" element={<Instrument />} />
         </Routes>
       </div>

@@ -39,6 +39,17 @@ function Navbar({ onDisconnect }) {
       >
         Alerts
       </Link>
+      <Link 
+        to="/indices" 
+        style={{ 
+          textDecoration: 'none', 
+          color: location.pathname === '/indices' ? 'white' : 'var(--text-secondary)',
+          fontWeight: location.pathname === '/indices' ? 'bold' : 'normal',
+          transition: 'color 0.2s'
+        }}
+      >
+        Sector Indices
+      </Link>
 
       <div style={{ flex: 1 }}></div>
 

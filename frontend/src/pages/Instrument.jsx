@@ -200,11 +200,31 @@ function Instrument() {
     return { text: 'Neutral', color: '' };
   };
 
-  // Bollinger Bands signal
-  const bbSignal = (bb) => {
+  // Bollinger Bands signals
+  const bbUpperSignal = (bb) => {
     if (!bb || indicators?.currentPrice == null) return { text: 'Neutral', color: '' };
     if (indicators.currentPrice > bb.upper) return { text: 'Bearish (Overbought)', color: 'negative' };
+    return { text: 'Neutral', color: '' };
+  };
+
+  const bbLowerSignal = (bb) => {
+    if (!bb || indicators?.currentPrice == null) return { text: 'Neutral', color: '' };
     if (indicators.currentPrice < bb.lower) return { text: 'Bullish (Oversold)', color: 'positive' };
+    return { text: 'Neutral', color: '' };
+  };
+
+  // MACD signals for Histogram and Signal line
+  const macdHistSignal = (hist) => {
+    if (hist == null) return { text: 'Neutral', color: '' };
+    if (hist > 0) return { text: 'Bullish', color: 'positive' };
+    if (hist < 0) return { text: 'Bearish', color: 'negative' };
+    return { text: 'Neutral', color: '' };
+  };
+
+  const macdSignalLineStatus = (val) => {
+    if (val == null) return { text: 'Neutral', color: '' };
+    if (val > 0) return { text: 'Bullish', color: 'positive' };
+    if (val < 0) return { text: 'Bearish', color: 'negative' };
     return { text: 'Neutral', color: '' };
   };
 
@@ -460,11 +480,17 @@ function Instrument() {
                     <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
                       <span className="label" style={{ fontSize: '0.85rem' }}>MACD Signal</span>
                       <span className="value" style={{ fontSize: '1.25rem' }}>{fmtNum(indicators.indicators.macd.signal)}</span>
+                      <span className={`label ${macdSignalLineStatus(indicators.indicators.macd.signal).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                        {macdSignalLineStatus(indicators.indicators.macd.signal).text}
+                      </span>
                     </div>
                     <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
                       <span className="label" style={{ fontSize: '0.85rem' }}>MACD Histogram</span>
                       <span className={`value ${indicators.indicators.macd.histogram >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.25rem' }}>
                         {fmtNum(indicators.indicators.macd.histogram)}
+                      </span>
+                      <span className={`label ${macdHistSignal(indicators.indicators.macd.histogram).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                        {macdHistSignal(indicators.indicators.macd.histogram).text}
                       </span>
                     </div>
                   </>
@@ -476,17 +502,23 @@ function Instrument() {
                     <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
                       <span className="label" style={{ fontSize: '0.85rem' }}>BB Upper</span>
                       <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.bollingerBands.upper)}</span>
-                      <span className={`label ${bbSignal(indicators.indicators.bollingerBands).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-                        {bbSignal(indicators.indicators.bollingerBands).text}
+                      <span className={`label ${bbUpperSignal(indicators.indicators.bollingerBands).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                        {bbUpperSignal(indicators.indicators.bollingerBands).text}
                       </span>
                     </div>
                     <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
                       <span className="label" style={{ fontSize: '0.85rem' }}>BB Middle</span>
                       <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.bollingerBands.middle)}</span>
+                      <span className={`label ${maSignal(indicators.indicators.bollingerBands.middle).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                        {maSignal(indicators.indicators.bollingerBands.middle).text}
+                      </span>
                     </div>
                     <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
                       <span className="label" style={{ fontSize: '0.85rem' }}>BB Lower</span>
                       <span className="value" style={{ fontSize: '1.25rem' }}>₹{fmtNum(indicators.indicators.bollingerBands.lower)}</span>
+                      <span className={`label ${bbLowerSignal(indicators.indicators.bollingerBands).color}`} style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
+                        {bbLowerSignal(indicators.indicators.bollingerBands).text}
+                      </span>
                     </div>
                   </>
                 )}

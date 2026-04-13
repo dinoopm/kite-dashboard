@@ -5,7 +5,8 @@ function Dashboard() {
     profile: null,
     holdings: null,
     mfHoldings: null,
-    margins: null
+    margins: null,
+    indices: null
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -15,18 +16,25 @@ function Dashboard() {
       setLoading(true);
       setError(null);
 
-      const [profileRes, holdingsRes, mfRes, marginsRes] = await Promise.all([
+      const [profileRes, holdingsRes, mfRes, marginsRes, quotesRes] = await Promise.all([
         fetch('http://localhost:3001/api/profile', { signal }),
         fetch('http://localhost:3001/api/holdings', { signal }),
         fetch('http://localhost:3001/api/mf-holdings', { signal }),
         fetch('http://localhost:3001/api/margins', { signal }),
+        fetch('http://localhost:3001/api/quotes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instruments: ["NSE:NIFTY 50", "NSE:NIFTY BANK", "BSE:SENSEX"] }),
+          signal
+        })
       ]);
       const profileData = await profileRes.json();
       const holdingsData = await holdingsRes.json();
       const mfData = await mfRes.json();
       const marginsData = await marginsRes.json();
+      const quotesData = await quotesRes.json();
 
-      let p = null, h = null, m = null, cash = null;
+      let p = null, h = null, m = null, cash = null, idx = null;
 
       if (profileData?.content?.[0]?.text) {
         try { p = JSON.parse(profileData.content[0].text); } catch (e) { }
@@ -49,8 +57,13 @@ function Dashboard() {
           cash = parsed.data || parsed;
         } catch (e) { }
       }
+      if (quotesData?.content?.[0]?.text) {
+        try {
+          idx = JSON.parse(quotesData.content[0].text);
+        } catch (e) { }
+      }
 
-      setData({ profile: p, holdings: h, mfHoldings: m, margins: cash });
+      setData({ profile: p, holdings: h, mfHoldings: m, margins: cash, indices: idx });
 
     } catch (err) {
       if (err.name === 'AbortError') return;
@@ -123,6 +136,28 @@ function Dashboard() {
           <strong>{data.profile?.user_id}</strong>
         </div>
       </header>
+
+      {/* Major Indices */}
+      {data.indices && (
+        <section style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+          {Object.entries(data.indices).map(([symbol, quote]) => {
+            const name = symbol.split(':')[1];
+            // Provide a fallback if net_change wasn't explicitly available
+            const change = quote.net_change !== undefined ? quote.net_change : (quote.last_price - (quote.ohlc?.close || quote.last_price));
+            const changePct = quote.ohlc?.close ? parseFloat(((change / quote.ohlc.close) * 100).toFixed(2)) : 0;
+            const isPositive = change >= 0;
+            return (
+              <div key={symbol} className="glass-panel" style={{ flex: '1', minWidth: '200px', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                <span className="label" style={{ fontSize: '0.85rem' }}>{name}</span>
+                <span className="value" style={{ fontSize: '1.25rem' }}>{fmt(quote.last_price)}</span>
+                <span className={`label ${isPositive ? 'positive' : 'negative'}`} style={{ fontSize: '0.85rem' }}>
+                  {isPositive ? '+' : ''}{change.toFixed(2)} ({changePct.toFixed(2)}%)
+                </span>
+              </div>
+            );
+          })}
+        </section>
+      )}
 
       {/* Net Worth / Grand Totals */}
       <section className="glass-panel" style={{ marginBottom: '2rem', background: 'linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%)', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
