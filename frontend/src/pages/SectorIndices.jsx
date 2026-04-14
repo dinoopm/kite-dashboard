@@ -405,7 +405,10 @@ function SectorIndices() {
           .filter(r => r.momentumScore != null)
           .sort((a, b) => b.momentumScore - a.momentumScore)
           .slice(0, 10)
-          .map(r => ({ name: r.name.replace('NIFTY ', ''), score: r.momentumScore }));
+          .map(r => {
+            const short = r.name.replace('NIFTY ', '');
+            return { name: /^\d+$/.test(short) ? r.name : short, score: r.momentumScore };
+          });
         
         const getBarColor = (score) => {
           if (score >= 80) return '#10b981';
