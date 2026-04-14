@@ -139,7 +139,7 @@ function Alerts() {
     <div className="dashboard-layout">
       <header className="header" style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1>Portfolio Alerts</h1>
+          <h1>Portfolio Technical Alerts</h1>
           <p style={{ color: 'var(--text-secondary)' }}>Technical signals across your holdings based on RSI and SMA analysis</p>
         </div>
         <input 
