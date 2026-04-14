@@ -525,7 +525,7 @@ function SectorIndices() {
               <th style={{ borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
                 RSI(14)
               </th>
-              <th onClick={() => requestSort('momentumScore')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+              <th onClick={() => requestSort('momentumScore')} title="Momentum Score (1-100): Weighted rank based on 1W (20%), 1M (50%), 3M (30%) returns, adjusted for RSI overbought/oversold. The % below is the raw weighted return." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
                 Momentum {renderSortIndicator('momentumScore')}
               </th>
             </tr>
@@ -599,7 +599,7 @@ function SectorIndices() {
                       {row.momentumScore}
                     </span>
                     {row.rawReturn != null && (
-                      <span style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                      <span title="Raw weighted return: (1W×20% + 1M×50% + 3M×30%)" style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px', cursor: 'help' }}>
                         {row.rawReturn > 0 ? '+' : ''}{row.rawReturn.toFixed(1)}%
                       </span>
                     )}
