@@ -599,7 +599,7 @@ function SectorIndices() {
                       {row.momentumScore}
                     </span>
                     {row.rawReturn != null && (
-                      <span title="Raw weighted return: (1W×20% + 1M×50% + 3M×30%)" style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px', cursor: 'help' }}>
+                      <span className="raw-return-tooltip" style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px', position: 'relative', cursor: 'default' }}>
                         {row.rawReturn > 0 ? '+' : ''}{row.rawReturn.toFixed(1)}%
                       </span>
                     )}

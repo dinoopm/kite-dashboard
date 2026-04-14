@@ -143,3 +143,28 @@ tbody tr:hover {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
 }
+
+/* Custom tooltip for raw return */
+.raw-return-tooltip::after {
+  content: 'Raw weighted return: (1W×20% + 1M×50% + 3M×30%)';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.5rem 0.75rem;
+  background: #1a1a2e;
+  color: #f8fafc;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  border: 1px solid rgba(255,255,255,0.15);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  z-index: 100;
+}
+
+.raw-return-tooltip:hover::after {
+  opacity: 1;
+}
