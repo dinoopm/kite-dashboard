@@ -424,8 +424,7 @@ function SectorIndices() {
             const short = r.name.replace('NIFTY ', '');
             return { 
               name: /^\d+$/.test(short) ? r.name : short, 
-              score: r.momentumScore,
-              rawReturn: r.rawReturn
+              score: r.momentumScore
             };
           });
         
@@ -463,11 +462,6 @@ function SectorIndices() {
                           <p style={{ margin: '0.25rem 0 0', color: getBarColor(d.value), fontWeight: 700, fontSize: '1.1rem' }}>
                             Score: {d.value}
                           </p>
-                          {d.payload.rawReturn != null && (
-                            <p style={{ margin: '0.15rem 0 0', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-                              Raw: {d.payload.rawReturn > 0 ? '+' : ''}{d.payload.rawReturn.toFixed(2)}%
-                            </p>
-                          )}
                         </div>
                       );
                     }}
@@ -598,11 +592,6 @@ function SectorIndices() {
                     }}>
                       {row.momentumScore}
                     </span>
-                    {row.rawReturn != null && (
-                      <span className="raw-return-tooltip" style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px', position: 'relative', cursor: 'default' }}>
-                        {row.rawReturn > 0 ? '+' : ''}{row.rawReturn.toFixed(1)}%
-                      </span>
-                    )}
                     </>
                   )}
                 </td>
