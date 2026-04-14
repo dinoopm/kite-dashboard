@@ -33,27 +33,34 @@ A beautiful, real-time analytical dashboard for your Zerodha Kite portfolio — 
 - Node.js 18+
 - A [Zerodha Kite](https://kite.zerodha.com) account
 
-### 1. Backend
+### Setup & Run (Local / Production)
+
+The project is structured as a fullstack app with a root configuration, making it easy to run locally or deploy to services like Railway.
 
 ```bash
-cd backend
-npm install
-node server.js
+# 1. Install all dependencies (frontend & backend) and build the React app
+npm run build
+
+# 2. Start the production-ready server (serves API and Frontend on port 3001)
+npm start
 ```
+The application will run on `http://localhost:3001`.
 
-The backend runs on `http://localhost:3001` and connects to the Kite MCP server.
+### Local Development (Hot Reloading)
 
-### 2. Frontend
+If you are developing and want live hot-reloading for the React frontend:
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+1. Start the Backend API (in one terminal):
+   ```bash
+   cd backend && npm start
+   ```
+2. Start the Vite Dev Server (in another terminal):
+   ```bash
+   cd frontend && npm run dev
+   ```
+The dev server runs on `http://localhost:5173` and automatically proxies `/api` calls to the backend.
 
-The frontend runs on `http://localhost:5173`.
-
-### 3. Authenticate
+### Authenticate
 
 On first launch, click **Login to Kite** and authorize access via Zerodha.
 
