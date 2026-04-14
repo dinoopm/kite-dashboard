@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LineChart, Line, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Cell as RechartsCell, ResponsiveContainer } from 'recharts';
 
 const INDICES = [
   { key: "NSE:NIFTY 50", name: "NIFTY 50", category: "broad" },
@@ -247,6 +247,33 @@ function SectorIndices() {
     setSortConfig({ key, direction });
   };
 
+  // ─── Momentum Score Calculation ───────────────────────────────
+  const W_1W = 0.20, W_1M = 0.50, W_3M = 0.30;
+
+  const calculateMomentumScores = (items) => {
+    // Only score items that have all required returns loaded
+    const scorable = items.filter(r => r['1W'] !== null && r['1M'] !== null && r['3M'] !== null);
+    if (scorable.length === 0) return items;
+
+    const rawScores = scorable.map(r => ({
+      id: r.id,
+      raw: ((r['1W'] || 0) * W_1W) + ((r['1M'] || 0) * W_1M) + ((r['3M'] || 0) * W_3M)
+    }));
+
+    const minRaw = Math.min(...rawScores.map(s => s.raw));
+    const maxRaw = Math.max(...rawScores.map(s => s.raw));
+    const range = maxRaw - minRaw;
+
+    const scoreMap = {};
+    rawScores.forEach(s => {
+      scoreMap[s.id] = range === 0 
+        ? 50 
+        : Math.round(1 + ((s.raw - minRaw) / range) * 99);
+    });
+
+    return items.map(r => ({ ...r, momentumScore: scoreMap[r.id] ?? null }));
+  };
+
   const sortedData = [...data].sort((a, b) => {
     let valA = a[sortConfig.key];
     let valB = b[sortConfig.key];
@@ -260,10 +287,9 @@ function SectorIndices() {
     return 0;
   });
 
-  const filteredData = sortedData
-    .filter(row => activeTab === 'all' || row.category === activeTab)
-    .filter(row => row.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const tabFiltered = sortedData.filter(row => activeTab === 'all' || row.category === activeTab);
+  const withScores = calculateMomentumScores(tabFiltered);
+  const filteredData = withScores.filter(row => row.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
   const renderSortIndicator = (key) => {
     if (sortConfig.key === key) {
@@ -373,6 +399,49 @@ function SectorIndices() {
         ))}
       </div>
 
+      {/* Momentum Score Bar Chart */}
+      {(() => {
+        const chartData = filteredData
+          .filter(r => r.momentumScore != null)
+          .sort((a, b) => b.momentumScore - a.momentumScore)
+          .slice(0, 10)
+          .map(r => ({ name: r.name.replace('NIFTY ', ''), score: r.momentumScore }));
+        
+        const getBarColor = (score) => {
+          if (score >= 80) return '#10b981';
+          if (score >= 60) return '#6ee7b7';
+          if (score >= 40) return '#94a3b8';
+          if (score >= 20) return '#fca5a5';
+          return '#ef4444';
+        };
+
+        if (chartData.length === 0) return null;
+        return (
+          <section className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1rem' }}>
+            <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1.1rem' }}>Kite Momentum Score by {activeTab === 'sector' ? 'Sector' : 'Index'} (1-100)</h3>
+            <p style={{ margin: '0 0 1rem 0', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Based on weighted 1W, 1M, and 3M returns</p>
+            <div style={{ width: '100%', height: Math.max(200, chartData.length * 38) }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 40, left: 10, bottom: 5 }}>
+                  <XAxis type="number" domain={[0, 100]} tick={{ fill: 'var(--text-secondary)', fontSize: 12 }} axisLine={{ stroke: 'var(--border)' }} tickLine={false} />
+                  <YAxis type="category" dataKey="name" width={120} tick={{ fill: 'var(--text-primary)', fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--text-primary)' }}
+                    formatter={(value) => [`${value}`, 'Momentum Score']}
+                    cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                  />
+                  <Bar dataKey="score" radius={[0, 6, 6, 0]} barSize={24} label={{ position: 'right', fill: 'var(--text-secondary)', fontSize: 12 }}>
+                    {chartData.map((entry, index) => (
+                      <RechartsCell key={`cell-${index}`} fill={getBarColor(entry.score)} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+        );
+      })()}
+
       <section className="glass-panel" style={{ padding: '1rem', overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'right' }}>
           <thead>
@@ -412,6 +481,9 @@ function SectorIndices() {
               </th>
               <th style={{ borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
                 RSI(14)
+              </th>
+              <th onClick={() => requestSort('momentumScore')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                Momentum {renderSortIndicator('momentumScore')}
               </th>
             </tr>
           </thead>
@@ -457,10 +529,37 @@ function SectorIndices() {
                     </span>
                   )}
                 </td>
+                <td style={{ padding: '0.5rem 1rem', textAlign: 'center' }}>
+                  {row.momentumScore == null ? (
+                    <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
+                  ) : (
+                    <span style={{
+                      display: 'inline-block',
+                      padding: '0.2rem 0.6rem',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem',
+                      fontWeight: '700',
+                      minWidth: '36px',
+                      background: row.momentumScore >= 80 ? 'rgba(16,185,129,0.2)'
+                               : row.momentumScore >= 60 ? 'rgba(110,231,183,0.15)'
+                               : row.momentumScore >= 40 ? 'rgba(148,163,184,0.15)'
+                               : row.momentumScore >= 20 ? 'rgba(252,165,165,0.15)'
+                               : 'rgba(239,68,68,0.2)',
+                      color: row.momentumScore >= 80 ? '#10b981'
+                           : row.momentumScore >= 60 ? '#6ee7b7'
+                           : row.momentumScore >= 40 ? '#94a3b8'
+                           : row.momentumScore >= 20 ? '#fca5a5'
+                           : '#ef4444',
+                      border: `1px solid ${row.momentumScore >= 80 ? 'rgba(16,185,129,0.3)' : row.momentumScore >= 60 ? 'rgba(110,231,183,0.3)' : row.momentumScore >= 40 ? 'rgba(148,163,184,0.2)' : row.momentumScore >= 20 ? 'rgba(252,165,165,0.3)' : 'rgba(239,68,68,0.3)'}`
+                    }}>
+                      {row.momentumScore}
+                    </span>
+                  )}
+                </td>
               </tr>
             )) : (
               <tr>
-                <td colSpan="11" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
+                <td colSpan="14" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
               </tr>
             )}
           </tbody>
