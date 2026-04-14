@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
 const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio.js");
 const { SMA, EMA, RSI, MACD, BollingerBands } = require('technicalindicators');
@@ -10,7 +11,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 let mcpClient = null;
 let mcpTransport = null;
@@ -904,6 +905,14 @@ app.post('/api/quotes', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Serve frontend in production (Railway)
+app.use(express.static(path.join(__dirname, '../frontend/dist')));
+
+// Catch-all route to serve React's index.html for client-side routing
+app.get(/^.*$/, (req, res) => {
+  res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
 });
 
 app.listen(PORT, async () => {
