@@ -22,7 +22,6 @@ const INDICES = [
   { key: "NSE:NIFTY PHARMA", name: "NIFTY PHARMA", category: "sector" },
   { key: "NSE:NIFTY FMCG", name: "NIFTY FMCG", category: "sector" },
   { key: "NSE:NIFTY REALTY", name: "NIFTY REALTY", category: "sector" },
-  { key: "NSE:NIFTY MNC", name: "NIFTY MNC", category: "sector" },
   { key: "NSE:NIFTY PSU BANK", name: "NIFTY PSU BANK", category: "sector" },
   { key: "NSE:NIFTY METAL", name: "NIFTY METAL", category: "sector" },
   { key: "NSE:NIFTY INFRA", name: "NIFTY INFRA", category: "sector" },
