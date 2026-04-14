@@ -254,23 +254,39 @@ function SectorIndices() {
     const scorable = items.filter(r => r['1W'] !== null && r['1M'] !== null && r['3M'] !== null);
     if (scorable.length === 0) return items;
 
-    const rawScores = scorable.map(r => ({
-      id: r.id,
-      raw: ((r['1W'] || 0) * W_1W) + ((r['1M'] || 0) * W_1M) + ((r['3M'] || 0) * W_3M)
-    }));
-
-    const minRaw = Math.min(...rawScores.map(s => s.raw));
-    const maxRaw = Math.max(...rawScores.map(s => s.raw));
-    const range = maxRaw - minRaw;
-
-    const scoreMap = {};
-    rawScores.forEach(s => {
-      scoreMap[s.id] = range === 0 
-        ? 50 
-        : Math.round(1 + ((s.raw - minRaw) / range) * 99);
+    // Step 1: Calculate raw weighted return
+    const rawScores = scorable.map(r => {
+      const raw = ((r['1W'] || 0) * W_1W) + ((r['1M'] || 0) * W_1M) + ((r['3M'] || 0) * W_3M);
+      
+      // Step 2: RSI adjustment — penalize overbought, boost oversold
+      let rsiMultiplier = 1.0;
+      if (r.rsi14 !== null) {
+        if (r.rsi14 >= 80) rsiMultiplier = 0.85;       // Severely overbought: -15%
+        else if (r.rsi14 >= 70) rsiMultiplier = 0.92;   // Overbought: -8%
+        else if (r.rsi14 <= 20) rsiMultiplier = 1.15;   // Severely oversold: +15%
+        else if (r.rsi14 <= 30) rsiMultiplier = 1.08;   // Oversold: +8%
+      }
+      
+      return { id: r.id, raw, adjusted: raw * rsiMultiplier };
     });
 
-    return items.map(r => ({ ...r, momentumScore: scoreMap[r.id] ?? null }));
+    // Step 3: Percentile ranking (more robust than min-max to outliers)
+    const sorted = [...rawScores].sort((a, b) => a.adjusted - b.adjusted);
+    const n = sorted.length;
+    
+    const scoreMap = {};
+    const rawMap = {};
+    sorted.forEach((s, rank) => {
+      // Percentile: rank / (n-1) scaled to 1-100
+      scoreMap[s.id] = n === 1 ? 50 : Math.round(1 + (rank / (n - 1)) * 99);
+      rawMap[s.id] = s.raw;
+    });
+
+    return items.map(r => ({ 
+      ...r, 
+      momentumScore: scoreMap[r.id] ?? null,
+      rawReturn: rawMap[r.id] ?? null
+    }));
   };
 
   const sortedData = [...data].sort((a, b) => {
@@ -406,7 +422,11 @@ function SectorIndices() {
           .slice(0, 10)
           .map(r => {
             const short = r.name.replace('NIFTY ', '');
-            return { name: /^\d+$/.test(short) ? r.name : short, score: r.momentumScore };
+            return { 
+              name: /^\d+$/.test(short) ? r.name : short, 
+              score: r.momentumScore,
+              rawReturn: r.rawReturn
+            };
           });
         
         const getBarColor = (score) => {
@@ -443,6 +463,11 @@ function SectorIndices() {
                           <p style={{ margin: '0.25rem 0 0', color: getBarColor(d.value), fontWeight: 700, fontSize: '1.1rem' }}>
                             Score: {d.value}
                           </p>
+                          {d.payload.rawReturn != null && (
+                            <p style={{ margin: '0.15rem 0 0', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+                              Raw: {d.payload.rawReturn > 0 ? '+' : ''}{d.payload.rawReturn.toFixed(2)}%
+                            </p>
+                          )}
                         </div>
                       );
                     }}
@@ -572,6 +597,11 @@ function SectorIndices() {
                     }}>
                       {row.momentumScore}
                     </span>
+                    {row.rawReturn != null && (
+                      <span style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                        {row.rawReturn > 0 ? '+' : ''}{row.rawReturn.toFixed(1)}%
+                      </span>
+                    )}
                   )}
                 </td>
               </tr>
