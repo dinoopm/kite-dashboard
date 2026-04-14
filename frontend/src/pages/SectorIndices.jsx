@@ -325,12 +325,12 @@ function SectorIndices() {
 
   const Sparkline = memo(({ data, aboveSma50 }) => {
     if (!data || data.length === 0) {
-      return <td style={{ padding: '0.5rem 1rem' }}><div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div></td>;
+      return <td style={{ padding: '0.3rem' }}><div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div></td>;
     }
     const color = aboveSma50 === null ? '#888' : aboveSma50 ? '#22c55e' : '#ef4444';
     return (
-      <td style={{ padding: '0.5rem 1rem' }}>
-        <div style={{ width: '100px', height: '36px' }}>
+      <td style={{ padding: '0.3rem' }}>
+        <div style={{ width: '80px', height: '30px' }}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data}>
               <Line
@@ -485,47 +485,47 @@ function SectorIndices() {
         );
       })()}
 
-      <section className="glass-panel" style={{ padding: '1rem', overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'right' }}>
+      <section className="glass-panel" style={{ padding: '1rem' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'right', fontSize: '0.85rem' }}>
           <thead>
             <tr>
-              <th onClick={() => requestSort('name')} style={{ textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
-                Index Name {renderSortIndicator('name')}
+              <th onClick={() => requestSort('name')} style={{ textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+                Index {renderSortIndicator('name')}
               </th>
-              <th onClick={() => requestSort('price')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('price')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 Price {renderSortIndicator('price')}
               </th>
-              <th onClick={() => requestSort('1D')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('1D')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 1D {renderSortIndicator('1D')}
               </th>
-              <th onClick={() => requestSort('1W')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('1W')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 1W {renderSortIndicator('1W')}
               </th>
-              <th onClick={() => requestSort('1M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('1M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 1M {renderSortIndicator('1M')}
               </th>
-              <th onClick={() => requestSort('3M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('3M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 3M {renderSortIndicator('3M')}
               </th>
-              <th onClick={() => requestSort('6M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('6M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 6M {renderSortIndicator('6M')}
               </th>
-              <th onClick={() => requestSort('1Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('1Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 1Y {renderSortIndicator('1Y')}
               </th>
-              <th onClick={() => requestSort('3Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('3Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 3Y {renderSortIndicator('3Y')}
               </th>
-              <th onClick={() => requestSort('5Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('5Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 5Y {renderSortIndicator('5Y')}
               </th>
-              <th style={{ borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
-                Trend (vs SMA50)
+              <th style={{ borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                Trend
               </th>
-              <th style={{ borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
-                RSI(14)
+              <th style={{ borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                RSI
               </th>
-              <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. The % below shows the blended return." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+              <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. The % below shows the blended return." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
                 Momentum {renderSortIndicator('momentumScore')}
               </th>
             </tr>
@@ -539,8 +539,8 @@ function SectorIndices() {
                 onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
                 onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
               >
-                <td style={{ textAlign: 'left', padding: '1rem', fontWeight: 'bold' }}>{row.name}</td>
-                <td style={{ padding: '1rem', color: 'var(--text-primary)' }}>₹{row.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                <td style={{ textAlign: 'left', padding: '0.5rem', fontWeight: 'bold' }}>{row.name}</td>
+                <td style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>₹{row.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                 <Cell value={row['1D']} />
                 <Cell value={row['1W']} />
                 <Cell value={row['1M']} />
@@ -550,7 +550,7 @@ function SectorIndices() {
                 <Cell value={row['3Y']} />
                 <Cell value={row['5Y']} />
                 <Sparkline data={row.sparkline} aboveSma50={row.aboveSma50} />
-                <td style={{ padding: '0.5rem 1rem', textAlign: 'center' }}>
+                <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
                   {row.rsi14 === null ? (
                     <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
                   ) : (
@@ -572,7 +572,7 @@ function SectorIndices() {
                     </span>
                   )}
                 </td>
-                <td style={{ padding: '0.5rem 1rem', textAlign: 'center' }}>
+                <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
                   {row.momentumScore == null ? (
                     <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
                   ) : (
