@@ -37,7 +37,7 @@ function Navbar({ onDisconnect }) {
           transition: 'color 0.2s'
         }}
       >
-        Alerts
+        Technical Alerts
       </Link>
       <Link 
         to="/indices" 
