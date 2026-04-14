@@ -420,17 +420,47 @@ function SectorIndices() {
           <section className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1rem' }}>
             <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1.1rem' }}>Kite Momentum Score by {activeTab === 'sector' ? 'Sector' : 'Index'} (1-100)</h3>
             <p style={{ margin: '0 0 1rem 0', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Based on weighted 1W, 1M, and 3M returns</p>
-            <div style={{ width: '100%', height: Math.max(200, chartData.length * 38) }}>
+            <div style={{ width: '100%', height: 320 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 40, left: 10, bottom: 5 }}>
-                  <XAxis type="number" domain={[0, 100]} tick={{ fill: 'var(--text-secondary)', fontSize: 12 }} axisLine={{ stroke: 'var(--border)' }} tickLine={false} />
-                  <YAxis type="category" dataKey="name" width={120} tick={{ fill: 'var(--text-primary)', fontSize: 12 }} axisLine={false} tickLine={false} />
+                <BarChart data={chartData} margin={{ top: 20, right: 10, left: 10, bottom: 40 }}>
+                  <XAxis 
+                    dataKey="name" 
+                    tick={{ fill: 'var(--text-primary)', fontSize: 11 }} 
+                    axisLine={{ stroke: 'var(--border)' }} 
+                    tickLine={false}
+                    angle={-30}
+                    textAnchor="end"
+                    height={60}
+                  />
+                  <YAxis 
+                    domain={[0, 100]} 
+                    tick={{ fill: 'var(--text-secondary)', fontSize: 12 }} 
+                    axisLine={false}
+                    tickLine={false}
+                    label={{ value: 'Momentum Score', angle: -90, position: 'insideLeft', fill: 'var(--text-secondary)', fontSize: 12 }}
+                  />
                   <Tooltip
-                    contentStyle={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '8px', color: 'var(--text-primary)' }}
-                    formatter={(value) => [`${value}`, 'Momentum Score']}
+                    content={({ active, payload }) => {
+                      if (!active || !payload || !payload.length) return null;
+                      const d = payload[0];
+                      return (
+                        <div style={{
+                          background: '#1a1a2e',
+                          border: '1px solid rgba(255,255,255,0.15)',
+                          borderRadius: '8px',
+                          padding: '0.6rem 1rem',
+                          boxShadow: '0 4px 16px rgba(0,0,0,0.4)'
+                        }}>
+                          <p style={{ margin: 0, fontWeight: 600, color: '#fff', fontSize: '0.9rem' }}>{d.payload.name}</p>
+                          <p style={{ margin: '0.25rem 0 0', color: getBarColor(d.value), fontWeight: 700, fontSize: '1.1rem' }}>
+                            Score: {d.value}
+                          </p>
+                        </div>
+                      );
+                    }}
                     cursor={{ fill: 'rgba(255,255,255,0.03)' }}
                   />
-                  <Bar dataKey="score" radius={[0, 6, 6, 0]} barSize={24} label={{ position: 'right', fill: 'var(--text-secondary)', fontSize: 12 }}>
+                  <Bar dataKey="score" radius={[6, 6, 0, 0]} barSize={36} label={{ position: 'top', fill: 'var(--text-secondary)', fontSize: 12, fontWeight: 600 }}>
                     {chartData.map((entry, index) => (
                       <RechartsCell key={`cell-${index}`} fill={getBarColor(entry.score)} />
                     ))}
