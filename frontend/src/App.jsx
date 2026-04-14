@@ -48,7 +48,7 @@ function App() {
       if (data?.content?.[0]?.text) {
         setLoginMsg(data.content[0].text)
       } else if (data?.error) {
-        setLoginMsg("❌ **Error generating login URL:** " + data.error + "\n\nPlease wait a few seconds and try again. If it persists, restart the backend server.")
+        setLoginMsg("❌ **Connection issue:** " + data.error + "\n\nThe system attempted to auto-reconnect. Please click **Login to Kite** again.")
       }
     } catch (err) {
       // ignore

@@ -167,6 +167,8 @@ async function warmCache(retries = 3) {
 }
 
 // ─── MCP Connection ────────────────────────────────────────────
+let isReconnecting = false;
+
 async function connectToKiteMcp() {
   console.log("Connecting to Kite MCP server...");
   mcpTransport = new StdioClientTransport({
@@ -182,10 +184,42 @@ async function connectToKiteMcp() {
   try {
     await mcpClient.connect(mcpTransport);
     console.log("Successfully connected to Kite MCP!");
-    // Cache warmup will be triggered lazily after first successful authenticated request
   } catch (err) {
     console.error("Failed to connect to MCP:", err);
   }
+}
+
+async function reconnectMcp() {
+  if (isReconnecting) {
+    console.log("⏳ Reconnection already in progress, waiting...");
+    // Wait for the in-progress reconnection to finish
+    while (isReconnecting) await new Promise(r => setTimeout(r, 500));
+    return;
+  }
+  isReconnecting = true;
+  console.log("🔄 Auto-reconnecting MCP client...");
+
+  // Tear down existing connection
+  try {
+    if (mcpTransport) await mcpTransport.close();
+  } catch (e) { /* ignore */ }
+
+  try {
+    require('child_process').execSync('pkill -f "mcp-remote"');
+  } catch (e) { /* ignore if no process */ }
+
+  mcpClient = null;
+  mcpTransport = null;
+
+  // Clear API caches so stale data doesn't persist
+  Object.keys(apiCache || {}).forEach(k => {
+    if (apiCache[k]) { apiCache[k].data = null; apiCache[k].timestamp = 0; }
+  });
+
+  await new Promise(r => setTimeout(r, 1500)); // let processes die cleanly
+  await connectToKiteMcp();
+  isReconnecting = false;
+  console.log("✅ MCP reconnected successfully.");
 }
 
 // ─── API Routes ────────────────────────────────────────────────
@@ -239,17 +273,47 @@ app.post('/api/disconnect', async (req, res) => {
 });
 
 app.post('/api/login', async (req, res) => {
-  if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
   try {
+    // If MCP is dead, try reconnecting first
+    if (!mcpClient) {
+      console.log("⚡ MCP not connected, reconnecting before login...");
+      await reconnectMcp();
+    }
+    if (!mcpClient) return res.status(500).json({ error: "MCP reconnection failed. Please try again." });
+
     // Clear all API caches so the next fetch gets fresh data after authentication
     Object.keys(apiCache).forEach(k => {
       apiCache[k].data = null;
       apiCache[k].timestamp = 0;
     });
-    const result = await callWithTimeout({ name: "login", arguments: {} }, 30000); // login can take slightly longer
-    res.json(result);
+
+    try {
+      const result = await callWithTimeout({ name: "login", arguments: {} }, 30000);
+      res.json(result);
+    } catch (err) {
+      // If it timed out, the MCP connection is likely stale — auto-reconnect and retry once
+      if (err.message.includes('Timed out') || err.message.includes('timed out')) {
+        console.log("⚡ Login timed out, auto-reconnecting MCP and retrying...");
+        await reconnectMcp();
+        if (!mcpClient) return res.status(500).json({ error: "MCP reconnection failed after timeout. Please try again." });
+        const result = await callWithTimeout({ name: "login", arguments: {} }, 30000);
+        res.json(result);
+      } else {
+        throw err;
+      }
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Allow frontend to explicitly trigger a reconnect without server restart
+app.post('/api/reconnect', async (req, res) => {
+  try {
+    await reconnectMcp();
+    res.json({ success: true, message: "MCP reconnected successfully." });
+  } catch (err) {
+    res.status(500).json({ error: "Reconnection failed: " + err.message });
   }
 });
 
