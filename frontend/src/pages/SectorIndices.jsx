@@ -324,7 +324,7 @@ function SectorIndices() {
     <div className="dashboard-layout">
       <header className="header" style={{ marginBottom: '1.5rem', borderBottom: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
-          <h1>Sector Indices</h1>
+          <h1>Indices Performance</h1>
           <p>Real-time & Historical performance of market sectors</p>
         </div>
         <div>

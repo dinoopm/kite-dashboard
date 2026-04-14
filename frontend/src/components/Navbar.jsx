@@ -48,7 +48,7 @@ function Navbar({ onDisconnect }) {
           transition: 'color 0.2s'
         }}
       >
-        Sector Indices
+        Indices Performance
       </Link>
 
       <div style={{ flex: 1 }}></div>
