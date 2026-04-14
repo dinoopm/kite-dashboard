@@ -173,7 +173,7 @@ function Alerts() {
             transition: 'all 0.2s'
           }}
         >
-          <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Alerts</span>
+          <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Technical Alerts</span>
           <span className="value" style={{ fontSize: '1.8rem', fontWeight: '700' }}>{allAlertsList.length}</span>
         </div>
         <div
@@ -239,8 +239,8 @@ function Alerts() {
         <div className="glass-panel" style={{ textAlign: 'center', padding: '3rem' }}>
           <p style={{ color: 'var(--text-secondary)', fontSize: '1.1rem' }}>
             {filter === 'all'
-              ? 'No alerts found. Make sure the backend cache has warmed up by visiting the Dashboard first.'
-              : `No ${filter} alerts found in your portfolio.`}
+              ? 'No technical alerts found. Make sure the backend cache has warmed up by visiting the Dashboard first.'
+              : `No ${filter} technical alerts found in your portfolio.`}
           </p>
         </div>
       ) : (
