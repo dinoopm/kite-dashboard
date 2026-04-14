@@ -88,6 +88,7 @@ function SectorIndices() {
               '6M': null,
               '1Y': null,
               '3Y': null,
+              '5Y': null,
               sparkline: null,
               aboveSma50: null,
               rsi14: null,
@@ -331,7 +332,7 @@ function SectorIndices() {
   };
 
   const Cell = ({ value, isHeatmapCell = true }) => {
-    if (value === null) return <td style={{ padding: '0.5rem' }}><div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div></td>;
+    if (value == null) return <td style={{ padding: '0.5rem' }}><div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div></td>;
     if (value === 0) return <td style={{ padding: '0.5rem', color: 'var(--text-secondary)' }}>0.00%</td>;
     
     let style = { fontWeight: '500', padding: '0.5rem' };
