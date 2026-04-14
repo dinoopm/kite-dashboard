@@ -36,6 +36,8 @@ function SectorIndices() {
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('sector');
+  const [isHeatmap, setIsHeatmap] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
   
   // Sorting state
   const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'asc' });
@@ -86,16 +88,18 @@ function SectorIndices() {
               '6M': null,
               '1Y': null,
               '3Y': null,
-              '5Y': null,
               sparkline: null,
               aboveSma50: null,
               rsi14: null,
+              dist52WHigh: null,
+              rs1M: null,
             };
           });
           
           if (mountedRef.current) {
             setData(initialData);
             setLoading(false);
+            setLastUpdated(new Date());
             // Kick off progressive history loading
             loadHistoricalDataProgressively(initialData.filter(d => d.token));
           }
@@ -227,6 +231,15 @@ function SectorIndices() {
       return ((currentPrice - oldPrice) / oldPrice) * 100;
     };
 
+    const target1Y = d1Y.getTime();
+    let maxClose52W = currentPrice;
+    for (let i = 0; i < series.length; i++) {
+      if (dates[i] >= target1Y && series[i].close > maxClose52W) {
+        maxClose52W = series[i].close;
+      }
+    }
+    const dist52WHigh = maxClose52W > 0 ? ((currentPrice - maxClose52W) / maxClose52W) * 100 : 0;
+
     return {
       '1W': calcPct(getPriceAtDate(d1W)),
       '1M': calcPct(getPriceAtDate(d1M)),
@@ -235,6 +248,7 @@ function SectorIndices() {
       '1Y': calcPct(getPriceAtDate(d1Y)),
       '3Y': calcPct(getPriceAtDate(d3Y)),
       '5Y': calcPct(getPriceAtDate(d5Y)),
+      dist52WHigh
     };
   };
 
@@ -250,6 +264,9 @@ function SectorIndices() {
   const W_1W = 0.20, W_1M = 0.50, W_3M = 0.30;
 
   const calculateMomentumScores = (items) => {
+    const nifty50 = data.find(r => r.id === 'NSE:NIFTY 50');
+    const nifty1M = nifty50 ? nifty50['1M'] : null;
+
     // Only score items that have all required returns loaded
     const scorable = items.filter(r => r['1W'] !== null && r['1M'] !== null && r['3M'] !== null);
     if (scorable.length === 0) return items;
@@ -284,7 +301,8 @@ function SectorIndices() {
 
     return items.map(r => ({ 
       ...r, 
-      momentumScore: scoreMap[r.id] ?? null
+      momentumScore: scoreMap[r.id] ?? null,
+      rs1M: r['1M'] !== null && nifty1M !== null ? r['1M'] - nifty1M : null
     }));
   };
 
@@ -312,11 +330,27 @@ function SectorIndices() {
     return '';
   };
 
-  const Cell = ({ value }) => {
-    if (value === null) return <td><div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div></td>;
-    if (value === 0) return <td style={{ color: 'var(--text-secondary)' }}>0.00%</td>;
+  const Cell = ({ value, isHeatmapCell = true }) => {
+    if (value === null) return <td style={{ padding: '0.5rem' }}><div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div></td>;
+    if (value === 0) return <td style={{ padding: '0.5rem', color: 'var(--text-secondary)' }}>0.00%</td>;
+    
+    let style = { fontWeight: '500', padding: '0.5rem' };
+    let className = value > 0 ? 'positive' : 'negative';
+
+    if (isHeatmap && isHeatmapCell) {
+       const alpha = Math.min(Math.abs(value) / 10, 0.9); // Cap alpha at 90% for a 10%+ move
+       const bg = value > 0 ? `rgba(16, 185, 129, ${alpha})` : `rgba(239, 68, 68, ${alpha})`;
+       style = { 
+           ...style,
+           backgroundColor: bg, 
+           color: '#fff', 
+           fontWeight: '600'
+       };
+       className = ''; // Override native text color
+    }
+
     return (
-      <td className={value > 0 ? 'positive' : 'negative'} style={{ fontWeight: '500' }}>
+      <td className={className} style={style}>
         {value > 0 ? '+' : ''}{value.toFixed(2)}%
       </td>
     );
@@ -332,6 +366,18 @@ function SectorIndices() {
         <div style={{ width: '80px', height: '30px' }}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data}>
+              <Tooltip 
+                content={({ active, payload }) => {
+                  if (!active || !payload || !payload.length) return null;
+                  return (
+                    <div style={{ background: '#1a1a2e', padding: '0.3rem 0.6rem', borderRadius: '4px', border: '1px solid var(--border)', fontSize: '0.75rem', color: '#fff', zIndex: 1000, position: 'relative' }}>
+                      ₹{payload[0].value.toFixed(2)}
+                    </div>
+                  );
+                }}
+                cursor={{ stroke: 'rgba(255,255,255,0.1)', strokeWidth: 1 }}
+                isAnimationActive={false}
+              />
               <Line
                 type="monotone"
                 dataKey="v"
@@ -387,30 +433,49 @@ function SectorIndices() {
         </div>
       </header>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-        {[
-          { key: 'sector', label: 'Sectors' },
-          { key: 'broad', label: 'Broad Market' },
-        ].map(tab => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            style={{
-              padding: '0.5rem 1.2rem',
-              borderRadius: '8px',
-              border: activeTab === tab.key ? '1px solid var(--accent)' : '1px solid var(--border)',
-              background: activeTab === tab.key ? 'rgba(0, 188, 212, 0.12)' : 'transparent',
-              color: activeTab === tab.key ? 'var(--accent)' : 'var(--text-secondary)',
-              cursor: 'pointer',
-              fontWeight: activeTab === tab.key ? '600' : '400',
-              fontSize: '0.9rem',
-              transition: 'all 0.2s'
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
+      {/* Tabs and Controls */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          {[
+            { key: 'sector', label: 'Sectors' },
+            { key: 'broad', label: 'Broad Market' },
+          ].map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              style={{
+                padding: '0.5rem 1.2rem',
+                borderRadius: '8px',
+                border: activeTab === tab.key ? '1px solid var(--accent)' : '1px solid var(--border)',
+                background: activeTab === tab.key ? 'rgba(0, 188, 212, 0.12)' : 'transparent',
+                color: activeTab === tab.key ? 'var(--accent)' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontWeight: activeTab === tab.key ? '600' : '400',
+                fontSize: '0.9rem',
+                transition: 'all 0.2s'
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+          {lastUpdated && (
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              Last updated: {lastUpdated.toLocaleTimeString()}
+            </span>
+          )}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-primary)' }}>
+            <input 
+              type="checkbox" 
+              checked={isHeatmap} 
+              onChange={e => setIsHeatmap(e.target.checked)} 
+              style={{ cursor: 'pointer' }}
+            />
+            Heatmap View
+          </label>
+        </div>
       </div>
 
       {/* Momentum Score Bar Chart */}
@@ -497,6 +562,9 @@ function SectorIndices() {
               <th onClick={() => requestSort('1M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 1M {renderSortIndicator('1M')}
               </th>
+              <th onClick={() => requestSort('rs1M')} title="1-Month Relative Strength vs NIFTY 50" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+                1M RS {renderSortIndicator('rs1M')}
+              </th>
               <th onClick={() => requestSort('3M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 3M {renderSortIndicator('3M')}
               </th>
@@ -505,6 +573,9 @@ function SectorIndices() {
               </th>
               <th onClick={() => requestSort('1Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 1Y {renderSortIndicator('1Y')}
+              </th>
+              <th onClick={() => requestSort('dist52WHigh')} title="% Distance from 52-Week High" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+                % 52W H {renderSortIndicator('dist52WHigh')}
               </th>
               <th onClick={() => requestSort('3Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 3Y {renderSortIndicator('3Y')}
@@ -537,9 +608,11 @@ function SectorIndices() {
                 <Cell value={row['1D']} />
                 <Cell value={row['1W']} />
                 <Cell value={row['1M']} />
+                <Cell value={row.rs1M} isHeatmapCell={false} />
                 <Cell value={row['3M']} />
                 <Cell value={row['6M']} />
                 <Cell value={row['1Y']} />
+                <Cell value={row.dist52WHigh} isHeatmapCell={false} />
                 <Cell value={row['3Y']} />
                 <Cell value={row['5Y']} />
                 <Sparkline data={row.sparkline} aboveSma50={row.aboveSma50} />
