@@ -189,8 +189,11 @@ function SectorIndices() {
 
   const calculateHistoricalReturns = (series, currentPrice) => {
     // series is already sorted by date ascending
-    const now = new Date();
-    now.setHours(0,0,0,0);
+    // Use IST (UTC+5:30) for date calculations since Indian markets operate in IST
+    const nowUTC = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000; // IST = UTC + 5:30
+    const nowIST = new Date(nowUTC.getTime() + (nowUTC.getTimezoneOffset() * 60000) + istOffset);
+    nowIST.setHours(0,0,0,0);
     
     // Pre-parse dates once for binary search
     const dates = series.map(c => new Date(c.date).getTime());
@@ -212,13 +215,13 @@ function SectorIndices() {
       return series[lo].close;
     };
 
-    const d1W = new Date(now); d1W.setDate(now.getDate() - 7);
-    const d1M = new Date(now); d1M.setMonth(now.getMonth() - 1);
-    const d3M = new Date(now); d3M.setMonth(now.getMonth() - 3);
-    const d6M = new Date(now); d6M.setMonth(now.getMonth() - 6);
-    const d1Y = new Date(now); d1Y.setFullYear(now.getFullYear() - 1);
-    const d3Y = new Date(now); d3Y.setFullYear(now.getFullYear() - 3);
-    const d5Y = new Date(now); d5Y.setFullYear(now.getFullYear() - 5);
+    const d1W = new Date(nowIST); d1W.setDate(nowIST.getDate() - 7);
+    const d1M = new Date(nowIST); d1M.setMonth(nowIST.getMonth() - 1);
+    const d3M = new Date(nowIST); d3M.setMonth(nowIST.getMonth() - 3);
+    const d6M = new Date(nowIST); d6M.setMonth(nowIST.getMonth() - 6);
+    const d1Y = new Date(nowIST); d1Y.setFullYear(nowIST.getFullYear() - 1);
+    const d3Y = new Date(nowIST); d3Y.setFullYear(nowIST.getFullYear() - 3);
+    const d5Y = new Date(nowIST); d5Y.setFullYear(nowIST.getFullYear() - 5);
 
     const calcPct = (oldPrice) => {
       if (!oldPrice || oldPrice === 0) return 0;
