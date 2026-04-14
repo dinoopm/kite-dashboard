@@ -1,34 +1,34 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
 
-const INDICES_MAP = {
-  "NSE:NIFTY 50": "NIFTY 50",
-  "NSE:NIFTY NEXT 50": "NIFTY NEXT 50",
-  "NSE:NIFTY 100": "NIFTY 100",
-  "NSE:NIFTY 200": "NIFTY 200",
-  "NSE:NIFTY MIDCAP 150": "NIFTY MIDCAP 150",
-  "NSE:NIFTY SMLCAP 250": "NIFTY SMLCAP 250",
-  "NSE:NIFTY BANK": "NIFTY BANK",
-  "NSE:NIFTY IT": "NIFTY IT",
-  "NSE:NIFTY AUTO": "NIFTY AUTO",
-  "NSE:NIFTY PHARMA": "NIFTY PHARMA",
-  "NSE:NIFTY FMCG": "NIFTY FMCG",
-  "NSE:NIFTY REALTY": "NIFTY REALTY",
-  "BSE:SENSEX": "SENSEX",
-  "BSE:BANKEX": "BANKEX",
-  "NSE:NIFTY 500": "NIFTY 500",
-  "NSE:NIFTY MNC": "NIFTY MNC",
-  "NSE:NIFTY PSU BANK": "NIFTY PSU BANK",
-  "NSE:NIFTY METAL": "NIFTY METAL",
-  "NSE:NIFTY INFRA": "NIFTY INFRA",
-  "NSE:NIFTY ENERGY": "NIFTY ENERGY",
-  "NSE:NIFTY FIN SERVICE": "NIFTY FIN SERVICE",
-  "NSE:NIFTY TOTAL MKT": "NIFTY TOTAL MKT",
-  "NSE:NIFTY MID SELECT": "NIFTY MID SELECT",
-  "NSE:NIFTY MIDCAP 100": "MIDCAP",
-  "NSE:NIFTY SMLCAP 100": "SMLCAP"
-};
+const INDICES = [
+  { key: "NSE:NIFTY 50", name: "NIFTY 50", category: "broad" },
+  { key: "NSE:NIFTY NEXT 50", name: "NIFTY NEXT 50", category: "broad" },
+  { key: "NSE:NIFTY 100", name: "NIFTY 100", category: "broad" },
+  { key: "NSE:NIFTY 200", name: "NIFTY 200", category: "broad" },
+  { key: "NSE:NIFTY 500", name: "NIFTY 500", category: "broad" },
+  { key: "NSE:NIFTY TOTAL MKT", name: "NIFTY TOTAL MKT", category: "broad" },
+  { key: "NSE:NIFTY MIDCAP 150", name: "NIFTY MIDCAP 150", category: "broad" },
+  { key: "NSE:NIFTY MIDCAP 100", name: "MIDCAP 100", category: "broad" },
+  { key: "NSE:NIFTY MID SELECT", name: "NIFTY MID SELECT", category: "broad" },
+  { key: "NSE:NIFTY SMLCAP 250", name: "NIFTY SMLCAP 250", category: "broad" },
+  { key: "NSE:NIFTY SMLCAP 100", name: "SMLCAP 100", category: "broad" },
+  { key: "BSE:SENSEX", name: "SENSEX", category: "broad" },
+  { key: "NSE:NIFTY BANK", name: "NIFTY BANK", category: "sector" },
+  { key: "BSE:BANKEX", name: "BANKEX", category: "sector" },
+  { key: "NSE:NIFTY IT", name: "NIFTY IT", category: "sector" },
+  { key: "NSE:NIFTY AUTO", name: "NIFTY AUTO", category: "sector" },
+  { key: "NSE:NIFTY PHARMA", name: "NIFTY PHARMA", category: "sector" },
+  { key: "NSE:NIFTY FMCG", name: "NIFTY FMCG", category: "sector" },
+  { key: "NSE:NIFTY REALTY", name: "NIFTY REALTY", category: "sector" },
+  { key: "NSE:NIFTY MNC", name: "NIFTY MNC", category: "sector" },
+  { key: "NSE:NIFTY PSU BANK", name: "NIFTY PSU BANK", category: "sector" },
+  { key: "NSE:NIFTY METAL", name: "NIFTY METAL", category: "sector" },
+  { key: "NSE:NIFTY INFRA", name: "NIFTY INFRA", category: "sector" },
+  { key: "NSE:NIFTY ENERGY", name: "NIFTY ENERGY", category: "sector" },
+  { key: "NSE:NIFTY FIN SERVICE", name: "NIFTY FIN SERVICE", category: "sector" },
+];
 
 function SectorIndices() {
   const navigate = useNavigate();
@@ -36,6 +36,7 @@ function SectorIndices() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeTab, setActiveTab] = useState('sector');
   
   // Sorting state
   const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'asc' });
@@ -52,7 +53,7 @@ function SectorIndices() {
     const fetchQuotes = async () => {
       try {
         setLoading(true);
-        const instruments = Object.keys(INDICES_MAP);
+        const instruments = INDICES.map(i => i.key);
         
         const res = await fetch('/api/quotes', {
           method: 'POST',
@@ -64,8 +65,8 @@ function SectorIndices() {
         
         if (resData?.content?.[0]?.text) {
           const quotes = JSON.parse(resData.content[0].text);
-          const initialData = instruments.map(inst => {
-            const quote = quotes[inst] || {};
+          const initialData = INDICES.map(entry => {
+            const quote = quotes[entry.key] || {};
             const lastPrice = quote.last_price || 0;
             const changeStr = quote.net_change !== undefined 
               ? quote.net_change 
@@ -74,8 +75,9 @@ function SectorIndices() {
             const pct1D = quote.ohlc?.close ? (changeStr / quote.ohlc.close) * 100 : 0;
             
             return {
-              id: inst,
-              name: INDICES_MAP[inst],
+              id: entry.key,
+              name: entry.name,
+              category: entry.category,
               token: quote.instrument_token,
               price: lastPrice,
               '1D': pct1D,
@@ -125,30 +127,33 @@ function SectorIndices() {
         if (resData?.content?.[0]?.text) {
           let parsed = JSON.parse(resData.content[0].text);
           if (Array.isArray(parsed) && parsed.length > 0) {
+            const sorted = parsed.sort((a,b) => new Date(a.date) - new Date(b.date));
             const latestPrice = index.price;
-            const historyObj = calculateHistoricalReturns(parsed, latestPrice);
+            const historyObj = calculateHistoricalReturns(sorted, latestPrice);
 
             // Compute SMA50
-            const sorted = [...parsed].sort((a,b) => new Date(a.date) - new Date(b.date));
             let aboveSma50 = null;
             if (sorted.length >= 50) {
-              const last50 = sorted.slice(-50).map(c => c.close);
-              const sma50 = last50.reduce((s, v) => s + v, 0) / 50;
+              const last50 = sorted.slice(-50);
+              const sma50 = last50.reduce((s, c) => s + c.close, 0) / 50;
               aboveSma50 = latestPrice > sma50;
             }
 
             // Compute RSI-14 (Wilder's smoothed method)
             let rsi14 = null;
-            const closes = sorted.map(c => c.close);
-            if (closes.length >= 15) {
+            if (sorted.length >= 15) {
+              const closes = sorted.map(c => c.close);
               const changes = closes.slice(1).map((v, i) => v - closes[i]);
-              let avgGain = changes.slice(0, 14).filter(x => x > 0).reduce((s, v) => s + v, 0) / 14;
-              let avgLoss = changes.slice(0, 14).filter(x => x < 0).reduce((s, v) => s + Math.abs(v), 0) / 14;
+              let avgGain = 0, avgLoss = 0;
+              for (let i = 0; i < 14; i++) {
+                if (changes[i] > 0) avgGain += changes[i];
+                else avgLoss += Math.abs(changes[i]);
+              }
+              avgGain /= 14;
+              avgLoss /= 14;
               for (let i = 14; i < changes.length; i++) {
-                const gain = changes[i] > 0 ? changes[i] : 0;
-                const loss = changes[i] < 0 ? Math.abs(changes[i]) : 0;
-                avgGain = (avgGain * 13 + gain) / 14;
-                avgLoss = (avgLoss * 13 + loss) / 14;
+                avgGain = (avgGain * 13 + (changes[i] > 0 ? changes[i] : 0)) / 14;
+                avgLoss = (avgLoss * 13 + (changes[i] < 0 ? Math.abs(changes[i]) : 0)) / 14;
               }
               const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
               rsi14 = parseFloat((100 - 100 / (1 + rs)).toFixed(1));
@@ -174,36 +179,37 @@ function SectorIndices() {
         console.error("Failed history for", index.name, e);
       }
       
-      // Each historical-full call triggers ~5 MCP requests internally,
-      // so wait longer between indices to avoid rate limits
+      // With backend caching, repeat visits are instant.
+      // First-time fetches still need rate-limit spacing.
       if (mountedRef.current) {
-        await new Promise(r => setTimeout(r, 3000));
+        await new Promise(r => setTimeout(r, 1500));
       }
     }
   };
 
-  const calculateHistoricalReturns = (candles, currentPrice) => {
-    const series = candles.sort((a,b) => new Date(a.date) - new Date(b.date));
+  const calculateHistoricalReturns = (series, currentPrice) => {
+    // series is already sorted by date ascending
     const now = new Date();
     now.setHours(0,0,0,0);
     
-    // Find the closing price on the nearest available trading day to the target date.
-    // Uses absolute closest match to minimize error from weekends/holidays.
+    // Pre-parse dates once for binary search
+    const dates = series.map(c => new Date(c.date).getTime());
+    
+    // Binary search for nearest date
     const getPriceAtDate = (targetDate) => {
-      if (!series || series.length === 0) return 0;
-      let bestClose = series[0].close;
-      let bestDiff = Math.abs(new Date(series[0].date) - targetDate);
-      for (let i = 1; i < series.length; i++) {
-        const diff = Math.abs(new Date(series[i].date) - targetDate);
-        if (diff < bestDiff) {
-          bestDiff = diff;
-          bestClose = series[i].close;
-        } else if (diff > bestDiff) {
-          // Since series is sorted by date, once diff starts increasing we can stop
-          break;
-        }
+      if (dates.length === 0) return 0;
+      const target = targetDate.getTime();
+      let lo = 0, hi = dates.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (dates[mid] < target) lo = mid + 1;
+        else hi = mid;
       }
-      return bestClose;
+      // lo is the first date >= target; check if lo-1 is closer
+      if (lo > 0 && Math.abs(dates[lo - 1] - target) <= Math.abs(dates[lo] - target)) {
+        return series[lo - 1].close;
+      }
+      return series[lo].close;
     };
 
     const d1W = new Date(now); d1W.setDate(now.getDate() - 7);
@@ -251,8 +257,9 @@ function SectorIndices() {
     return 0;
   });
 
-  const filteredData = sortedData.filter(row => 
-    row.name.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredData = sortedData
+    .filter(row => activeTab === 'all' || row.category === activeTab)
+    .filter(row => row.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const renderSortIndicator = (key) => {
@@ -272,7 +279,7 @@ function SectorIndices() {
     );
   };
 
-  const Sparkline = ({ data, aboveSma50 }) => {
+  const Sparkline = memo(({ data, aboveSma50 }) => {
     if (!data || data.length === 0) {
       return <td style={{ padding: '0.5rem 1rem' }}><div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div></td>;
     }
@@ -295,7 +302,7 @@ function SectorIndices() {
         </div>
       </td>
     );
-  };
+  });
 
   if (loading) return <div className="loader"></div>;
 
@@ -336,6 +343,32 @@ function SectorIndices() {
           />
         </div>
       </header>
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+        {[
+          { key: 'sector', label: 'Sectors' },
+          { key: 'broad', label: 'Broad Market' },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            style={{
+              padding: '0.5rem 1.2rem',
+              borderRadius: '8px',
+              border: activeTab === tab.key ? '1px solid var(--accent)' : '1px solid var(--border)',
+              background: activeTab === tab.key ? 'rgba(0, 188, 212, 0.12)' : 'transparent',
+              color: activeTab === tab.key ? 'var(--accent)' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: activeTab === tab.key ? '600' : '400',
+              fontSize: '0.9rem',
+              transition: 'all 0.2s'
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
       <section className="glass-panel" style={{ padding: '1rem', overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'right' }}>

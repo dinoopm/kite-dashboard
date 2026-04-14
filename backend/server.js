@@ -18,6 +18,8 @@ let mcpTransport = null;
 
 // ─── In-memory cache ───────────────────────────────────────────
 const historyCache = {};   // { instrument_token: [ {date, open, high, low, close, volume} ] }
+const historicalFullCache = {};  // { token: { data: [...], timestamp: Date.now() } } — 1hr TTL for sector indices
+const HISTORICAL_FULL_TTL = 60 * 60 * 1000; // 1 hour
 let holdingsCache = [];    // raw holdings array
 let cacheReady = false;
 let cacheWarming = false;
@@ -238,6 +240,7 @@ app.post('/api/disconnect', async (req, res) => {
   
   // 1. Clear caches
   Object.keys(historyCache).forEach(k => delete historyCache[k]);
+  Object.keys(historicalFullCache).forEach(k => delete historicalFullCache[k]);
   holdingsCache.length = 0;
   cacheReady = false;
   
@@ -877,9 +880,21 @@ app.get('/api/historical-full/:token', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
   try {
     const { token } = req.params;
+
+    // Check cache first
+    const cached = historicalFullCache[token];
+    if (cached && (Date.now() - cached.timestamp < HISTORICAL_FULL_TTL)) {
+      console.log(`📊 Serving cached 5Y history for token ${token} (${cached.data.length} candles)`);
+      return res.json({
+        content: [{ type: "text", text: JSON.stringify(cached.data) }]
+      });
+    }
+
     console.log(`📊 Fetching full 5Y history for token ${token}...`);
     const data = await fetchHistoricalMultiYear(token, 5);
     if (Array.isArray(data) && data.length > 0) {
+      // Store in cache
+      historicalFullCache[token] = { data, timestamp: Date.now() };
       console.log(`  ✅ Got ${data.length} candles from ${data[0].date.substring(0,10)} to ${data[data.length-1].date.substring(0,10)}`);
       return res.json({
         content: [{ type: "text", text: JSON.stringify(data) }]
