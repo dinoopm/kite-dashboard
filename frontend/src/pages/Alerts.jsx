@@ -17,19 +17,19 @@ function Alerts() {
       try {
         setError(null)
         // First check if cache is ready
-        const statusRes = await fetch('http://localhost:3001/api/cache-status')
+        const statusRes = await fetch('/api/cache-status')
         if (!statusRes.ok) throw new Error('Failed to check cache status')
         const status = await statusRes.json()
 
         if (!status.ready) {
           setCacheProgress(`Warming up analysis engine... (${status.instrumentsCached}/${status.totalHoldings || '?'})`)
           // Trigger alerts endpoint so it safely kicks off the warmup if it hasn't started
-          fetch('http://localhost:3001/api/alerts').catch(() => {})
+          fetch('/api/alerts').catch(() => {})
           return // Still warming up, effect will poll again
         }
 
         // Cache is ready, fetch actual alerts
-        const res = await fetch('http://localhost:3001/api/alerts')
+        const res = await fetch('/api/alerts')
         if (!res.ok) throw new Error('Failed to fetch alerts')
         const data = await res.json()
         setAlerts(data)

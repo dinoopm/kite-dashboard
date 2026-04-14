@@ -20,9 +20,9 @@ function Portfolio() {
       setError(null)
 
       const [profileRes, holdingsRes, mfRes] = await Promise.all([
-        fetch('http://localhost:3001/api/profile', { signal }),
-        fetch('http://localhost:3001/api/holdings', { signal }),
-        fetch('http://localhost:3001/api/mf-holdings', { signal }),
+        fetch('/api/profile', { signal }),
+        fetch('/api/holdings', { signal }),
+        fetch('/api/mf-holdings', { signal }),
       ]);
       const profileData = await profileRes.json()
       const holdingsData = await holdingsRes.json()

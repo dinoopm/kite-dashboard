@@ -25,7 +25,7 @@ function Instrument() {
     if (!symbol) return;
     const fetchQuote = async () => {
       try {
-        const res = await fetch('http://localhost:3001/api/quotes', {
+        const res = await fetch('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ instruments: [`NSE:${symbol}`] })
@@ -47,7 +47,7 @@ function Instrument() {
     const maxRetries = 2;
     const fetchIndicators = async () => {
       try {
-        const res = await fetch(`http://localhost:3001/api/indicators/${token}`)
+        const res = await fetch(`/api/indicators/${token}`)
         if (res.ok) {
           const data = await res.json()
           setIndicators(data)
@@ -71,7 +71,7 @@ function Instrument() {
     if (!symbol) return;
     const fetchFundamentals = async () => {
       try {
-        const res = await fetch(`http://localhost:3001/api/fundamentals/${symbol}`);
+        const res = await fetch(`/api/fundamentals/${symbol}`);
         if (res.ok) {
           const data = await res.json();
           setFundamentals(data);
@@ -87,7 +87,7 @@ function Instrument() {
     if (!symbol) return;
     const fetchCashflow = async () => {
       try {
-        const res = await fetch(`http://localhost:3001/api/cashflow/${symbol}?type=${cashflowType}`);
+        const res = await fetch(`/api/cashflow/${symbol}?type=${cashflowType}`);
         if (res.ok) {
           const data = await res.json();
           setCashflow(data);
@@ -105,7 +105,7 @@ function Instrument() {
       try {
         setLoading(true)
         setError(null)
-        const res = await fetch(`http://localhost:3001/api/historical/${token}?tf=${timeframe}&t=${Date.now()}`)
+        const res = await fetch(`/api/historical/${token}?tf=${timeframe}&t=${Date.now()}`)
         const resData = await res.json()
 
         if (resData.isError || resData.error) {

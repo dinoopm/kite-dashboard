@@ -17,11 +17,11 @@ function Dashboard() {
       setError(null);
 
       const [profileRes, holdingsRes, mfRes, marginsRes, quotesRes] = await Promise.all([
-        fetch('http://localhost:3001/api/profile', { signal }),
-        fetch('http://localhost:3001/api/holdings', { signal }),
-        fetch('http://localhost:3001/api/mf-holdings', { signal }),
-        fetch('http://localhost:3001/api/margins', { signal }),
-        fetch('http://localhost:3001/api/quotes', {
+        fetch('/api/profile', { signal }),
+        fetch('/api/holdings', { signal }),
+        fetch('/api/mf-holdings', { signal }),
+        fetch('/api/margins', { signal }),
+        fetch('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ instruments: ["NSE:NIFTY 50", "NSE:NIFTY BANK", "BSE:SENSEX"] }),

@@ -17,7 +17,7 @@ function App() {
     try {
       setAuthState('loading')
       // Fail fast if backend is completely frozen or stuck after 10s
-      const res = await fetch('http://localhost:3001/api/profile', { signal: AbortSignal.timeout(10000) })
+      const res = await fetch('/api/profile', { signal: AbortSignal.timeout(10000) })
       const data = await res.json()
 
       if (!res.ok || data.isError || data.error) {
@@ -43,7 +43,7 @@ function App() {
   const handleLogin = async () => {
     try {
       setIsLoggingIn(true)
-      const res = await fetch('http://localhost:3001/api/login', { method: 'POST' })
+      const res = await fetch('/api/login', { method: 'POST' })
       const data = await res.json()
       if (data?.content?.[0]?.text) {
         setLoginMsg(data.content[0].text)
@@ -67,7 +67,7 @@ function App() {
     setAuthState('unauthenticated');
     setLoginMsg(null);
     try {
-      await fetch('http://localhost:3001/api/disconnect', { method: 'POST' });
+      await fetch('/api/disconnect', { method: 'POST' });
     } catch (err) {
       console.error('Failed to disconnect', err);
     }

@@ -54,7 +54,7 @@ function SectorIndices() {
         setLoading(true);
         const instruments = Object.keys(INDICES_MAP);
         
-        const res = await fetch('http://localhost:3001/api/quotes', {
+        const res = await fetch('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ instruments }),
@@ -119,7 +119,7 @@ function SectorIndices() {
       
       try {
         // Use the multi-year endpoint that fetches 5Y data in yearly chunks
-        const res = await fetch(`http://localhost:3001/api/historical-full/${index.token}`);
+        const res = await fetch(`/api/historical-full/${index.token}`);
         const resData = await res.json();
         
         if (resData?.content?.[0]?.text) {
