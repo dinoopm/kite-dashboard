@@ -3,31 +3,31 @@ import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
 
 const INDICES = [
-  { key: "NSE:NIFTY 50", name: "NIFTY 50", category: "broad" },
-  { key: "NSE:NIFTY NEXT 50", name: "NIFTY NEXT 50", category: "broad" },
-  { key: "NSE:NIFTY 100", name: "NIFTY 100", category: "broad" },
-  { key: "NSE:NIFTY 200", name: "NIFTY 200", category: "broad" },
-  { key: "NSE:NIFTY 500", name: "NIFTY 500", category: "broad" },
-  { key: "NSE:NIFTY TOTAL MKT", name: "NIFTY TOTAL MKT", category: "broad" },
-  { key: "NSE:NIFTY MIDCAP 150", name: "NIFTY MIDCAP 150", category: "broad" },
-  { key: "NSE:NIFTY MIDCAP 100", name: "MIDCAP 100", category: "broad" },
-  { key: "NSE:NIFTY MID SELECT", name: "NIFTY MID SELECT", category: "broad" },
-  { key: "NSE:NIFTY SMLCAP 250", name: "NIFTY SMLCAP 250", category: "broad" },
-  { key: "NSE:NIFTY SMLCAP 100", name: "SMLCAP 100", category: "broad" },
-  { key: "BSE:SENSEX", name: "SENSEX", category: "broad" },
-  { key: "NSE:NIFTY BANK", name: "NIFTY BANK", category: "sector" },
-  { key: "BSE:BANKEX", name: "BANKEX", category: "sector" },
-  { key: "NSE:NIFTY IT", name: "NIFTY IT", category: "sector" },
-  { key: "NSE:NIFTY AUTO", name: "NIFTY AUTO", category: "sector" },
-  { key: "NSE:NIFTY PHARMA", name: "NIFTY PHARMA", category: "sector" },
-  { key: "NSE:NIFTY FMCG", name: "NIFTY FMCG", category: "sector" },
-  { key: "NSE:NIFTY REALTY", name: "NIFTY REALTY", category: "sector" },
-  { key: "NSE:NIFTY MNC", name: "NIFTY MNC", category: "sector" },
-  { key: "NSE:NIFTY PSU BANK", name: "NIFTY PSU BANK", category: "sector" },
-  { key: "NSE:NIFTY METAL", name: "NIFTY METAL", category: "sector" },
-  { key: "NSE:NIFTY INFRA", name: "NIFTY INFRA", category: "sector" },
-  { key: "NSE:NIFTY ENERGY", name: "NIFTY ENERGY", category: "sector" },
-  { key: "NSE:NIFTY FIN SERVICE", name: "NIFTY FIN SERVICE", category: "sector" },
+  { key: "NSE:NIFTY 50", name: "NIFTY 50", category: "broad", yahoo: "^NSEI" },
+  { key: "NSE:NIFTY NEXT 50", name: "NIFTY NEXT 50", category: "broad", yahoo: "^NSMIDCP" },
+  { key: "NSE:NIFTY 100", name: "NIFTY 100", category: "broad", yahoo: "^CNX100" },
+  { key: "NSE:NIFTY 200", name: "NIFTY 200", category: "broad", yahoo: "^CNX200" },
+  { key: "NSE:NIFTY 500", name: "NIFTY 500", category: "broad", yahoo: "^CRSLDX" },
+  { key: "NSE:NIFTY TOTAL MKT", name: "NIFTY TOTAL MKT", category: "broad", yahoo: null },
+  { key: "NSE:NIFTY MIDCAP 150", name: "NIFTY MIDCAP 150", category: "broad", yahoo: null },
+  { key: "NSE:NIFTY MIDCAP 100", name: "MIDCAP 100", category: "broad", yahoo: "NIFTY_MIDCAP_100.NS" },
+  { key: "NSE:NIFTY MID SELECT", name: "NIFTY MID SELECT", category: "broad", yahoo: null },
+  { key: "NSE:NIFTY SMLCAP 250", name: "NIFTY SMLCAP 250", category: "broad", yahoo: null },
+  { key: "NSE:NIFTY SMLCAP 100", name: "SMLCAP 100", category: "broad", yahoo: null },
+  { key: "BSE:SENSEX", name: "SENSEX", category: "broad", yahoo: "^BSESN" },
+  { key: "NSE:NIFTY BANK", name: "NIFTY BANK", category: "sector", yahoo: "^NSEBANK" },
+  { key: "BSE:BANKEX", name: "BANKEX", category: "sector", yahoo: null },
+  { key: "NSE:NIFTY IT", name: "NIFTY IT", category: "sector", yahoo: "^CNXIT" },
+  { key: "NSE:NIFTY AUTO", name: "NIFTY AUTO", category: "sector", yahoo: "^CNXAUTO" },
+  { key: "NSE:NIFTY PHARMA", name: "NIFTY PHARMA", category: "sector", yahoo: "^CNXPHARMA" },
+  { key: "NSE:NIFTY FMCG", name: "NIFTY FMCG", category: "sector", yahoo: "^CNXFMCG" },
+  { key: "NSE:NIFTY REALTY", name: "NIFTY REALTY", category: "sector", yahoo: "^CNXREALTY" },
+  { key: "NSE:NIFTY MNC", name: "NIFTY MNC", category: "sector", yahoo: null },
+  { key: "NSE:NIFTY PSU BANK", name: "NIFTY PSU BANK", category: "sector", yahoo: "^CNXPSUBANK" },
+  { key: "NSE:NIFTY METAL", name: "NIFTY METAL", category: "sector", yahoo: "^CNXMETAL" },
+  { key: "NSE:NIFTY INFRA", name: "NIFTY INFRA", category: "sector", yahoo: "^CNXINFRA" },
+  { key: "NSE:NIFTY ENERGY", name: "NIFTY ENERGY", category: "sector", yahoo: "^CNXENERGY" },
+  { key: "NSE:NIFTY FIN SERVICE", name: "NIFTY FIN SERVICE", category: "sector", yahoo: null },
 ];
 
 function SectorIndices() {
@@ -79,6 +79,7 @@ function SectorIndices() {
               name: entry.name,
               category: entry.category,
               token: quote.instrument_token,
+              yahooSymbol: entry.yahoo,
               price: lastPrice,
               '1D': pct1D,
               '1W': null,
@@ -97,8 +98,8 @@ function SectorIndices() {
           if (mountedRef.current) {
             setData(initialData);
             setLoading(false);
-            // Kick off progressive history loading
-            loadHistoricalDataProgressively(initialData.filter(d => d.token));
+            // Kick off progressive history loading using Yahoo Finance data
+            loadHistoricalDataProgressively(initialData);
           }
         } else {
           throw new Error('Failed to parse quotes');
@@ -119,70 +120,92 @@ function SectorIndices() {
     for (let index of indicesList) {
       if (!mountedRef.current) break;
       
+      // Skip indices without Yahoo symbol — fall back to Kite MCP
+      const useYahoo = !!index.yahooSymbol;
+      
       try {
-        // Use the multi-year endpoint that fetches 5Y data in yearly chunks
-        const res = await fetch(`/api/historical-full/${index.token}`);
-        const resData = await res.json();
+        let sorted;
         
-        if (resData?.content?.[0]?.text) {
-          let parsed = JSON.parse(resData.content[0].text);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const sorted = parsed.sort((a,b) => new Date(a.date) - new Date(b.date));
-            const latestPrice = index.price;
-            const historyObj = calculateHistoricalReturns(sorted, latestPrice);
-
-            // Compute SMA50
-            let aboveSma50 = null;
-            if (sorted.length >= 50) {
-              const last50 = sorted.slice(-50);
-              const sma50 = last50.reduce((s, c) => s + c.close, 0) / 50;
-              aboveSma50 = latestPrice > sma50;
-            }
-
-            // Compute RSI-14 (Wilder's smoothed method)
-            let rsi14 = null;
-            if (sorted.length >= 15) {
-              const closes = sorted.map(c => c.close);
-              const changes = closes.slice(1).map((v, i) => v - closes[i]);
-              let avgGain = 0, avgLoss = 0;
-              for (let i = 0; i < 14; i++) {
-                if (changes[i] > 0) avgGain += changes[i];
-                else avgLoss += Math.abs(changes[i]);
-              }
-              avgGain /= 14;
-              avgLoss /= 14;
-              for (let i = 14; i < changes.length; i++) {
-                avgGain = (avgGain * 13 + (changes[i] > 0 ? changes[i] : 0)) / 14;
-                avgLoss = (avgLoss * 13 + (changes[i] < 0 ? Math.abs(changes[i]) : 0)) / 14;
-              }
-              const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-              rsi14 = parseFloat((100 - 100 / (1 + rs)).toFixed(1));
-            }
-
-            // Last 30 candles for sparkline
-            const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
-            
-            setData(prevData => prevData.map(item => 
-              item.id === index.id 
-                ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14 }
-                : item
-            ));
-          } else {
-             setData(prevData => prevData.map(item => 
-              item.id === index.id 
-                ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '3Y': 0, '5Y': 0, sparkline: null, aboveSma50: null, rsi14: null }
-                : item
-            ));
+        if (useYahoo) {
+          // Fetch from Yahoo Finance (NSE-official values)
+          const res = await fetch(`/api/index-history/${encodeURIComponent(index.yahooSymbol)}`);
+          const candles = await res.json();
+          if (!Array.isArray(candles) || candles.length === 0) {
+            throw new Error('No Yahoo data, falling back');
           }
+          sorted = candles.sort((a,b) => new Date(a.date) - new Date(b.date));
+        } else if (index.token) {
+          // Fallback to Kite MCP for indices without Yahoo symbol
+          const res = await fetch(`/api/historical-full/${index.token}`);
+          const resData = await res.json();
+          if (resData?.content?.[0]?.text) {
+            let parsed = JSON.parse(resData.content[0].text);
+            if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('No Kite data');
+            sorted = parsed.sort((a,b) => new Date(a.date) - new Date(b.date));
+          } else {
+            throw new Error('No Kite data');
+          }
+        } else {
+          // No data source available
+          setData(prevData => prevData.map(item => 
+            item.id === index.id 
+              ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '3Y': 0, '5Y': 0, sparkline: null, aboveSma50: null, rsi14: null }
+              : item
+          ));
+          continue;
         }
+
+        const latestPrice = sorted[sorted.length - 1].close;
+        const historyObj = calculateHistoricalReturns(sorted, latestPrice);
+
+        // Compute SMA50
+        let aboveSma50 = null;
+        if (sorted.length >= 50) {
+          const last50 = sorted.slice(-50);
+          const sma50 = last50.reduce((s, c) => s + c.close, 0) / 50;
+          aboveSma50 = latestPrice > sma50;
+        }
+
+        // Compute RSI-14 (Wilder's smoothed method)
+        let rsi14 = null;
+        if (sorted.length >= 15) {
+          const closes = sorted.map(c => c.close);
+          const changes = closes.slice(1).map((v, i) => v - closes[i]);
+          let avgGain = 0, avgLoss = 0;
+          for (let i = 0; i < 14; i++) {
+            if (changes[i] > 0) avgGain += changes[i];
+            else avgLoss += Math.abs(changes[i]);
+          }
+          avgGain /= 14;
+          avgLoss /= 14;
+          for (let i = 14; i < changes.length; i++) {
+            avgGain = (avgGain * 13 + (changes[i] > 0 ? changes[i] : 0)) / 14;
+            avgLoss = (avgLoss * 13 + (changes[i] < 0 ? Math.abs(changes[i]) : 0)) / 14;
+          }
+          const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+          rsi14 = parseFloat((100 - 100 / (1 + rs)).toFixed(1));
+        }
+
+        // Last 30 candles for sparkline
+        const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
+        
+        setData(prevData => prevData.map(item => 
+          item.id === index.id 
+            ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14 }
+            : item
+        ));
       } catch (e) {
-        console.error("Failed history for", index.name, e);
+        console.error("Failed history for", index.name, e.message);
+        setData(prevData => prevData.map(item => 
+          item.id === index.id 
+            ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '3Y': 0, '5Y': 0, sparkline: null, aboveSma50: null, rsi14: null }
+            : item
+        ));
       }
       
-      // With backend caching, repeat visits are instant.
-      // First-time fetches still need rate-limit spacing.
+      // Small delay to be respectful to Yahoo's API
       if (mountedRef.current) {
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 500));
       }
     }
   };

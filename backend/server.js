@@ -907,6 +907,55 @@ app.get('/api/historical-full/:token', async (req, res) => {
   }
 });
 
+// ─── Yahoo Finance Index History (for Sector Indices page) ─────
+const yahooIndexCache = {};  // { symbol: { data, timestamp } }
+const YAHOO_INDEX_TTL = 60 * 60 * 1000; // 1 hour
+
+app.get('/api/index-history/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    
+    // Check cache
+    const cached = yahooIndexCache[symbol];
+    if (cached && (Date.now() - cached.timestamp < YAHOO_INDEX_TTL)) {
+      console.log(`📈 Serving cached Yahoo index history for ${symbol} (${cached.data.length} candles)`);
+      return res.json(cached.data);
+    }
+
+    console.log(`📈 Fetching Yahoo index history for ${symbol}...`);
+    const period1 = new Date();
+    period1.setFullYear(period1.getFullYear() - 5);
+    
+    const result = await yahooFinance.chart(symbol, {
+      period1: period1.toISOString().split('T')[0],
+      interval: '1d',
+    });
+
+    if (result && result.quotes && result.quotes.length > 0) {
+      const candles = result.quotes
+        .filter(q => q.close !== null && q.close !== undefined)
+        .map(q => ({
+          date: q.date.toISOString().split('T')[0],
+          open: q.open,
+          high: q.high,
+          low: q.low,
+          close: q.close,
+          volume: q.volume
+        }));
+      
+      // Cache it
+      yahooIndexCache[symbol] = { data: candles, timestamp: Date.now() };
+      console.log(`  ✅ Got ${candles.length} candles for ${symbol}`);
+      return res.json(candles);
+    }
+
+    res.json([]);
+  } catch (err) {
+    console.error(`Yahoo index history error for ${req.params.symbol}:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/quotes', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
   try {
