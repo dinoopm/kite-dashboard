@@ -525,7 +525,7 @@ function SectorIndices() {
               <th style={{ borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
                 RSI(14)
               </th>
-              <th onClick={() => requestSort('momentumScore')} title="Momentum Score (1-100): Weighted rank based on 1W (20%), 1M (50%), 3M (30%) returns, adjusted for RSI overbought/oversold. The % below is the raw weighted return." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+              <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. The % below shows the blended return." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
                 Momentum {renderSortIndicator('momentumScore')}
               </th>
             </tr>
