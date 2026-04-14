@@ -576,6 +576,7 @@ function SectorIndices() {
                   {row.momentumScore == null ? (
                     <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
                   ) : (
+                    <>
                     <span style={{
                       display: 'inline-block',
                       padding: '0.2rem 0.6rem',
@@ -602,6 +603,7 @@ function SectorIndices() {
                         {row.rawReturn > 0 ? '+' : ''}{row.rawReturn.toFixed(1)}%
                       </span>
                     )}
+                    </>
                   )}
                 </td>
               </tr>
