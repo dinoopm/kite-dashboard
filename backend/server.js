@@ -907,6 +907,243 @@ app.get('/api/historical-full/:token', async (req, res) => {
   }
 });
 
+// ─── Relative Rotation Graph (RRG) ────────────────────────────
+// Sector index keys and their tokens are resolved at runtime from the quotes cache.
+const RRG_SECTOR_KEYS = [
+  "NSE:NIFTY BANK", "NSE:NIFTY IT", "NSE:NIFTY AUTO", "NSE:NIFTY PHARMA",
+  "NSE:NIFTY FMCG", "NSE:NIFTY REALTY", "NSE:NIFTY PSU BANK", "NSE:NIFTY METAL",
+  "NSE:NIFTY INFRA", "NSE:NIFTY ENERGY", "NSE:NIFTY FIN SERVICE",
+  "NSE:NIFTY PVT BANK", "NSE:NIFTY CONSR DURBL", "NSE:NIFTY HEALTHCARE",
+  "NSE:NIFTY MEDIA", "NSE:NIFTY COMMODITIES", "NSE:NIFTY OIL AND GAS"
+];
+
+const RRG_SECTOR_NAMES = {
+  "NSE:NIFTY BANK": "NIFTY BANK",
+  "NSE:NIFTY IT": "NIFTY IT",
+  "NSE:NIFTY AUTO": "NIFTY AUTO",
+  "NSE:NIFTY PHARMA": "NIFTY PHARMA",
+  "NSE:NIFTY FMCG": "NIFTY FMCG",
+  "NSE:NIFTY REALTY": "NIFTY REALTY",
+  "NSE:NIFTY PSU BANK": "NIFTY PSU BANK",
+  "NSE:NIFTY METAL": "NIFTY METAL",
+  "NSE:NIFTY INFRA": "NIFTY INFRA",
+  "NSE:NIFTY ENERGY": "NIFTY ENERGY",
+  "NSE:NIFTY FIN SERVICE": "NIFTY FIN SERVICE",
+  "NSE:NIFTY PVT BANK": "NIFTY PRIVATE BANK",
+  "NSE:NIFTY CONSR DURBL": "NIFTY CONSUMER DURABLES",
+  "NSE:NIFTY HEALTHCARE": "NIFTY HEALTHCARE",
+  "NSE:NIFTY MEDIA": "NIFTY MEDIA",
+  "NSE:NIFTY COMMODITIES": "NIFTY CHEMICALS",
+  "NSE:NIFTY OIL AND GAS": "NIFTY OIL AND GAS"
+};
+
+// Helper: resample daily candles to weekly (Friday close)
+function resampleToWeekly(dailyCandles) {
+  const weeks = [];
+  let currentWeek = null;
+
+  for (const c of dailyCandles) {
+    const d = new Date(c.date);
+    // Get the Friday of this week (ISO: Mon=1...Sun=7)
+    const day = d.getDay(); // 0=Sun, 1=Mon...6=Sat
+    const diff = 5 - day; // distance to Friday
+    const friday = new Date(d);
+    friday.setDate(d.getDate() + diff);
+    const weekKey = friday.toISOString().split('T')[0];
+
+    if (!currentWeek || currentWeek.key !== weekKey) {
+      currentWeek = { key: weekKey, close: c.close, date: c.date };
+      weeks.push(currentWeek);
+    } else {
+      // Update with the latest candle in this week
+      currentWeek.close = c.close;
+      currentWeek.date = c.date;
+    }
+  }
+  return weeks;
+}
+
+// Helper: compute EMA
+function computeEMA(values, period) {
+  if (values.length === 0) return [];
+  const k = 2 / (period + 1);
+  const ema = [values[0]];
+  for (let i = 1; i < values.length; i++) {
+    ema.push(values[i] * k + ema[i - 1] * (1 - k));
+  }
+  return ema;
+}
+
+// Helper: compute SMA (returns array aligned to end, first (period-1) entries are null)
+function computeSMA(values, period) {
+  const sma = [];
+  for (let i = 0; i < values.length; i++) {
+    if (i < period - 1) {
+      sma.push(null);
+    } else {
+      let sum = 0;
+      for (let j = i - period + 1; j <= i; j++) sum += values[j];
+      sma.push(sum / period);
+    }
+  }
+  return sma;
+}
+
+// RRG token cache — maps instrument key to token, populated from quotes
+const rrgTokenCache = {};
+
+app.get('/api/rrg', async (req, res) => {
+  try {
+    const benchmarkKey = req.query.benchmark || "NSE:NIFTY 50";
+    console.log(`📊 RRG requested. Benchmark: ${benchmarkKey}. Token cache size: ${Object.keys(rrgTokenCache).length}, HistFull cache size: ${Object.keys(historicalFullCache).length}`);
+
+    // Step 1: Resolve tokens if not yet cached
+    // Tokens are populated as a side-effect by /api/quotes (called by frontend on page load).
+    // Only call MCP directly as a last resort fallback.
+    if (Object.keys(rrgTokenCache).length === 0) {
+      console.log('  ⏳ RRG: Token cache empty. Attempting to resolve via MCP get_quotes...');
+      try {
+        const allKeys = [benchmarkKey, ...RRG_SECTOR_KEYS];
+        const quoteResult = await callWithTimeout({
+          name: "get_quotes",
+          arguments: { instruments: allKeys }
+        });
+        if (quoteResult?.content?.[0]?.text) {
+          const quotes = JSON.parse(quoteResult.content[0].text);
+          for (const key of allKeys) {
+            if (quotes[key]?.instrument_token) {
+              rrgTokenCache[key] = String(quotes[key].instrument_token);
+            }
+          }
+          console.log(`  ✅ Resolved ${Object.keys(rrgTokenCache).length} tokens`);
+        } else {
+          console.log('  ⚠️ get_quotes returned no parseable data');
+        }
+      } catch (quoteErr) {
+        console.log(`  ⚠️ Token resolution failed: ${quoteErr.message}. Will retry next call.`);
+        return res.json({ benchmark: "NIFTY 50", sectors: [], message: "Token resolution pending. Retrying..." });
+      }
+    }
+
+    const benchmarkToken = rrgTokenCache[benchmarkKey];
+    if (!benchmarkToken) {
+      console.log(`  ❌ Cannot resolve benchmark token for ${benchmarkKey}. Token cache keys:`, Object.keys(rrgTokenCache).join(', '));
+      return res.json({ benchmark: benchmarkKey, sectors: [], message: `Benchmark token (${benchmarkKey}) not yet resolved.` });
+    }
+
+    // Step 2: Get benchmark historical data
+    const benchmarkCached = historicalFullCache[benchmarkToken];
+    if (!benchmarkCached || !benchmarkCached.data || benchmarkCached.data.length === 0) {
+      console.log(`  ⏳ Benchmark token ${benchmarkToken} (${benchmarkKey}) not in historicalFullCache. Cache keys: ${Object.keys(historicalFullCache).slice(0, 10).join(', ')}...`);
+      return res.json({ benchmark: benchmarkKey, sectors: [], message: "Benchmark historical data not yet cached." });
+    }
+
+    console.log(`  ✅ Benchmark data: ${benchmarkCached.data.length} daily candles`);
+    const benchmarkWeekly = resampleToWeekly(benchmarkCached.data);
+    console.log(`  ✅ Benchmark weekly: ${benchmarkWeekly.length} weeks`);
+
+    // Build a date→close map for the benchmark
+    const benchmarkMap = {};
+    for (const w of benchmarkWeekly) {
+      benchmarkMap[w.key] = w.close;
+    }
+
+    // Step 3: Compute RS-Ratio and RS-Momentum for each sector
+    const sectors = [];
+    const skipped = [];
+
+    for (const sectorKey of RRG_SECTOR_KEYS) {
+      const token = rrgTokenCache[sectorKey];
+      if (!token) { skipped.push(`${sectorKey}: no token`); continue; }
+
+      const sectorCached = historicalFullCache[token];
+      if (!sectorCached || !sectorCached.data || sectorCached.data.length === 0) {
+        skipped.push(`${sectorKey}: no historical data (token=${token})`);
+        continue;
+      }
+
+      const sectorWeekly = resampleToWeekly(sectorCached.data);
+
+      // Align sector and benchmark by week key
+      const aligned = [];
+      for (const sw of sectorWeekly) {
+        const bClose = benchmarkMap[sw.key];
+        if (bClose && bClose > 0) {
+          aligned.push({ weekKey: sw.key, sectorClose: sw.close, benchClose: bClose });
+        }
+      }
+
+      if (aligned.length < 60) {
+        skipped.push(`${sectorKey}: only ${aligned.length} aligned weeks (need 60)`);
+        continue;
+      }
+
+      // Raw RS = (sector / benchmark) * 100
+      const rawRS = aligned.map(a => (a.sectorClose / a.benchClose) * 100);
+
+      // EMA smoothing (period 10)
+      const rsSmooth = computeEMA(rawRS, 10);
+
+      // RS-Ratio = (RS_smooth / SMA(RS_smooth, 52)) * 100
+      const rsSmoothSMA = computeSMA(rsSmooth, 52);
+      const rsRatio = rsSmooth.map((v, i) => {
+        if (rsSmoothSMA[i] === null || rsSmoothSMA[i] === 0) return null;
+        return (v / rsSmoothSMA[i]) * 100;
+      });
+
+      // RS-Momentum = (RS_Ratio / SMA(RS_Ratio, 26)) * 100
+      const validRsRatio = rsRatio.map(v => v === null ? 0 : v);
+      const rsRatioSMA = computeSMA(validRsRatio, 26);
+      const rsMomentum = validRsRatio.map((v, i) => {
+        if (rsRatioSMA[i] === null || rsRatioSMA[i] === 0 || v === 0) return null;
+        return (v / rsRatioSMA[i]) * 100;
+      });
+
+      // Build the output series — last 52 valid weekly data points
+      const series = [];
+      for (let i = aligned.length - 1; i >= 0 && series.length < 52; i--) {
+        if (rsRatio[i] !== null && rsRatio[i] !== 0 && rsMomentum[i] !== null) {
+          series.unshift({
+            date: aligned[i].weekKey,
+            rsRatio: parseFloat(rsRatio[i].toFixed(2)),
+            rsMomentum: parseFloat(rsMomentum[i].toFixed(2))
+          });
+        }
+      }
+
+      if (series.length > 0) {
+        const latest = series[series.length - 1];
+        let quadrant = 'Lagging';
+        if (latest.rsRatio >= 100 && latest.rsMomentum >= 100) quadrant = 'Leading';
+        else if (latest.rsRatio >= 100 && latest.rsMomentum < 100) quadrant = 'Weakening';
+        else if (latest.rsRatio < 100 && latest.rsMomentum >= 100) quadrant = 'Improving';
+
+        sectors.push({
+          name: RRG_SECTOR_NAMES[sectorKey] || sectorKey,
+          key: sectorKey,
+          token,
+          quadrant,
+          series
+        });
+      } else {
+        skipped.push(`${sectorKey}: 0 valid RS data points after computation`);
+      }
+    }
+
+    console.log(`  ✅ RRG computed against ${benchmarkKey}: ${sectors.length} sectors, ${skipped.length} skipped`);
+    if (skipped.length > 0) console.log(`  ⚠️ Skipped: ${skipped.join(' | ')}`);
+
+    res.json({
+      benchmark: benchmarkKey,
+      generatedAt: new Date().toISOString(),
+      sectors
+    });
+  } catch (err) {
+    console.error("RRG computation error:", err);
+    res.status(500).json({ error: "Failed to compute RRG: " + err.message });
+  }
+});
+
 app.post('/api/quotes', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
   try {
@@ -916,6 +1153,20 @@ app.post('/api/quotes', async (req, res) => {
       name: "get_quotes",
       arguments: { instruments }
     });
+
+    // Side-effect: populate rrgTokenCache from any quotes response
+    // so the RRG endpoint doesn't need its own MCP call
+    if (result?.content?.[0]?.text) {
+      try {
+        const quotes = JSON.parse(result.content[0].text);
+        for (const key of Object.keys(quotes)) {
+          if (quotes[key]?.instrument_token && !rrgTokenCache[key]) {
+            rrgTokenCache[key] = String(quotes[key].instrument_token);
+          }
+        }
+      } catch (e) { /* ignore parse errors */ }
+    }
+
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
