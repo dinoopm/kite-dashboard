@@ -580,24 +580,6 @@ function SectorIndices() {
           <h1>Indices Performance</h1>
           <p>Real-time & Historical performance of market sectors</p>
         </div>
-        <div>
-          <input
-            type="text"
-            placeholder="Search indices..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{
-              padding: '0.6rem 1rem',
-              borderRadius: '8px',
-              border: '1px solid var(--border)',
-              background: 'var(--bg-dark)',
-              color: 'var(--text-primary)',
-              width: '250px',
-              fontSize: '1rem',
-              outline: 'none'
-            }}
-          />
-        </div>
       </header>
 
       {/* Tabs and Controls */}
@@ -633,15 +615,6 @@ function SectorIndices() {
               Last updated: {lastUpdated.toLocaleTimeString()}
             </span>
           )}
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-primary)' }}>
-            <input 
-              type="checkbox" 
-              checked={isHeatmap} 
-              onChange={e => setIsHeatmap(e.target.checked)} 
-              style={{ cursor: 'pointer' }}
-            />
-            Heatmap View
-          </label>
         </div>
       </div>
 
@@ -742,6 +715,36 @@ function SectorIndices() {
       />}
 
       <section className="glass-panel" style={{ padding: '1rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+          <div>
+            <input
+              type="text"
+              placeholder="Search indices..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{
+                padding: '0.6rem 1rem',
+                borderRadius: '8px',
+                border: '1px solid var(--border)',
+                background: 'var(--bg-dark)',
+                color: 'var(--text-primary)',
+                width: '250px',
+                fontSize: '1rem',
+                outline: 'none'
+              }}
+            />
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.95rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+            <input 
+              type="checkbox" 
+              checked={isHeatmap} 
+              onChange={e => setIsHeatmap(e.target.checked)} 
+              style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+            />
+            Heatmap View
+          </label>
+        </div>
+
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'right', fontSize: '0.85rem' }}>
           <thead>
             <tr>
