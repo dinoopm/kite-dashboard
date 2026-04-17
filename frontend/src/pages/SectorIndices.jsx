@@ -60,6 +60,7 @@ function SectorIndices() {
   const [rrgBenchmark, setRrgBenchmark] = useState("NSE:NIFTY 50");
   const [rrgLoading, setRrgLoading] = useState(false);
   const [rrgTailLength, setRrgTailLength] = useState(7);
+  const [activeSignalModal, setActiveSignalModal] = useState(null);
   const [rrgHidden, setRrgHidden] = useState({});
   const [rrgAnimating, setRrgAnimating] = useState(false);
   const [rrgAnimFrame, setRrgAnimFrame] = useState(0);
@@ -395,13 +396,78 @@ function SectorIndices() {
          rrgData = rrg.sectors.find(s => s.key === r.id);
       }
       const latestRrg = rrgData && rrgData.series ? rrgData.series[rrgData.series.length - 1] : null;
+      const prevRrg = rrgData && rrgData.series && rrgData.series.length >= 2 ? rrgData.series[rrgData.series.length - 2] : null;
+
+      let marketSignal = { label: '⚖️ NEUTRAL', bg: 'transparent', color: 'var(--text-secondary)', pulse: false, title: "", rank: 1, border: 'none', isNew: false };
+      const kiteScore = scoreMap[r.id];
+      const dayChange = r['1D'] ?? 0;
+      
+      if (rrgData && latestRrg && kiteScore != null) {
+         const quadrant = rrgData.quadrant;
+         const ratio = latestRrg.rsRatio;
+         const momentum = latestRrg.rsMomentum;
+         const series = rrgData.series;
+
+         let momentumIncreasing3Sessions = false;
+         if (series.length >= 4) {
+             const m1 = series[series.length - 1].rsMomentum;
+             const m2 = series[series.length - 2].rsMomentum;
+             const m3 = series[series.length - 3].rsMomentum;
+             const m4 = series[series.length - 4].rsMomentum;
+             if (m1 > m2 && m2 > m3 && m3 > m4) momentumIncreasing3Sessions = true;
+         }
+
+         let prevWasLeaderOrDiamond = false;
+         if (prevRrg) {
+             if (prevRrg.rsRatio > 102 && prevRrg.rsMomentum > 101) prevWasLeaderOrDiamond = true;
+             if (prevRrg.quadrant === 'Improving' && prevRrg.rsMomentum > 101) prevWasLeaderOrDiamond = true;
+         }
+         
+         if (ratio > 102 && momentum > 101 && kiteScore > 90) {
+             marketSignal = { 
+                 label: '🚀 HIGH-CONVICTION BUY', bg: '#10b981', color: '#fff', pulse: true, 
+                 title: "The Leader. This is a 'No-Brainer.' Everything is aligned for a strong uptrend.", rank: 4, border: 'none', isNew: !prevWasLeaderOrDiamond,
+                 logicDesc: "The sector is drastically outperforming the market, its upward momentum is accelerating, and trend indicators show intense buying pressure." 
+             };
+         } else if (quadrant === 'Improving' && momentum > 101 && momentumIncreasing3Sessions && kiteScore > 65) {
+             marketSignal = { 
+                 label: '💎 DIAMOND IN THE ROUGH', bg: '#0ea5e9', color: '#000', pulse: false, 
+                 title: "The Reversal. It's climbing out of the hole with real velocity.", rank: 3, border: 'none', isNew: !prevWasLeaderOrDiamond,
+                 logicDesc: "The sector was previously lagging but has now shown consistent, accelerating momentum over the past three sessions, indicating a strong potential reversal." 
+             };
+         } else if (dayChange > 1 && quadrant === 'Lagging' && momentum < 101) {
+             marketSignal = { 
+                 label: '💀 TRAP ZONE', bg: '#8b0000', color: '#fff', pulse: false, 
+                 title: "The Dead Cat Bounce. Looks like a rally, but it's fake. Relative strength isn't there yet.", rank: 0, border: '1px solid #eab308', isNew: false,
+                 logicDesc: "The sector had a strong up-day today, but its broader underlying momentum is still deeply negative. This is likely a fake-out." 
+             };
+         } else if (quadrant === 'Weakening' && momentum < 99 && dayChange < 0) {
+             marketSignal = { 
+                 label: '⚠️ STRENGTH FADING', bg: '#f97316', color: '#000', pulse: false, 
+                 title: "The Warning. The engine is sputtering. Time to look at exits.", rank: 2, border: 'none', isNew: false,
+                 logicDesc: "The sector is losing its previous leadership status, underlying momentum is dropping, and recent daily performance is negative. The rally is tiring out." 
+             };
+         } else if (ratio < 95 && momentum < 95) {
+             marketSignal = { 
+                 label: '🛡️ CAPITAL PRESERVATION', bg: '#374151', color: '#e5e7eb', pulse: false, 
+                 title: "The Stay Away. Dead money. Do not touch.", rank: 0, border: 'none', isNew: false,
+                 logicDesc: "Both long-term relative strength and short-term momentum are severely broken. The sector is significantly underperforming the broader market." 
+             };
+         } else {
+             marketSignal.logicDesc = "Sector does not currently meet any extreme algorithmic conditions.";
+         }
+      }
 
       return { 
         ...r, 
-        momentumScore: scoreMap[r.id] ?? null,
+        momentumScore: kiteScore ?? null,
         rs1M: r['1M'] !== null && nifty1M !== null ? r['1M'] - nifty1M : null,
         rrgRatio: latestRrg ? latestRrg.rsRatio : null,
         rrgMomentum: latestRrg ? latestRrg.rsMomentum : null,
+        rrgQuadrant: rrgData && rrgData.quadrant ? rrgData.quadrant : 'Unknown',
+        rrgMomentumDelta: (latestRrg && prevRrg) ? latestRrg.rsMomentum - prevRrg.rsMomentum : null,
+        marketSignal,
+        signalRank: marketSignal.rank
       };
     });
   };
@@ -580,6 +646,13 @@ function SectorIndices() {
       </div>
 
       {/* Momentum Score Bar Chart */}
+      <style>{`
+        @keyframes pulse-glow {
+          0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+          50% { opacity: 0.9; transform: scale(1.03); box-shadow: 0 0 10px 4px rgba(16, 185, 129, 0) }
+        }
+        .pulse-glow { animation: pulse-glow 2s infinite; }
+      `}</style>
       {(() => {
         const chartData = filteredData
           .filter(r => r.momentumScore != null)
@@ -720,6 +793,9 @@ function SectorIndices() {
               <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. The % below shows the blended return." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
                 Momentum {renderSortIndicator('momentumScore')}
               </th>
+              <th onClick={() => requestSort('signalRank')} title="Automated intelligence analyzing trend, strength and momentum" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                Signal {renderSortIndicator('signalRank')}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -731,7 +807,12 @@ function SectorIndices() {
                 onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
                 onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
               >
-                <td style={{ textAlign: 'left', padding: '0.5rem', fontWeight: 'bold' }}>{row.name}</td>
+                <td style={{ textAlign: 'left', padding: '0.5rem', fontWeight: 'bold' }}>
+                  {row.name}
+                  {row.marketSignal && row.marketSignal.isNew && (
+                    <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', background: '#ef4444', color: '#fff', padding: '0.1rem 0.3rem', borderRadius: '4px', fontWeight: 'bold', verticalAlign: 'middle', animation: 'pulse-glow 2s infinite' }}>NEW</span>
+                  )}
+                </td>
                 <td style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>₹{row.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                 <Cell value={row['1D']} />
                 <Cell value={row['1W']} />
@@ -775,26 +856,53 @@ function SectorIndices() {
                   {row.momentumScore == null ? (
                     <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
                   ) : (
-                    <span style={{
-                      display: 'inline-block',
-                      padding: '0.2rem 0.6rem',
-                      borderRadius: '6px',
-                      fontSize: '0.85rem',
-                      fontWeight: '700',
-                      minWidth: '36px',
-                      background: row.momentumScore >= 80 ? 'rgba(16,185,129,0.2)'
-                               : row.momentumScore >= 60 ? 'rgba(110,231,183,0.15)'
-                               : row.momentumScore >= 40 ? 'rgba(148,163,184,0.15)'
-                               : row.momentumScore >= 20 ? 'rgba(252,165,165,0.15)'
-                               : 'rgba(239,68,68,0.2)',
-                      color: row.momentumScore >= 80 ? '#10b981'
-                           : row.momentumScore >= 60 ? '#6ee7b7'
-                           : row.momentumScore >= 40 ? '#94a3b8'
-                           : row.momentumScore >= 20 ? '#fca5a5'
-                           : '#ef4444',
-                      border: `1px solid ${row.momentumScore >= 80 ? 'rgba(16,185,129,0.3)' : row.momentumScore >= 60 ? 'rgba(110,231,183,0.3)' : row.momentumScore >= 40 ? 'rgba(148,163,184,0.2)' : row.momentumScore >= 20 ? 'rgba(252,165,165,0.3)' : 'rgba(239,68,68,0.3)'}`
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
+                      <span style={{
+                        display: 'inline-block',
+                        padding: '0.2rem 0.6rem',
+                        borderRadius: '6px',
+                        fontSize: '0.85rem',
+                        fontWeight: '700',
+                        minWidth: '36px',
+                        background: row.momentumScore >= 80 ? 'rgba(16,185,129,0.2)'
+                                 : row.momentumScore >= 60 ? 'rgba(110,231,183,0.15)'
+                                 : row.momentumScore >= 40 ? 'rgba(148,163,184,0.15)'
+                                 : row.momentumScore >= 20 ? 'rgba(252,165,165,0.15)'
+                                 : 'rgba(239,68,68,0.2)',
+                        color: row.momentumScore >= 80 ? '#10b981'
+                             : row.momentumScore >= 60 ? '#6ee7b7'
+                             : row.momentumScore >= 40 ? '#94a3b8'
+                             : row.momentumScore >= 20 ? '#fca5a5'
+                             : '#ef4444',
+                        border: `1px solid ${row.momentumScore >= 80 ? 'rgba(16,185,129,0.3)' : row.momentumScore >= 60 ? 'rgba(110,231,183,0.3)' : row.momentumScore >= 40 ? 'rgba(148,163,184,0.2)' : row.momentumScore >= 20 ? 'rgba(252,165,165,0.3)' : 'rgba(239,68,68,0.3)'}`
+                      }}>
+                        {row.momentumScore}
+                      </span>
+                      {row.rrgMomentumDelta != null && row.rrgMomentumDelta > 0 && (
+                        <span title="RS-Momentum is improving week-over-week" style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: 'bold' }}>▲</span>
+                      )}
+                    </div>
+                  )}
+                </td>
+                <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
+                  {row.marketSignal && (
+                    <span 
+                      onClick={(e) => { e.stopPropagation(); setActiveSignalModal(row); }}
+                      title="Click to see algorithmic breakdown"
+                      className={row.marketSignal.pulse ? 'pulse-glow' : ''}
+                      style={{
+                        display: 'inline-block',
+                        padding: '0.2rem 0.6rem',
+                        borderRadius: '6px',
+                        fontSize: '0.75rem',
+                        fontWeight: '700',
+                        cursor: 'pointer',
+                        background: row.marketSignal.bg,
+                        color: row.marketSignal.color,
+                        border: row.marketSignal.border,
+                        whiteSpace: 'nowrap'
                     }}>
-                      {row.momentumScore}
+                      {row.marketSignal.label}
                     </span>
                   )}
                 </td>
@@ -807,6 +915,66 @@ function SectorIndices() {
           </tbody>
         </table>
       </section>
+
+      {/* Signal Education Modal */}
+      {activeSignalModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', zIndex: 9999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }} onClick={() => setActiveSignalModal(null)}>
+          <div style={{
+            background: '#1a1a2e', padding: '2rem', borderRadius: '12px',
+            border: '1px solid rgba(255,255,255,0.1)', maxWidth: '400px', width: '90%',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.5)'
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
+              <div>
+                <h3 style={{ margin: '0 0 0.5rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span style={{ 
+                    background: activeSignalModal.marketSignal.bg, color: activeSignalModal.marketSignal.color, 
+                    padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem', border: activeSignalModal.marketSignal.border 
+                  }}>{activeSignalModal.marketSignal.label}</span>
+                </h3>
+                <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{activeSignalModal.name}</p>
+              </div>
+              <button onClick={() => setActiveSignalModal(null)} style={{ background: 'transparent', border: 'none', color: '#fff', fontSize: '1.5rem', cursor: 'pointer' }}>&times;</button>
+            </div>
+            
+            <p style={{ fontSize: '0.95rem', lineHeight: '1.5', margin: '0 0 1.5rem 0' }}>
+              {activeSignalModal.marketSignal.title}
+            </p>
+
+            <div style={{ background: 'rgba(255,255,255,0.03)', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem' }}>
+              <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Algorithmic Criteria Met:</h4>
+              <p style={{ margin: 0, fontSize: '0.9rem', color: '#38bdf8', lineHeight: '1.5' }}>
+                {activeSignalModal.marketSignal.logicDesc}
+              </p>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <div>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Kite Momentum</span>
+                <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{activeSignalModal.momentumScore ?? '-'}</div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>RRG Quadrant</span>
+                <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{activeSignalModal.rrgQuadrant ?? '-'}</div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>RS-Ratio</span>
+                <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{activeSignalModal.rrgRatio ? activeSignalModal.rrgRatio.toFixed(2) : '-'}</div>
+              </div>
+              <div>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>RS-Momentum</span>
+                <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{activeSignalModal.rrgMomentum ? activeSignalModal.rrgMomentum.toFixed(2) : '-'}</div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

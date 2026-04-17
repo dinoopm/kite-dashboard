@@ -570,9 +570,12 @@ app.get('/api/historical/:token', async (req, res) => {
          return d >= cutoff;
       });
 
-      // Since we just fetched live data that might be longer than what's in cache,
-      // let's update the cache with this new, longer dataset so subsequent requests benefit from it.
-      historyCache[token] = parsed;
+      // Only overwrite the global cache if this newly fetched array contains MORE historical data.
+      // This prevents short-timeframe fetches (like 1W/1M) from overriding the 2-year data needed
+      // for mathematically stable RSI EMA smoothing.
+      if (!historyCache[token] || parsed.length > historyCache[token].length) {
+        historyCache[token] = parsed;
+      }
 
       // Wrap back in MCP-like response so frontend parsing stays the same
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
