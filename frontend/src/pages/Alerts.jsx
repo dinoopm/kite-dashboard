@@ -106,7 +106,7 @@ function Alerts() {
   const renderSortArrow = (key) => sortConfig.key === key ? (sortConfig.direction === 'asc' ? ' ↑' : ' ↓') : ''
 
   return (
-    <div className="dashboard-layout terminal-alerts">
+    <div className="dashboard-layout terminal-alerts" style={{ maxWidth: '1200px', margin: '0 auto' }}>
 
       {/* Required base CSS for the UI */}
       <style>{`
