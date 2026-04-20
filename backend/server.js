@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
 const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio.js");
-const { SMA, EMA, RSI, MACD, BollingerBands } = require('technicalindicators');
+const { SMA, EMA, RSI, MACD, BollingerBands, ATR, VWAP } = require('technicalindicators');
 const YahooFinance = require('yahoo-finance2').default;
 const yahooFinance = new YahooFinance();
 
@@ -44,7 +44,7 @@ const formatDate = (d, isEnd) => {
 
 function parseMcpText(result) {
   if (result?.content?.[0]?.text) {
-    try { return JSON.parse(result.content[0].text); } catch(e) {}
+    try { return JSON.parse(result.content[0].text); } catch (e) { }
   }
   return null;
 }
@@ -83,7 +83,7 @@ async function fetchHistoricalMultiYear(token, years = 5) {
         allCandles.push(...data);
       }
     } catch (err) {
-      console.log(`  ⚠️  Chunk ${y}Y-${y-1}Y failed for token ${token}: ${err.message}`);
+      console.log(`  ⚠️  Chunk ${y}Y-${y - 1}Y failed for token ${token}: ${err.message}`);
     }
     // Respect rate limit
     await new Promise(r => setTimeout(r, 400));
@@ -110,28 +110,28 @@ async function warmCache(retries = 3) {
   console.log("⏳ Warming cache: fetching holdings...");
   try {
     let holdings = null;
-    
+
     for (let attempt = 1; attempt <= retries; attempt++) {
       const holdResult = await mcpClient.callTool({
         name: "get_holdings",
         arguments: { limit: 50 }
       });
-      
+
       if (holdResult.isError) {
         console.log(`  ⚠️  Holdings fetch attempt ${attempt} returned error, retrying in 5s...`);
         await new Promise(r => setTimeout(r, 5000));
         continue;
       }
-      
+
       holdings = parseMcpText(holdResult);
       if (holdings && holdings.data) holdings = holdings.data;
       if (Array.isArray(holdings)) break;
-      
+
       console.log(`  ⚠️  Holdings parse attempt ${attempt} failed, retrying in 3s...`);
       await new Promise(r => setTimeout(r, 3000));
       holdings = null;
     }
-    
+
     if (!Array.isArray(holdings)) {
       console.error("❌ Could not parse holdings after retries. Cache warm-up aborted.");
       return;
@@ -237,13 +237,13 @@ app.get('/api/cache-status', (req, res) => {
 
 app.post('/api/disconnect', async (req, res) => {
   console.log("🔄 Disconnecting MCP client and clearing caches...");
-  
+
   // 1. Clear caches
   Object.keys(historyCache).forEach(k => delete historyCache[k]);
   Object.keys(historicalFullCache).forEach(k => delete historicalFullCache[k]);
   holdingsCache.length = 0;
   cacheReady = false;
-  
+
   Object.keys(apiCache).forEach(k => {
     apiCache[k].data = null;
     apiCache[k].timestamp = 0;
@@ -449,23 +449,23 @@ app.get('/api/historical/:token', async (req, res) => {
           continuous: false, oi: false
         }
       });
-       if (result.isError) return res.json(result);
-       let parsed = parseMcpText(result);
-       if (Array.isArray(parsed)) {
-          const closes = parsed.map(c => c.close);
-          const sma20Func = SMA.calculate({ period: 20, values: closes });
-          const sma5Func = SMA.calculate({ period: 5, values: closes });
+      if (result.isError) return res.json(result);
+      let parsed = parseMcpText(result);
+      if (Array.isArray(parsed)) {
+        const closes = parsed.map(c => c.close);
+        const sma20Func = SMA.calculate({ period: 20, values: closes });
+        const sma5Func = SMA.calculate({ period: 5, values: closes });
 
-          const alignedLive = parsed.map((c, i) => ({
-            ...c,
-            sma20: i >= 19 ? sma20Func[i - 19] : null,
-            sma5: i >= 4 ? sma5Func[i - 4] : null
-          }));
-          return res.json({
-             content: [{ type: "text", text: JSON.stringify(alignedLive) }]
-          });
-       }
-       return res.json(result);
+        const alignedLive = parsed.map((c, i) => ({
+          ...c,
+          sma20: i >= 19 ? sma20Func[i - 19] : null,
+          sma5: i >= 4 ? sma5Func[i - 4] : null
+        }));
+        return res.json({
+          content: [{ type: "text", text: JSON.stringify(alignedLive) }]
+        });
+      }
+      return res.json(result);
     }
 
     // For daily timeframes, try serving from cache
@@ -495,12 +495,12 @@ app.get('/api/historical/:token', async (req, res) => {
       cutoff.setDate(now.getDate() - daysBack);
 
       const oldestDateInCache = new Date(cached[0].date);
-      
+
       // Only use cache if it actually covers the requested timeframe
       if (oldestDateInCache <= cutoff) {
         const filtered = alignedCached.filter(c => {
-           const d = new Date(c.date);
-           return d >= cutoff;
+          const d = new Date(c.date);
+          return d >= cutoff;
         });
 
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -539,9 +539,9 @@ app.get('/api/historical/:token', async (req, res) => {
 
     let parsed = parseMcpText(result);
     if (!Array.isArray(parsed) && parsed && parsed.data && parsed.data.candles) {
-       parsed = parsed.data.candles; // fallback
+      parsed = parsed.data.candles; // fallback
     }
-    
+
     if (Array.isArray(parsed)) {
       const closes = parsed.map(c => c.close);
       const sma20Func = SMA.calculate({ period: 20, values: closes });
@@ -566,8 +566,8 @@ app.get('/api/historical/:token', async (req, res) => {
       cutoff.setDate(now.getDate() - daysBack);
 
       const filteredLive = alignedLive.filter(c => {
-         const d = new Date(c.date);
-         return d >= cutoff;
+        const d = new Date(c.date);
+        return d >= cutoff;
       });
 
       // Only overwrite the global cache if this newly fetched array contains MORE historical data.
@@ -708,7 +708,7 @@ app.get('/api/alerts', async (req, res) => {
       const parsed = JSON.parse(holdingsResult.content[0].text);
       holdings = parsed.data || parsed;
     }
-    
+
     // Trigger cache warmup safely if needed
     if (!cacheReady && !holdingsResult.isError) {
       console.log("⏳ Alerts API: Triggering cache warm-up...");
@@ -740,11 +740,110 @@ app.get('/api/alerts', async (req, res) => {
       const sma200Arr = SMA.calculate({ period: 200, values: closes });
       const rsi14Arr = RSI.calculate({ period: 14, values: closes });
 
+      // Prepare inputs for ATR and VWAP
+      const highs = cached.map(c => c.high);
+      const lows = cached.map(c => c.low);
+      const volumes = cached.map(c => c.volume || 1); // fallback to 1 to avoid div by 0
+
+      const atr14Arr = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
+
+      // Calculate 20-period Anchored VWAP
+      const recent20 = cached.slice(-20);
+      let vwap20 = null;
+      let vwapDeviation = null;
+      if (recent20.length === 20) {
+        const vwapArr = VWAP.calculate({
+          high: recent20.map(c => c.high),
+          low: recent20.map(c => c.low),
+          close: recent20.map(c => c.close),
+          volume: recent20.map(c => c.volume || 1)
+        });
+        vwap20 = vwapArr.length > 0 ? vwapArr[vwapArr.length - 1] : null;
+        if (vwap20) {
+          vwapDeviation = ((currentPrice - vwap20) / vwap20) * 100;
+        }
+      }
+
+      // Institutional Net Aggressor Proxy via Money Flow Multiplier (MFM)
+      let aggressorDelta = 0;
+      if (cached.length >= 14) {
+        const window = cached.slice(-14);
+        let totalMoneyFlowVolume = 0;
+        let totalVolume = 0;
+
+        window.forEach(c => {
+          const range = c.high - c.low || 0.01;
+          const multiplier = ((c.close - c.low) - (c.high - c.close)) / range;
+          totalMoneyFlowVolume += (multiplier * (c.volume || 1));
+          totalVolume += (c.volume || 1);
+        });
+        aggressorDelta = totalVolume > 0 ? totalMoneyFlowVolume / totalVolume : 0;
+      }
+
       const sma5 = sma5Arr.length > 0 ? sma5Arr[sma5Arr.length - 1] : null;
       const sma20 = sma20Arr.length > 0 ? sma20Arr[sma20Arr.length - 1] : null;
       const sma50 = sma50Arr.length > 0 ? sma50Arr[sma50Arr.length - 1] : null;
       const sma200 = sma200Arr.length > 0 ? sma200Arr[sma200Arr.length - 1] : null;
       const rsi14 = rsi14Arr.length > 0 ? rsi14Arr[rsi14Arr.length - 1] : null;
+      const atr = atr14Arr.length > 0 ? atr14Arr[atr14Arr.length - 1] : null;
+      const rsiHistory = rsi14Arr.slice(-10).map(v => parseFloat(v.toFixed(1)));
+
+      // Regime Classification & Divergence Detection
+      let regime = "RANGE-BOUND";
+      const isAlignedTrend = (sma50 && sma200) && (
+        (currentPrice > sma50 && sma50 > sma200) || // Fully bullish aligned
+        (currentPrice < sma50 && sma50 < sma200) || // Fully bearish aligned
+        (currentPrice > sma50 && currentPrice > sma200 && Math.abs(sma50 - sma200) / sma200 < 0.02) // Price leads both MAs, MAs nearly crossed
+      );
+      if (atr14Arr.length > 20) {
+        const atrSMA20 = atr14Arr.slice(-20).reduce((a, b) => a + b, 0) / 20;
+        if (atr > 1.5 * atrSMA20) {
+          regime = "WILD SWINGS";
+        } else if (isAlignedTrend) {
+          regime = "STRONG TREND";
+        }
+      } else if (isAlignedTrend) {
+        regime = "STRONG TREND";
+      }
+
+      let divergence = null;
+      if (closes.length >= 20 && rsi14Arr.length >= 20) {
+        const priceWindow = closes.slice(-20);
+        const rsiWindow = rsi14Arr.slice(-20);
+        const p1 = priceWindow[0], p2 = priceWindow[19];
+        const r1 = rsiWindow[0], r2 = rsiWindow[19];
+
+        // Simplified rolling point-to-point divergence identification
+        if (p2 < p1 && r2 > r1 && r2 < 45) divergence = "BUY SETUP";
+        if (p2 > p1 && r2 < r1 && r2 > 55) divergence = "SELL SETUP";
+      }
+
+      // Calculate confidence score (0-100) — starts at 30 for wider dynamic range
+      let confidence = 30;
+      // === POSITIVE SIGNALS ===
+      if (rsi14) {
+        if (rsi14 > 40 && rsi14 < 70) confidence += 10; // Healthy trend zone
+        if (rsi14 <= 30) confidence += 15; // Oversold rebound conviction
+      }
+      if (sma5 && sma20 && sma5 > sma20) confidence += 15; // Short term momentum
+      if (sma50 && sma200 && sma50 > sma200) confidence += 10; // Long term tailwind (golden cross state)
+      if (vwapDeviation && vwapDeviation > 0) confidence += 10; // Supported by volume
+      if (aggressorDelta > 0.3) confidence += 10; // Strong buying pressure
+      if (regime === 'STRONG TREND') confidence += 5; // Trending regime bonus
+      // Price above both major MAs is inherently bullish even if they haven't crossed yet
+      if (sma50 && sma200 && currentPrice > sma50 && currentPrice > sma200) confidence += 10; // Price leads both MAs
+      // === PENALTY SIGNALS ===
+      if (rsi14 && rsi14 >= 75) confidence -= 10; // Severely overbought
+      if (sma50 && sma200 && sma50 < sma200) {
+        // Soften death cross penalty if price is well above both MAs (cross is imminent)
+        if (currentPrice > sma50 && currentPrice > sma200) confidence -= 5;
+        else confidence -= 10;
+      }
+      if (sma5 && sma20 && sma5 < sma20) confidence -= 5; // Short-term bearish
+      if (vwapDeviation && vwapDeviation < -2) confidence -= 10; // Heavy selling vs institutional cost
+      if (aggressorDelta < -0.2) confidence -= 10; // Aggressive selling pressure
+      if (regime === 'WILD SWINGS') confidence -= 10; // Volatile regime penalty
+      confidence = Math.min(100, Math.max(0, Math.round(confidence)));
 
       const stockAlerts = [];
 
@@ -787,7 +886,7 @@ app.get('/api/alerts', async (req, res) => {
           const prevSma200 = sma200Arr[sma200Arr.length - 6];
           const wasSma50Above = prevSma50 > prevSma200;
           const isSma50Above = sma50 > sma200;
-          
+
           if (isSma50Above && !wasSma50Above) {
             stockAlerts.push({ type: 'cross', severity: 'bullish', message: `Golden Cross detected — SMA 50 (₹${sma50.toFixed(1)}) recently crossed above SMA 200 (₹${sma200.toFixed(1)}). Major bullish signal.` });
           } else if (!isSma50Above && wasSma50Above) {
@@ -797,6 +896,68 @@ app.get('/api/alerts', async (req, res) => {
       }
 
       if (stockAlerts.length > 0) {
+        // Evaluate Risk Assessment based on ATR and Confidence
+        let riskAssessment = 'Medium Risk';
+        if (confidence > 80 && atr && (currentPrice > sma50)) riskAssessment = 'Low Risk';
+        if (confidence < 40 || (atr && currentPrice < (sma50 - 2 * atr))) riskAssessment = 'High Risk';
+
+        // Fix: Use 20-day Donchian Channels (recent 20 High/Low) for Support/Resistance instead of statically symmetrical ATR offsets.
+        const recentLows = recent20.map(c => c.low).filter(v => v != null);
+        const recentHighs = recent20.map(c => c.high).filter(v => v != null);
+        const supportLvl = recentLows.length > 0 ? Math.min(...recentLows) : (atr ? currentPrice - 1.5 * atr : null);
+        const resistanceLvl = recentHighs.length > 0 ? Math.max(...recentHighs) : (atr ? currentPrice + 1.5 * atr : null);
+
+        // Trade Plan Logic
+        const tradePlan = { action: 'HOLD / WAIT', sl: null, tgt: null, reason: 'Market structure currently yields no asymmetric edge.' };
+        const distanceToRes = (resistanceLvl && currentPrice) ? (resistanceLvl - currentPrice) / currentPrice : 0;
+        const isBreakout = !!(resistanceLvl && currentPrice >= resistanceLvl);
+
+        // --- Breakout scenarios (highest priority) ---
+        if (isBreakout && confidence >= 75) {
+          tradePlan.action = 'BUY SEEN';
+          tradePlan.reason = `Price has broken above the 20-day high (₹${resistanceLvl}). Breakout confirmed with strong momentum.`;
+        } else if (isBreakout && confidence >= 50) {
+          tradePlan.action = 'BREAKOUT (CAUTION)';
+          const rsiNote = (rsi14 && rsi14 >= 70) ? ` Note: RSI is stretched at ${rsi14.toFixed(0)}, so a short-term pullback is possible.` : '';
+          tradePlan.reason = `Price has crossed the 20-day ceiling (₹${resistanceLvl}), but conviction is moderate at ${confidence}%. Watch volume for confirmation before entering.${rsiNote}`;
+        } else if (isBreakout) {
+          tradePlan.action = 'BREAKOUT (WEAK)';
+          const rsiNote = (rsi14 && rsi14 >= 70) ? ` RSI is also overbought at ${rsi14.toFixed(0)}.` : '';
+          tradePlan.reason = `Price breached resistance (₹${resistanceLvl}) but underlying technicals are weak (score ${confidence}%). High risk of a false breakout / bull trap.${rsiNote}`;
+          // --- Non-breakout buy scenarios ---
+        } else if (confidence >= 80 && distanceToRes > 0.02) {
+          tradePlan.action = 'BUY SEEN';
+          tradePlan.reason = `Momentum is high with ${(distanceToRes * 100).toFixed(1)}% room to run before hitting the 20-day resistance ceiling.`;
+        } else if (confidence >= 85) {
+          tradePlan.action = 'BUY SEEN';
+          tradePlan.reason = 'Extreme conviction score even without clear airspace. Strong breakout candidate.';
+        }
+
+        // --- RSI overbought override (applies to BUY SEEN only) ---
+        if (rsi14 && rsi14 >= 70 && tradePlan.action === 'BUY SEEN') {
+          tradePlan.action = 'HOLD (OVERBOUGHT)';
+          tradePlan.reason = `Momentum is green, but with RSI stretched to ${rsi14}, buying now carries immediate pullback risk.`;
+        }
+
+        // --- Danger zones (only if NOT a breakout) ---
+        if (!isBreakout && (confidence <= 45 || regime === 'WILD SWINGS')) {
+          tradePlan.action = 'AVOID';
+          tradePlan.reason = regime === 'WILD SWINGS' ? 'Erratic price action (ATR expanded). High execution risk.' : 'Systemic technical levels are severely broken down.';
+        }
+
+        if (!isBreakout && regime === "RANGE-BOUND" && resistanceLvl && currentPrice >= resistanceLvl * 0.98 && confidence < 75) {
+          tradePlan.action = 'SELL (AT RANGE)';
+          tradePlan.reason = 'Price is compressing against a strict technical ceiling inside a sideways range.';
+        }
+
+        tradePlan.sl = supportLvl ? +(supportLvl - (atr ? atr * 0.3 : 0)).toFixed(1) : null;
+        if (tradePlan.action === 'BUY SEEN' || tradePlan.action.includes('BREAKOUT')) {
+          // For breakouts and buys: if already above resistance, project target using ATR extension
+          tradePlan.tgt = (resistanceLvl && currentPrice >= resistanceLvl) ? +(currentPrice + (atr ? atr * 1.5 : 0)).toFixed(1) : (resistanceLvl ? +(resistanceLvl).toFixed(1) : null);
+        } else {
+          tradePlan.tgt = resistanceLvl ? +(resistanceLvl).toFixed(1) : null;
+        }
+
         alerts.push({
           symbol,
           token,
@@ -806,6 +967,20 @@ app.get('/api/alerts', async (req, res) => {
           sma20: sma20 ? +sma20.toFixed(2) : null,
           sma50: sma50 ? +sma50.toFixed(2) : null,
           sma200: sma200 ? +sma200.toFixed(2) : null,
+          vwap20: vwap20 ? +vwap20.toFixed(2) : null,
+          vwapDeviation: vwapDeviation ? +vwapDeviation.toFixed(2) : null,
+          atr: atr ? +atr.toFixed(2) : null,
+          support: supportLvl ? +supportLvl.toFixed(2) : null,
+          resistance: resistanceLvl ? +resistanceLvl.toFixed(2) : null,
+          breakoutRisk: atr && resistanceLvl ? +(resistanceLvl + atr).toFixed(2) : null,
+          aggressorDelta: +(aggressorDelta).toFixed(3),
+          divergence,
+          regime,
+          isBreakout,
+          tradePlan,
+          rsiHistory,
+          confidence,
+          riskAssessment,
           alerts: stockAlerts
         });
       }
@@ -824,7 +999,7 @@ app.get('/api/fundamentals/:symbol', async (req, res) => {
     if (!symbol) return res.status(400).json({ error: "Symbol required" });
 
     const yahooSymbol = toYahooSymbol(symbol);
-    
+
     // Fetch fundamental data from Yahoo Finance
     const quoteSummary = await yahooFinance.quoteSummary(yahooSymbol, {
       modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData', 'price', 'assetProfile']
@@ -843,18 +1018,18 @@ app.get('/api/cashflow/:symbol', async (req, res) => {
     if (!symbol) return res.status(400).json({ error: "Symbol required" });
 
     const yahooSymbol = toYahooSymbol(symbol);
-    
+
     const d = new Date();
     d.setFullYear(d.getFullYear() - 4); // Get last 4 years approx
-    
+
     const type = req.query.type === 'annual' ? 'annual' : 'quarterly';
-    
+
     const ts = await yahooFinance.fundamentalsTimeSeries(yahooSymbol, {
       period1: d.toISOString().split('T')[0],
       module: 'all',
       type: type
     });
-    
+
     const cashflowData = ts.map(item => ({
       date: item.date,
       operatingCashFlow: item.operatingCashFlow || 0,
@@ -863,9 +1038,9 @@ app.get('/api/cashflow/:symbol', async (req, res) => {
       freeCashFlow: item.freeCashFlow || 0,
       netIncome: item.netIncome || 0,
       totalRevenue: item.totalRevenue || 0
-    })).filter(item => 
-      item.operatingCashFlow !== 0 || 
-      item.investingCashFlow !== 0 || 
+    })).filter(item =>
+      item.operatingCashFlow !== 0 ||
+      item.investingCashFlow !== 0 ||
       item.financingCashFlow !== 0 ||
       item.netIncome !== 0 ||
       item.totalRevenue !== 0
@@ -898,7 +1073,7 @@ app.get('/api/historical-full/:token', async (req, res) => {
     if (Array.isArray(data) && data.length > 0) {
       // Store in cache
       historicalFullCache[token] = { data, timestamp: Date.now() };
-      console.log(`  ✅ Got ${data.length} candles from ${data[0].date.substring(0,10)} to ${data[data.length-1].date.substring(0,10)}`);
+      console.log(`  ✅ Got ${data.length} candles from ${data[0].date.substring(0, 10)} to ${data[data.length - 1].date.substring(0, 10)}`);
       return res.json({
         content: [{ type: "text", text: JSON.stringify(data) }]
       });
@@ -917,7 +1092,8 @@ const RRG_SECTOR_KEYS = [
   "NSE:NIFTY FMCG", "NSE:NIFTY REALTY", "NSE:NIFTY PSU BANK", "NSE:NIFTY METAL",
   "NSE:NIFTY INFRA", "NSE:NIFTY ENERGY", "NSE:NIFTY FIN SERVICE",
   "NSE:NIFTY PVT BANK", "NSE:NIFTY CONSR DURBL", "NSE:NIFTY HEALTHCARE",
-  "NSE:NIFTY MEDIA", "NSE:NIFTY COMMODITIES", "NSE:NIFTY OIL AND GAS"
+  "NSE:NIFTY MEDIA", "NSE:NIFTY COMMODITIES", "NSE:NIFTY OIL AND GAS",
+  "NSE:NIFTY IND DEFENCE"
 ];
 
 const RRG_SECTOR_NAMES = {
@@ -936,8 +1112,10 @@ const RRG_SECTOR_NAMES = {
   "NSE:NIFTY CONSR DURBL": "NIFTY CONSUMER DURABLES",
   "NSE:NIFTY HEALTHCARE": "NIFTY HEALTHCARE",
   "NSE:NIFTY MEDIA": "NIFTY MEDIA",
-  "NSE:NIFTY COMMODITIES": "NIFTY CHEMICALS",
-  "NSE:NIFTY OIL AND GAS": "NIFTY OIL AND GAS"
+  "NSE:NIFTY COMMODITIES": "NIFTY COMMODITIES",
+  "NSE:NIFTY CHEMICALS": "NIFTY CHEMICALS",
+  "NSE:NIFTY OIL AND GAS": "NIFTY OIL AND GAS",
+  "NSE:NIFTY IND DEFENCE": "NIFTY INDIA DEFENCE"
 };
 
 // Helper: resample daily candles to weekly (Friday close)
@@ -1151,7 +1329,7 @@ app.post('/api/quotes', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
   try {
     const { instruments } = req.body;
-    if (!instruments || !instruments.length) return res.json({ content: [{text: "{}"}] });
+    if (!instruments || !instruments.length) return res.json({ content: [{ text: "{}" }] });
     const result = await callWithTimeout({
       name: "get_quotes",
       arguments: { instruments }

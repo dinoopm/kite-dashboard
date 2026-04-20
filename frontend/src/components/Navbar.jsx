@@ -50,6 +50,17 @@ function Navbar({ onDisconnect }) {
       >
         Indices Performance
       </Link>
+      <Link 
+        to="/vix" 
+        style={{ 
+          textDecoration: 'none', 
+          color: location.pathname === '/vix' ? 'white' : 'var(--text-secondary)',
+          fontWeight: location.pathname === '/vix' ? 'bold' : 'normal',
+          transition: 'color 0.2s'
+        }}
+      >
+        VIX Index
+      </Link>
 
       <div style={{ flex: 1 }}></div>
 

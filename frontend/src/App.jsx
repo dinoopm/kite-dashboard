@@ -6,6 +6,7 @@ import Portfolio from './pages/Portfolio'
 import Instrument from './pages/Instrument'
 import Alerts from './pages/Alerts'
 import SectorIndices from './pages/SectorIndices'
+import VixIndex from './pages/VixIndex'
 import Navbar from './components/Navbar'
 
 function App() {
@@ -130,6 +131,7 @@ function App() {
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/indices" element={<SectorIndices />} />
+          <Route path="/vix" element={<VixIndex />} />
           <Route path="/instrument/:token" element={<Instrument />} />
         </Routes>
       </div>
