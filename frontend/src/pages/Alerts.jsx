@@ -167,7 +167,7 @@ function Alerts() {
             >
               {showLegend ? 'Close Guide' : '📖 How to read this'}
             </button>
-            <span style={{ fontSize: '0.7rem', padding: '0.3rem 0.6rem', background: 'rgba(0,229,255,0.1)', color: '#00E5FF', border: '1px solid rgba(0,229,255,0.2)', borderRadius: '4px', display: 'flex', alignItems: 'center' }}>SYS_ON</span>
+
           </div>
         </div>
       </header>
