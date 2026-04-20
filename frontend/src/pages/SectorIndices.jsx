@@ -38,6 +38,7 @@ const INDICES = [
   { key: "NSE:NIFTY CONSR DURBL", name: "NIFTY CONSUMER DURABLES", category: "sector" },
   { key: "NSE:NIFTY HEALTHCARE", name: "NIFTY HEALTHCARE", category: "sector" },
   { key: "NSE:NIFTY MEDIA", name: "NIFTY MEDIA", category: "sector" },
+  { key: "NSE:NIFTY COMMODITIES", name: "NIFTY COMMODITIES", category: "sector" },
   { key: "NSE:NIFTY CHEMICALS", name: "NIFTY CHEMICALS", category: "sector" },
   { key: "NSE:NIFTY OIL AND GAS", name: "NIFTY OIL AND GAS", category: "sector" },
   { key: "NSE:NIFTY IND DEFENCE", name: "NIFTY INDIA DEFENCE", category: "sector" },

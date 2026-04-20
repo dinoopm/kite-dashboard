@@ -1254,27 +1254,33 @@ app.get('/api/rrg', async (req, res) => {
         }
       }
 
-      if (aligned.length < 60) {
-        skipped.push(`${sectorKey}: only ${aligned.length} aligned weeks (need 60)`);
+      if (aligned.length < 8) {
+        skipped.push(`${sectorKey}: only ${aligned.length} aligned weeks (need at least 8 to approximate RRG)`);
         continue;
       }
+
+      // Dynamic math windows: shrink the smoothing arrays for newly-listed indices (like NIFTY CHEMICALS)
+      // Normal JdK: 10 EMA, 52 Ratio SMA, 26 Mom SMA
+      const emaWindow = Math.min(10, Math.max(3, Math.floor(aligned.length / 4)));
+      const ratioSmaWindow = Math.min(52, Math.max(4, Math.floor(aligned.length / 2.5)));
+      const momSmaWindow = Math.min(26, Math.max(2, Math.floor(ratioSmaWindow / 2)));
 
       // Raw RS = (sector / benchmark) * 100
       const rawRS = aligned.map(a => (a.sectorClose / a.benchClose) * 100);
 
-      // EMA smoothing (period 10)
-      const rsSmooth = computeEMA(rawRS, 10);
+      // EMA smoothing (period dynamically set)
+      const rsSmooth = computeEMA(rawRS, emaWindow);
 
-      // RS-Ratio = (RS_smooth / SMA(RS_smooth, 52)) * 100
-      const rsSmoothSMA = computeSMA(rsSmooth, 52);
+      // RS-Ratio = (RS_smooth / SMA(RS_smooth, dynSma)) * 100
+      const rsSmoothSMA = computeSMA(rsSmooth, ratioSmaWindow);
       const rsRatio = rsSmooth.map((v, i) => {
         if (rsSmoothSMA[i] === null || rsSmoothSMA[i] === 0) return null;
         return (v / rsSmoothSMA[i]) * 100;
       });
 
-      // RS-Momentum = (RS_Ratio / SMA(RS_Ratio, 26)) * 100
+      // RS-Momentum = (RS_Ratio / SMA(RS_Ratio, dynMomSma)) * 100
       const validRsRatio = rsRatio.map(v => v === null ? 0 : v);
-      const rsRatioSMA = computeSMA(validRsRatio, 26);
+      const rsRatioSMA = computeSMA(validRsRatio, momSmaWindow);
       const rsMomentum = validRsRatio.map((v, i) => {
         if (rsRatioSMA[i] === null || rsRatioSMA[i] === 0 || v === 0) return null;
         return (v / rsRatioSMA[i]) * 100;
