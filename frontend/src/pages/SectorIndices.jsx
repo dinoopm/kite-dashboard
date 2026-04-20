@@ -40,6 +40,7 @@ const INDICES = [
   { key: "NSE:NIFTY MEDIA", name: "NIFTY MEDIA", category: "sector" },
   { key: "NSE:NIFTY COMMODITIES", name: "NIFTY CHEMICALS", category: "sector" },
   { key: "NSE:NIFTY OIL AND GAS", name: "NIFTY OIL AND GAS", category: "sector" },
+  { key: "NSE:NIFTY IND DEFENCE", name: "NIFTY INDIA DEFENCE", category: "sector" },
 ];
 
 function SectorIndices() {
@@ -766,12 +767,16 @@ function SectorIndices() {
               <th onClick={() => requestSort('rs1M')} title="1-Month Relative Strength vs NIFTY 50" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 1M RS {renderSortIndicator('rs1M')}
               </th>
-              <th onClick={() => requestSort('rrgRatio')} title={`JdK RS-Ratio against ${rrgBenchmark.split(':')[1]}`} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
-                RS-Ratio {renderSortIndicator('rrgRatio')}
-              </th>
-              <th onClick={() => requestSort('rrgMomentum')} title={`JdK RS-Momentum against ${rrgBenchmark.split(':')[1]}`} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
-                RS-Momentum {renderSortIndicator('rrgMomentum')}
-              </th>
+              {activeTab !== 'broad' && (
+                <>
+                  <th onClick={() => requestSort('rrgRatio')} title={`JdK RS-Ratio against ${rrgBenchmark.split(':')[1]}`} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+                    RS-Ratio {renderSortIndicator('rrgRatio')}
+                  </th>
+                  <th onClick={() => requestSort('rrgMomentum')} title={`JdK RS-Momentum against ${rrgBenchmark.split(':')[1]}`} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+                    RS-Momentum {renderSortIndicator('rrgMomentum')}
+                  </th>
+                </>
+              )}
               <th onClick={() => requestSort('3M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
                 3M {renderSortIndicator('3M')}
               </th>
@@ -796,9 +801,11 @@ function SectorIndices() {
               <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. The % below shows the blended return." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
                 Momentum {renderSortIndicator('momentumScore')}
               </th>
-              <th onClick={() => requestSort('signalRank')} title="Automated intelligence analyzing trend, strength and momentum" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
-                Signal {renderSortIndicator('signalRank')}
-              </th>
+              {activeTab !== 'broad' && (
+                <th onClick={() => requestSort('signalRank')} title="Automated intelligence analyzing trend, strength and momentum" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                  Signal {renderSortIndicator('signalRank')}
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -821,12 +828,16 @@ function SectorIndices() {
                 <Cell value={row['1W']} />
                 <Cell value={row['1M']} />
                 <Cell value={row.rs1M} isHeatmapCell={false} />
-                <td style={{ padding: '0.5rem', color: row.rrgRatio >= 100 ? '#10b981' : '#ef4444', fontWeight: '600' }}>
-                  {row.rrgRatio != null ? row.rrgRatio.toFixed(2) : '-'}
-                </td>
-                <td style={{ padding: '0.5rem', color: row.rrgMomentum >= 100 ? '#10b981' : '#ef4444', fontWeight: '600' }}>
-                  {row.rrgMomentum != null ? row.rrgMomentum.toFixed(2) : '-'}
-                </td>
+                {activeTab !== 'broad' && (
+                  <>
+                    <td style={{ padding: '0.5rem', color: row.rrgRatio >= 100 ? '#10b981' : '#ef4444', fontWeight: '600' }}>
+                      {row.rrgRatio != null ? row.rrgRatio.toFixed(2) : '-'}
+                    </td>
+                    <td style={{ padding: '0.5rem', color: row.rrgMomentum >= 100 ? '#10b981' : '#ef4444', fontWeight: '600' }}>
+                      {row.rrgMomentum != null ? row.rrgMomentum.toFixed(2) : '-'}
+                    </td>
+                  </>
+                )}
                 <Cell value={row['3M']} />
                 <Cell value={row['6M']} />
                 <Cell value={row['1Y']} />
@@ -887,28 +898,30 @@ function SectorIndices() {
                     </div>
                   )}
                 </td>
-                <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
-                  {row.marketSignal && (
-                    <span 
-                      onClick={(e) => { e.stopPropagation(); setActiveSignalModal(row); }}
-                      title="Click to see algorithmic breakdown"
-                      className={row.marketSignal.pulse ? 'pulse-glow' : ''}
-                      style={{
-                        display: 'inline-block',
-                        padding: '0.2rem 0.6rem',
-                        borderRadius: '6px',
-                        fontSize: '0.75rem',
-                        fontWeight: '700',
-                        cursor: 'pointer',
-                        background: row.marketSignal.bg,
-                        color: row.marketSignal.color,
-                        border: row.marketSignal.border,
-                        whiteSpace: 'nowrap'
-                    }}>
-                      {row.marketSignal.label}
-                    </span>
-                  )}
-                </td>
+                {activeTab !== 'broad' && (
+                  <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
+                    {row.marketSignal && (
+                      <span 
+                        onClick={(e) => { e.stopPropagation(); setActiveSignalModal(row); }}
+                        title="Click to see algorithmic breakdown"
+                        className={row.marketSignal.pulse ? 'pulse-glow' : ''}
+                        style={{
+                          display: 'inline-block',
+                          padding: '0.2rem 0.6rem',
+                          borderRadius: '6px',
+                          fontSize: '0.75rem',
+                          fontWeight: '700',
+                          cursor: 'pointer',
+                          background: row.marketSignal.bg,
+                          color: row.marketSignal.color,
+                          border: row.marketSignal.border,
+                          whiteSpace: 'nowrap'
+                      }}>
+                        {row.marketSignal.label}
+                      </span>
+                    )}
+                  </td>
+                )}
               </tr>
             )) : (
               <tr>
