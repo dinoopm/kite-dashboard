@@ -380,7 +380,7 @@ function Alerts() {
                 </div>
 
                 {/* 20-Day Range Tracker (Support / Resistance) */}
-                <div style={{ width: '100%', padding: '0.4rem 1.25rem', background: 'rgba(0,0,0,0.15)', borderTop: '1px solid rgba(255,255,255,0.02)', display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.65rem', color: 'var(--text-secondary)' }} title="20-Day Price Range from deepest low (Support floor) to highest high (Resistance ceiling)">
+                <div style={{ width: '100%', padding: '0.4rem 1.25rem', background: 'rgba(0,0,0,0.15)', borderTop: '1px solid rgba(255,255,255,0.02)', display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.65rem', color: 'var(--text-secondary)', boxSizing: 'border-box' }} title="20-Day Price Range from deepest low (Support floor) to highest high (Resistance ceiling)">
                   {(() => {
                     if (!stock.support || !stock.resistance) return <span style={{ paddingLeft: '1rem' }}>AWAITING MAP DATA</span>;
                     const span = stock.resistance - stock.support;
