@@ -10,6 +10,29 @@ const RRG_COLORS = [
   '#f472b6', '#818cf8'
 ];
 
+// ─── Tunable constants ────────────────────────────────────────
+// Momentum score component weights. Must sum to 1.0. 1M is weighted heaviest
+// because it best reflects current trend while 1W catches breakouts and 3M
+// trims noise.
+const W_1W = 0.20, W_1M = 0.50, W_3M = 0.30;
+
+// RSI multipliers applied to the raw weighted return before percentile ranking.
+// Penalize overbought (stretched) sectors, boost oversold (rebound candidates).
+const RSI_MULT_SEVERE_OVERBOUGHT = 0.85;
+const RSI_MULT_OVERBOUGHT = 0.92;
+const RSI_MULT_OVERSOLD = 1.08;
+const RSI_MULT_SEVERE_OVERSOLD = 1.15;
+
+// Refresh intervals (ms)
+const QUOTES_REFRESH_MS = 60_000;   // Live prices / 1D change
+const RRG_REFRESH_MS = 5 * 60_000;  // RRG is weekly data, 5 min is ample
+const RRG_POLL_MS = 10_000;         // Warm-up poll while cache hydrates
+const RRG_MAX_WARMUP_POLLS = 18;    // Give up after ~3 minutes
+
+// Delay between serial history fetches (rate-limit headroom). Skipped on cache hits.
+const HIST_FETCH_DELAY_MS = 1500;
+const HIST_CACHE_DELAY_MS = 50;
+
 const INDICES = [
   { key: "NSE:NIFTY 50", name: "NIFTY 50", category: "broad" },
   { key: "NSE:NIFTY NEXT 50", name: "NIFTY NEXT 50", category: "broad" },
@@ -53,7 +76,11 @@ function SectorIndices() {
   const [activeTab, setActiveTab] = useState('sector');
   const [isHeatmap, setIsHeatmap] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
-  
+  const [hiddenColumns, setHiddenColumns] = useState({ '1W': false, '6M': false, '3Y': false, '5Y': false });
+  const [showColumnMenu, setShowColumnMenu] = useState(false);
+  const [momentumPopover, setMomentumPopover] = useState(null); // { rowId, x, y }
+  const searchInputRef = useRef(null);
+
   // Sorting state
   const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'asc' });
 
@@ -80,88 +107,111 @@ function SectorIndices() {
     return () => { mountedRef.current = false; };
   }, []);
 
+  // Cmd/Ctrl+K focuses the search input.
   useEffect(() => {
-    const fetchQuotes = async () => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  useEffect(() => {
+    let initialDone = false;
+    let refreshTimer = null;
+
+    const pullQuotes = async () => {
       try {
-        setLoading(true);
-        // Add alt benchmarks silently so their tokens load, needed for dynamic RRG benchmark
+        if (!initialDone) setLoading(true);
         const allKeys = [...new Set([...INDICES.map(i => i.key), 'NSE:NIFTY 500', 'NSE:NIFTY MIDCAP 100'])];
-        
+
         const res = await fetch('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ instruments: allKeys })
         });
-        
+
         const resData = await res.json();
-        
+
         if (resData?.content?.[0]?.text) {
           const quotes = JSON.parse(resData.content[0].text);
-          const initialData = INDICES.map(entry => {
+          const quotesData = INDICES.map(entry => {
             const quote = quotes[entry.key] || {};
-            const lastPrice = quote.last_price || 0;
-            const changeStr = quote.net_change !== undefined 
-              ? quote.net_change 
-              : (quote.last_price - (quote.ohlc?.close || quote.last_price));
-            
-            const pct1D = quote.ohlc?.close ? (changeStr / quote.ohlc.close) * 100 : 0;
-            
+            const lastPrice = quote.last_price ?? null;
+            const prevClose = quote.ohlc?.close;
+            const absChange = quote.net_change !== undefined
+              ? quote.net_change
+              : (prevClose !== undefined && lastPrice !== null ? lastPrice - prevClose : null);
+
+            const pct1D = (prevClose && absChange !== null && absChange !== undefined)
+              ? (absChange / prevClose) * 100
+              : null;
+
             return {
               id: entry.key,
               name: entry.name,
               category: entry.category,
               token: quote.instrument_token,
-              price: lastPrice,
+              price: lastPrice ?? 0,
               '1D': pct1D,
-              '1W': null,
-              '1M': null,
-              '3M': null,
-              '6M': null,
-              '1Y': null,
-              '3Y': null,
-              '5Y': null,
-              sparkline: null,
-              aboveSma50: null,
-              rsi14: null,
-              dist52WHigh: null,
-              rs1M: null,
             };
           });
-          
-          if (mountedRef.current) {
+
+          if (!mountedRef.current) return;
+
+          if (!initialDone) {
+            // First load: seed the table and kick off progressive history fetch.
+            const initialData = quotesData.map(q => ({
+              ...q,
+              '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '3Y': null, '5Y': null,
+              sparkline: null, aboveSma50: null, rsi14: null, dist52WHigh: null, rs1M: null,
+            }));
             setData(initialData);
             setLoading(false);
             setLastUpdated(new Date());
-            
-            // Kick off progressive history loading. Filter initialData for tokens, PLUS explicitly add alt benchmarks.
-            // This ensures they are cached early so benchmark toggling in RRG is instantaneous.
+            initialDone = true;
+
             const altBenchmarkKeys = ['NSE:NIFTY 500', 'NSE:NIFTY MIDCAP 100'];
             const historyQueue = initialData.filter(d => d.token);
             for (const key of altBenchmarkKeys) {
-               if (!historyQueue.find(d => d.id === key) && quotes[key]?.instrument_token) {
-                 historyQueue.push({ 
-                   id: key, 
-                   name: key, 
-                   token: String(quotes[key].instrument_token),
-                   price: quotes[key].last_price || 0
-                 });
-               }
+              if (!historyQueue.find(d => d.id === key) && quotes[key]?.instrument_token) {
+                historyQueue.push({
+                  id: key, name: key,
+                  token: String(quotes[key].instrument_token),
+                  price: quotes[key].last_price || 0
+                });
+              }
             }
             loadHistoricalDataProgressively(historyQueue);
+          } else {
+            // Subsequent refreshes: merge price + 1D only, preserve history fields.
+            setData(prev => prev.map(row => {
+              const q = quotesData.find(x => x.id === row.id);
+              return q ? { ...row, price: q.price, '1D': q['1D'], token: q.token ?? row.token } : row;
+            }));
+            setLastUpdated(new Date());
           }
-        } else {
+        } else if (!initialDone) {
           throw new Error('Failed to parse quotes');
         }
       } catch (err) {
-        if (mountedRef.current) {
+        if (!mountedRef.current) return;
+        if (!initialDone) {
           console.error(err);
           setError("Failed to load initial benchmark data. Backend might be down.");
           setLoading(false);
         }
+        // On refresh failures just swallow — next tick may recover.
       }
     };
-    
-    fetchQuotes();
+
+    pullQuotes();
+    refreshTimer = setInterval(pullQuotes, QUOTES_REFRESH_MS);
+    return () => { if (refreshTimer) clearInterval(refreshTimer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ─── RRG Data Fetch ─────────────────────────────────────────
@@ -183,37 +233,62 @@ function SectorIndices() {
 
   useEffect(() => {
     let cancelled = false;
+    let attempts = 0;
+    let warmupTimer = null;
+    let refreshTimer = null;
+
     const pollRRG = async () => {
       if (cancelled || !mountedRef.current) return;
+      attempts += 1;
       setRrgLoading(true);
       const count = await fetchRRGData();
-      // Keep polling until we have a decent number of sectors (or give up after enough time)
-      if (!cancelled && mountedRef.current && count < 5) {
-        setTimeout(pollRRG, 10000);
-      }
-    };
-    // Start polling after a short delay
-    const timer = setTimeout(pollRRG, 5000);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [fetchRRGData]); // Notice fetchRRGData dependency. It changes when rrgBenchmark changes!
+      if (cancelled || !mountedRef.current) return;
 
-  // Re-fetch RRG if the user changes the benchmark directly
+      if (count >= 5) {
+        // Warm enough — switch to periodic refresh.
+        refreshTimer = setInterval(() => { fetchRRGData(); }, RRG_REFRESH_MS);
+        return;
+      }
+      if (attempts >= RRG_MAX_WARMUP_POLLS) {
+        console.warn(`RRG warm-up gave up after ${attempts} polls; backend is only returning ${count} sectors.`);
+        // Still set a refresh in case the backend catches up.
+        refreshTimer = setInterval(() => { fetchRRGData(); }, RRG_REFRESH_MS);
+        return;
+      }
+      warmupTimer = setTimeout(pollRRG, RRG_POLL_MS);
+    };
+
+    const kickoff = setTimeout(pollRRG, 5000);
+    return () => {
+      cancelled = true;
+      clearTimeout(kickoff);
+      if (warmupTimer) clearTimeout(warmupTimer);
+      if (refreshTimer) clearInterval(refreshTimer);
+    };
+  }, [fetchRRGData]); // Re-armed when benchmark changes (fetchRRGData identity flips).
+
+  // Re-fetch RRG and reset scrubber when the user changes the benchmark directly.
   useEffect(() => {
     if (rrg) {
-       setRrgLoading(true);
-       fetchRRGData();
+      setRrgLoading(true);
+      setRrgScrubEnd(null);  // Series length may differ between benchmarks — reset to latest.
+      setRrgAnimFrame(0);
+      fetchRRGData();
     }
-  }, [rrgBenchmark, fetchRRGData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rrgBenchmark]);
 
   const loadHistoricalDataProgressively = async (indicesList) => {
     for (let index of indicesList) {
       if (!mountedRef.current) break;
-      
+
+      let wasCached = false;
       try {
         // Use the multi-year endpoint that fetches 5Y data in yearly chunks
         const res = await fetch(`/api/historical-full/${index.token}`);
         const resData = await res.json();
-        
+        wasCached = !!resData?.cached;
+
         if (resData?.content?.[0]?.text) {
           let parsed = JSON.parse(resData.content[0].text);
           if (Array.isArray(parsed) && parsed.length > 0) {
@@ -269,10 +344,9 @@ function SectorIndices() {
         console.error("Failed history for", index.name, e);
       }
       
-      // With backend caching, repeat visits are instant.
-      // First-time fetches still need rate-limit spacing.
+      // Only enforce rate-limit spacing when the backend actually hit the upstream.
       if (mountedRef.current) {
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, wasCached ? HIST_CACHE_DELAY_MS : HIST_FETCH_DELAY_MS));
       }
     }
     // After all historical data is loaded, do a final RRG refresh to pick up all sectors
@@ -283,12 +357,17 @@ function SectorIndices() {
   };
 
   const calculateHistoricalReturns = (series, currentPrice) => {
-    // series is already sorted by date ascending
-    // Use IST (UTC+5:30) for date calculations since Indian markets operate in IST
-    const nowUTC = new Date();
-    const istOffset = 5.5 * 60 * 60 * 1000; // IST = UTC + 5:30
-    const nowIST = new Date(nowUTC.getTime() + (nowUTC.getTimezoneOffset() * 60000) + istOffset);
-    nowIST.setHours(0,0,0,0);
+    // series is already sorted by date ascending.
+    // Anchor the "today" reference to midnight IST (Asia/Kolkata) regardless of the
+    // host machine's timezone. Using Intl.DateTimeFormat avoids the common bug of
+    // double-applying getTimezoneOffset().
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).formatToParts(new Date());
+    const y = parts.find(p => p.type === 'year').value;
+    const m = parts.find(p => p.type === 'month').value;
+    const d = parts.find(p => p.type === 'day').value;
+    const nowIST = new Date(`${y}-${m}-${d}T00:00:00Z`); // midnight IST rendered as UTC
     
     // Pre-parse dates once for binary search
     const dates = series.map(c => new Date(c.date).getTime());
@@ -352,145 +431,222 @@ function SectorIndices() {
     setSortConfig({ key, direction });
   };
 
-  // ─── Momentum Score Calculation ───────────────────────────────
-  const W_1W = 0.20, W_1M = 0.50, W_3M = 0.30;
 
-  const calculateMomentumScores = (items) => {
-    const nifty50 = data.find(r => r.id === 'NSE:NIFTY 50');
-    const nifty1M = nifty50 ? nifty50['1M'] : null;
+  // ─── Momentum Score + Market Signal derivation ────────────────
+  // Quadrant helper mirrors the backend logic so we can classify historic RRG
+  // points (which only carry rsRatio/rsMomentum, not a precomputed quadrant).
+  const quadrantOf = (rsRatio, rsMomentum) => {
+    if (rsRatio == null || rsMomentum == null) return 'Unknown';
+    if (rsRatio >= 100 && rsMomentum >= 100) return 'Leading';
+    if (rsRatio >= 100 && rsMomentum < 100)  return 'Weakening';
+    if (rsRatio < 100  && rsMomentum >= 100) return 'Improving';
+    return 'Lagging';
+  };
 
-    // Only score items that have all required returns loaded
-    const scorable = items.filter(r => r['1W'] !== null && r['1M'] !== null && r['3M'] !== null);
-    if (scorable.length === 0) return items;
+  const rsiMultiplierFor = (rsi14) => {
+    if (rsi14 == null) return 1.0;
+    if (rsi14 >= 80) return RSI_MULT_SEVERE_OVERBOUGHT;
+    if (rsi14 >= 70) return RSI_MULT_OVERBOUGHT;
+    if (rsi14 <= 20) return RSI_MULT_SEVERE_OVERSOLD;
+    if (rsi14 <= 30) return RSI_MULT_OVERSOLD;
+    return 1.0;
+  };
 
-    // Step 1: Calculate raw weighted return
-    const rawScores = scorable.map(r => {
-      const raw = ((r['1W'] || 0) * W_1W) + ((r['1M'] || 0) * W_1M) + ((r['3M'] || 0) * W_3M);
-      
-      // Step 2: RSI adjustment — penalize overbought, boost oversold
-      let rsiMultiplier = 1.0;
-      if (r.rsi14 !== null) {
-        if (r.rsi14 >= 80) rsiMultiplier = 0.85;       // Severely overbought: -15%
-        else if (r.rsi14 >= 70) rsiMultiplier = 0.92;   // Overbought: -8%
-        else if (r.rsi14 <= 20) rsiMultiplier = 1.15;   // Severely oversold: +15%
-        else if (r.rsi14 <= 30) rsiMultiplier = 1.08;   // Oversold: +8%
-      }
-      
-      return { id: r.id, raw, adjusted: raw * rsiMultiplier };
-    });
+  // Build the enriched rows (momentum score, RRG columns, market signal) using
+  // inputs that may legitimately change: the sector data, the active RRG payload,
+  // and the selected benchmark (which drives 1M RS).
+  const enrichedData = useMemo(() => {
+    if (!data || data.length === 0) return [];
 
-    // Step 3: Percentile ranking (more robust than min-max to outliers)
-    const sorted = [...rawScores].sort((a, b) => a.adjusted - b.adjusted);
-    const n = sorted.length;
-    
+    // rs1M compares against the *selected RRG benchmark*, not a hardcoded NIFTY 50.
+    const benchmarkRow = data.find(r => r.id === rrgBenchmark);
+    const benchmark1M = benchmarkRow ? benchmarkRow['1M'] : null;
+    const benchmarkShort = rrgBenchmark.split(':')[1] || rrgBenchmark;
+
+    // Score universe = current tab slice (so scoring stays comparable within a view).
+    const tabRows = data.filter(row => activeTab === 'all' || row.category === activeTab);
+    const scorable = tabRows.filter(r => r['1W'] !== null && r['1M'] !== null && r['3M'] !== null);
+
+    const breakdownById = {};
     const scoreMap = {};
-    const rawMap = {};
-    sorted.forEach((s, rank) => {
-      // Percentile: rank / (n-1) scaled to 1-100
-      scoreMap[s.id] = n === 1 ? 50 : Math.round(1 + (rank / (n - 1)) * 99);
-      rawMap[s.id] = s.raw;
-    });
 
-    return items.map(r => {
-      // Sync RRG math with table
-      let rrgData = null;
-      if (rrg && rrg.sectors) {
-         rrgData = rrg.sectors.find(s => s.key === r.id);
-      }
-      const latestRrg = rrgData && rrgData.series ? rrgData.series[rrgData.series.length - 1] : null;
-      const prevRrg = rrgData && rrgData.series && rrgData.series.length >= 2 ? rrgData.series[rrgData.series.length - 2] : null;
+    if (scorable.length > 0) {
+      const rawScores = scorable.map(r => {
+        const w1w = (r['1W'] || 0) * W_1W;
+        const w1m = (r['1M'] || 0) * W_1M;
+        const w3m = (r['3M'] || 0) * W_3M;
+        const raw = w1w + w1m + w3m;
+        const rsiMult = rsiMultiplierFor(r.rsi14);
+        breakdownById[r.id] = { w1w, w1m, w3m, raw, rsiMult, adjusted: raw * rsiMult };
+        return { id: r.id, adjusted: raw * rsiMult };
+      });
+      const sortedRaw = [...rawScores].sort((a, b) => a.adjusted - b.adjusted);
+      const n = sortedRaw.length;
+      sortedRaw.forEach((s, rank) => {
+        scoreMap[s.id] = n === 1 ? 50 : Math.round(1 + (rank / (n - 1)) * 99);
+      });
+      Object.keys(breakdownById).forEach(id => { breakdownById[id].percentile = scoreMap[id] ?? null; });
+    }
 
-      let marketSignal = { label: '⚖️ NEUTRAL', bg: 'transparent', color: 'var(--text-secondary)', pulse: false, title: "", rank: 1, border: 'none', isNew: false };
+    return tabRows.map(r => {
+      const rrgData = rrg && rrg.sectors ? rrg.sectors.find(s => s.key === r.id) : null;
+      const series = rrgData?.series || [];
+      const latestRrg = series.length ? series[series.length - 1] : null;
+      const prevRrg = series.length >= 2 ? series[series.length - 2] : null;
+      const quadrant = rrgData?.quadrant || 'Unknown';
+      const prevQuadrant = prevRrg ? quadrantOf(prevRrg.rsRatio, prevRrg.rsMomentum) : 'Unknown';
+
       const kiteScore = scoreMap[r.id];
       const dayChange = r['1D'] ?? 0;
-      
+
+      let marketSignal = {
+        label: '⚖️ NEUTRAL', bg: 'transparent', color: 'var(--text-secondary)',
+        pulse: false, title: '', rank: 1, border: 'none', isNew: false,
+        logicDesc: 'Sector does not currently meet any extreme algorithmic conditions.'
+      };
+
       if (rrgData && latestRrg && kiteScore != null) {
-         const quadrant = rrgData.quadrant;
-         const ratio = latestRrg.rsRatio;
-         const momentum = latestRrg.rsMomentum;
-         const series = rrgData.series;
+        const ratio = latestRrg.rsRatio;
+        const momentum = latestRrg.rsMomentum;
 
-         let momentumIncreasing3Sessions = false;
-         if (series.length >= 4) {
-             const m1 = series[series.length - 1].rsMomentum;
-             const m2 = series[series.length - 2].rsMomentum;
-             const m3 = series[series.length - 3].rsMomentum;
-             const m4 = series[series.length - 4].rsMomentum;
-             if (m1 > m2 && m2 > m3 && m3 > m4) momentumIncreasing3Sessions = true;
-         }
+        // 3-session acceleration check (requires >=4 weekly points)
+        let momentum3SessUp = false;
+        if (series.length >= 4) {
+          const [m4, m3, m2, m1] = [series[series.length - 4], series[series.length - 3], series[series.length - 2], series[series.length - 1]].map(p => p.rsMomentum);
+          momentum3SessUp = m1 > m2 && m2 > m3 && m3 > m4;
+        }
 
-         let prevWasLeaderOrDiamond = false;
-         if (prevRrg) {
-             if (prevRrg.rsRatio > 102 && prevRrg.rsMomentum > 101) prevWasLeaderOrDiamond = true;
-             if (prevRrg.quadrant === 'Improving' && prevRrg.rsMomentum > 101) prevWasLeaderOrDiamond = true;
-         }
-         
-         if (ratio > 102 && momentum > 101 && kiteScore > 90) {
-             marketSignal = { 
-                 label: '🚀 HIGH-CONVICTION BUY', bg: '#10b981', color: '#fff', pulse: true, 
-                 title: "The Leader. This is a 'No-Brainer.' Everything is aligned for a strong uptrend.", rank: 4, border: 'none', isNew: !prevWasLeaderOrDiamond,
-                 logicDesc: "The sector is drastically outperforming the market, its upward momentum is accelerating, and trend indicators show intense buying pressure." 
-             };
-         } else if (quadrant === 'Improving' && momentum > 101 && momentumIncreasing3Sessions && kiteScore > 65) {
-             marketSignal = { 
-                 label: '💎 DIAMOND IN THE ROUGH', bg: '#0ea5e9', color: '#000', pulse: false, 
-                 title: "The Reversal. It's climbing out of the hole with real velocity.", rank: 3, border: 'none', isNew: !prevWasLeaderOrDiamond,
-                 logicDesc: "The sector was previously lagging but has now shown consistent, accelerating momentum over the past three sessions, indicating a strong potential reversal." 
-             };
-         } else if (dayChange > 1 && quadrant === 'Lagging' && momentum < 101) {
-             marketSignal = { 
-                 label: '💀 TRAP ZONE', bg: '#8b0000', color: '#fff', pulse: false, 
-                 title: "The Dead Cat Bounce. Looks like a rally, but it's fake. Relative strength isn't there yet.", rank: 0, border: '1px solid #eab308', isNew: false,
-                 logicDesc: "The sector had a strong up-day today, but its broader underlying momentum is still deeply negative. This is likely a fake-out." 
-             };
-         } else if (quadrant === 'Weakening' && momentum < 99 && dayChange < 0) {
-             marketSignal = { 
-                 label: '⚠️ STRENGTH FADING', bg: '#f97316', color: '#000', pulse: false, 
-                 title: "The Warning. The engine is sputtering. Time to look at exits.", rank: 2, border: 'none', isNew: false,
-                 logicDesc: "The sector is losing its previous leadership status, underlying momentum is dropping, and recent daily performance is negative. The rally is tiring out." 
-             };
-         } else if (ratio < 95 && momentum < 95) {
-             marketSignal = { 
-                 label: '🛡️ CAPITAL PRESERVATION', bg: '#374151', color: '#e5e7eb', pulse: false, 
-                 title: "The Stay Away. Dead money. Do not touch.", rank: 0, border: 'none', isNew: false,
-                 logicDesc: "Both long-term relative strength and short-term momentum are severely broken. The sector is significantly underperforming the broader market." 
-             };
-         } else {
-             marketSignal.logicDesc = "Sector does not currently meet any extreme algorithmic conditions.";
-         }
+        // Week-over-week deltas
+        const ratioDelta = prevRrg ? latestRrg.rsRatio - prevRrg.rsRatio : 0;
+        const momentumDelta = prevRrg ? latestRrg.rsMomentum - prevRrg.rsMomentum : 0;
+
+        // "Was this already a leader last week?" used for the NEW pulse on Diamonds / Leaders.
+        const prevWasLeaderOrImproving = prevRrg
+          ? ((prevRrg.rsRatio > 102 && prevRrg.rsMomentum > 101)
+             || (prevQuadrant === 'Improving' && prevRrg.rsMomentum > 101))
+          : false;
+
+        if (ratio > 102 && momentum > 101 && kiteScore > 90) {
+          marketSignal = {
+            label: '🚀 HIGH-CONVICTION BUY', bg: '#10b981', color: '#fff', pulse: true,
+            title: "The Leader. Everything is aligned for a strong uptrend.",
+            rank: 5, border: 'none', isNew: !prevWasLeaderOrImproving,
+            logicDesc: "Drastically outperforming the market, upward momentum accelerating, trend indicators show intense buying pressure."
+          };
+        } else if (quadrant === 'Leading' && momentumDelta < 0 && kiteScore > 60) {
+          marketSignal = {
+            label: '🏁 LEADING (MATURE)', bg: '#16a34a', color: '#fff', pulse: false,
+            title: "Still leading but losing steam — watch for the handoff.",
+            rank: 4, border: 'none', isNew: prevQuadrant !== 'Leading' ? false : false,
+            logicDesc: "Sector is still in the Leading quadrant (ratio ≥ 100, momentum ≥ 100), but RS-Momentum is decelerating week-over-week. Rallies like this often hand off before rolling over."
+          };
+        } else if (quadrant === 'Improving' && momentum > 101 && momentum3SessUp && kiteScore > 65) {
+          marketSignal = {
+            label: '💎 DIAMOND IN THE ROUGH', bg: '#0ea5e9', color: '#000', pulse: false,
+            title: "The Reversal. Climbing out of the hole with real velocity.",
+            rank: 3, border: 'none', isNew: !prevWasLeaderOrImproving,
+            logicDesc: "Previously lagging but now showing consistent, accelerating momentum over three sessions — strong potential reversal."
+          };
+        } else if (quadrant === 'Lagging' && momentumDelta > 0 && ratioDelta > 0) {
+          marketSignal = {
+            label: '🌱 LAGGING (STABILIZING)', bg: '#0369a1', color: '#fff', pulse: false,
+            title: "Underperformer starting to heal.",
+            rank: 2, border: 'none', isNew: false,
+            logicDesc: "Sector is still Lagging, but both RS-Ratio and RS-Momentum ticked up week-over-week. Early stabilization — not yet an entry, but worth tracking."
+          };
+        } else if (dayChange > 1 && quadrant === 'Lagging' && momentum < 101) {
+          marketSignal = {
+            label: '💀 TRAP ZONE', bg: '#8b0000', color: '#fff', pulse: false,
+            title: "Dead cat bounce. Looks like a rally, but relative strength isn't there.",
+            rank: 0, border: '1px solid #eab308', isNew: false,
+            logicDesc: "Strong up-day today, but broader momentum is still deeply negative. Likely a fake-out."
+          };
+        } else if (quadrant === 'Weakening' && momentum < 99 && dayChange < 0) {
+          marketSignal = {
+            label: '⚠️ STRENGTH FADING', bg: '#f97316', color: '#000', pulse: false,
+            title: "The engine is sputtering. Time to look at exits.",
+            rank: 1, border: 'none', isNew: false,
+            logicDesc: "Losing leadership, underlying momentum dropping, and recent daily performance is negative."
+          };
+        } else if (ratio < 95 && momentum < 95) {
+          marketSignal = {
+            label: '🛡️ CAPITAL PRESERVATION', bg: '#374151', color: '#e5e7eb', pulse: false,
+            title: "Dead money. Do not touch.",
+            rank: 0, border: 'none', isNew: false,
+            logicDesc: "Both long-term RS and short-term momentum are severely broken."
+          };
+        }
       }
 
-      return { 
-        ...r, 
+      return {
+        ...r,
         momentumScore: kiteScore ?? null,
-        rs1M: r['1M'] !== null && nifty1M !== null ? r['1M'] - nifty1M : null,
+        momentumBreakdown: breakdownById[r.id] || null,
+        rs1M: r['1M'] !== null && benchmark1M !== null ? r['1M'] - benchmark1M : null,
+        rs1MBenchmark: benchmarkShort,
         rrgRatio: latestRrg ? latestRrg.rsRatio : null,
         rrgMomentum: latestRrg ? latestRrg.rsMomentum : null,
-        rrgQuadrant: rrgData && rrgData.quadrant ? rrgData.quadrant : 'Unknown',
+        rrgQuadrant: quadrant,
         rrgMomentumDelta: (latestRrg && prevRrg) ? latestRrg.rsMomentum - prevRrg.rsMomentum : null,
         marketSignal,
         signalRank: marketSignal.rank
       };
     });
-  };
+  }, [data, rrg, rrgBenchmark, activeTab]);
 
-  const tabFiltered = data.filter(row => activeTab === 'all' || row.category === activeTab);
-  const withScores = calculateMomentumScores(tabFiltered);
+  const sortedData = useMemo(() => {
+    const arr = [...enrichedData];
+    arr.sort((a, b) => {
+      let valA = a[sortConfig.key];
+      let valB = b[sortConfig.key];
+      if (valA === null || valA === undefined) valA = sortConfig.direction === 'asc' ? Infinity : -Infinity;
+      if (valB === null || valB === undefined) valB = sortConfig.direction === 'asc' ? Infinity : -Infinity;
+      if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return arr;
+  }, [enrichedData, sortConfig]);
 
-  const sortedData = [...withScores].sort((a, b) => {
-    let valA = a[sortConfig.key];
-    let valB = b[sortConfig.key];
-    
-    // Treat nulls as worst/best depending on sort so they cluster
-    if (valA === null) valA = sortConfig.direction === 'asc' ? Infinity : -Infinity;
-    if (valB === null) valB = sortConfig.direction === 'asc' ? Infinity : -Infinity;
+  const filteredData = useMemo(
+    () => sortedData.filter(row => row.name.toLowerCase().includes(searchQuery.toLowerCase())),
+    [sortedData, searchQuery]
+  );
 
-    if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
-    if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
-    return 0;
-  });
-
-  const filteredData = sortedData.filter(row => row.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  // ─── CSV export (visible rows) ────────────────────────────────
+  const exportCSV = useCallback(() => {
+    const rows = filteredData;
+    if (!rows.length) return;
+    const headers = [
+      'Name', 'Category', 'Price', '1D%', '1W%', '1M%', '3M%', '6M%', '1Y%', '3Y%', '5Y%',
+      'RS-Ratio', 'RS-Momentum', 'Quadrant', 'RSI14', 'MomentumScore', '1M-RS',
+      '%52W-High', 'Signal'
+    ];
+    const fmt = (v) => (v === null || v === undefined) ? '' : (typeof v === 'number' ? v.toFixed(2) : String(v));
+    const esc = (v) => {
+      const s = fmt(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [headers.join(',')];
+    for (const r of rows) {
+      lines.push([
+        r.name, r.category, r.price,
+        r['1D'], r['1W'], r['1M'], r['3M'], r['6M'], r['1Y'], r['3Y'], r['5Y'],
+        r.rrgRatio, r.rrgMomentum, r.rrgQuadrant, r.rsi14, r.momentumScore, r.rs1M,
+        r.dist52WHigh, r.marketSignal?.label || ''
+      ].map(esc).join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.href = url;
+    a.download = `indices-${activeTab}-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [filteredData, activeTab]);
 
   const renderSortIndicator = (key) => {
     if (sortConfig.key === key) {
@@ -499,23 +655,20 @@ function SectorIndices() {
     return '';
   };
 
-  const Cell = ({ value, isHeatmapCell = true }) => {
-    if (value == null) return <td style={{ padding: '0.5rem' }}><div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div></td>;
+  const Cell = useCallback(({ value, isHeatmapCell = true }) => {
+    if (value === null || value === undefined) return (
+      <td style={{ padding: '0.5rem', color: 'var(--text-secondary)' }}>—</td>
+    );
     if (value === 0) return <td style={{ padding: '0.5rem', color: 'var(--text-secondary)' }}>0.00%</td>;
-    
+
     let style = { fontWeight: '500', padding: '0.5rem' };
     let className = value > 0 ? 'positive' : 'negative';
 
     if (isHeatmap && isHeatmapCell) {
-       const alpha = Math.min(Math.abs(value) / 10, 0.9); // Cap alpha at 90% for a 10%+ move
-       const bg = value > 0 ? `rgba(16, 185, 129, ${alpha})` : `rgba(239, 68, 68, ${alpha})`;
-       style = { 
-           ...style,
-           backgroundColor: bg, 
-           color: '#fff', 
-           fontWeight: '600'
-       };
-       className = ''; // Override native text color
+      const alpha = Math.min(Math.abs(value) / 10, 0.9);
+      const bg = value > 0 ? `rgba(16, 185, 129, ${alpha})` : `rgba(239, 68, 68, ${alpha})`;
+      style = { ...style, backgroundColor: bg, color: '#fff', fontWeight: '600' };
+      className = '';
     }
 
     return (
@@ -523,7 +676,7 @@ function SectorIndices() {
         {value > 0 ? '+' : ''}{value.toFixed(2)}%
       </td>
     );
-  };
+  }, [isHeatmap]);
 
   const Sparkline = memo(({ data, aboveSma50 }) => {
     if (!data || data.length === 0) {
@@ -611,12 +764,55 @@ function SectorIndices() {
           ))}
         </div>
         
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
           {lastUpdated && (
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              Last updated: {lastUpdated.toLocaleTimeString()}
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}
+              title={lastUpdated.toLocaleString()}>
+              ● Live · {lastUpdated.toLocaleTimeString()}
             </span>
           )}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setShowColumnMenu(v => !v)}
+              style={{
+                padding: '0.4rem 0.8rem', borderRadius: '6px',
+                border: '1px solid var(--border)', background: 'rgba(255,255,255,0.03)',
+                color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem'
+              }}
+            >
+              Columns ▾
+            </button>
+            {showColumnMenu && (
+              <div style={{
+                position: 'absolute', top: '100%', right: 0, marginTop: '4px',
+                background: '#1a1a2e', border: '1px solid var(--border)', borderRadius: '6px',
+                padding: '0.5rem', zIndex: 20, minWidth: '140px',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.4)'
+              }}>
+                {Object.keys(hiddenColumns).map(col => (
+                  <label key={col} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.25rem 0.4rem', fontSize: '0.8rem', cursor: 'pointer', color: 'var(--text-primary)' }}>
+                    <input
+                      type="checkbox"
+                      checked={!hiddenColumns[col]}
+                      onChange={() => setHiddenColumns(h => ({ ...h, [col]: !h[col] }))}
+                    />
+                    Show {col}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={exportCSV}
+            style={{
+              padding: '0.4rem 0.8rem', borderRadius: '6px',
+              border: '1px solid var(--accent)', background: 'rgba(0,188,212,0.1)',
+              color: 'var(--accent)', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600
+            }}
+            title="Export visible rows as CSV"
+          >
+            ⬇ CSV
+          </button>
         </div>
       </div>
 
@@ -629,18 +825,6 @@ function SectorIndices() {
         .pulse-glow { animation: pulse-glow 2s infinite; }
       `}</style>
       {(() => {
-        const chartData = filteredData
-          .filter(r => r.momentumScore != null)
-          .sort((a, b) => b.momentumScore - a.momentumScore)
-          .slice(0, 10)
-          .map(r => {
-            const short = r.name.replace('NIFTY ', '');
-            return { 
-              name: /^\d+$/.test(short) ? r.name : short, 
-              score: r.momentumScore
-            };
-          });
-        
         const getBarColor = (score) => {
           if (score >= 80) return '#10b981';
           if (score >= 60) return '#6ee7b7';
@@ -649,12 +833,24 @@ function SectorIndices() {
           return '#ef4444';
         };
 
-        if (chartData.length === 0) return null;
-        return (
-          <section className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1rem' }}>
-            <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1.1rem' }}>Kite Momentum Score by {activeTab === 'sector' ? 'Sector' : 'Index'} (1-100)</h3>
-            <p style={{ margin: '0 0 1rem 0', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Based on weighted 1W, 1M, and 3M returns</p>
-            <div style={{ width: '100%', height: Math.max(200, chartData.length * 40) }}>
+        const scored = filteredData.filter(r => r.momentumScore != null);
+        if (scored.length === 0) return null;
+
+        const shortName = (r) => {
+          const s = r.name.replace('NIFTY ', '');
+          return /^\d+$/.test(s) ? r.name : s;
+        };
+
+        const topData = [...scored].sort((a, b) => b.momentumScore - a.momentumScore).slice(0, 10)
+          .map(r => ({ name: shortName(r), score: r.momentumScore }));
+        const bottomData = [...scored].sort((a, b) => a.momentumScore - b.momentumScore).slice(0, 10)
+          .map(r => ({ name: shortName(r), score: r.momentumScore }));
+
+        const renderBarChart = (chartData, title, subtitle) => (
+          <section className="glass-panel" style={{ padding: '1.25rem', flex: 1, minWidth: '320px' }}>
+            <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>{title}</h3>
+            <p style={{ margin: '0 0 0.75rem 0', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{subtitle}</p>
+            <div style={{ width: '100%', height: Math.max(200, chartData.length * 38) }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 40, left: 10, bottom: 5 }}>
                   <XAxis type="number" domain={[0, 100]} tick={{ fill: 'var(--text-secondary)', fontSize: 12 }} axisLine={{ stroke: 'var(--border)' }} tickLine={false} />
@@ -664,23 +860,15 @@ function SectorIndices() {
                       if (!active || !payload || !payload.length) return null;
                       const d = payload[0];
                       return (
-                        <div style={{
-                          background: '#1a1a2e',
-                          border: '1px solid rgba(255,255,255,0.15)',
-                          borderRadius: '8px',
-                          padding: '0.6rem 1rem',
-                          boxShadow: '0 4px 16px rgba(0,0,0,0.4)'
-                        }}>
+                        <div style={{ background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', padding: '0.6rem 1rem', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
                           <p style={{ margin: 0, fontWeight: 600, color: '#fff', fontSize: '0.9rem' }}>{d.payload.name}</p>
-                          <p style={{ margin: '0.25rem 0 0', color: getBarColor(d.value), fontWeight: 700, fontSize: '1.1rem' }}>
-                            Score: {d.value}
-                          </p>
+                          <p style={{ margin: '0.25rem 0 0', color: getBarColor(d.value), fontWeight: 700, fontSize: '1.1rem' }}>Score: {d.value}</p>
                         </div>
                       );
                     }}
                     cursor={{ fill: 'rgba(255,255,255,0.03)' }}
                   />
-                  <Bar dataKey="score" radius={[0, 6, 6, 0]} barSize={24} label={{ position: 'right', fill: 'var(--text-secondary)', fontSize: 12, fontWeight: 600 }}>
+                  <Bar dataKey="score" radius={[0, 6, 6, 0]} barSize={22} label={{ position: 'right', fill: 'var(--text-secondary)', fontSize: 12, fontWeight: 600 }}>
                     {chartData.map((entry, index) => (
                       <RechartsCell key={`cell-${index}`} fill={getBarColor(entry.score)} />
                     ))}
@@ -689,6 +877,13 @@ function SectorIndices() {
               </ResponsiveContainer>
             </div>
           </section>
+        );
+
+        return (
+          <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+            {renderBarChart(topData, `Top 10 — ${activeTab === 'sector' ? 'Sectors' : 'Indices'}`, 'Strongest momentum (1W · 1M · 3M weighted, RSI-adjusted)')}
+            {renderBarChart(bottomData, `Bottom 10 — ${activeTab === 'sector' ? 'Sectors' : 'Indices'}`, 'Weakest momentum — underperformers to avoid')}
+          </div>
         );
       })()}
 
@@ -717,11 +912,12 @@ function SectorIndices() {
       />}
 
       <section className="glass-panel" style={{ padding: '1rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)', gap: '1rem', flexWrap: 'wrap' }}>
           <div>
             <input
+              ref={searchInputRef}
               type="text"
-              placeholder="Search indices..."
+              placeholder="Search indices... (Cmd/Ctrl+K)"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={{
@@ -730,93 +926,118 @@ function SectorIndices() {
                 border: '1px solid var(--border)',
                 background: 'var(--bg-dark)',
                 color: 'var(--text-primary)',
-                width: '250px',
+                width: '280px',
                 fontSize: '1rem',
                 outline: 'none'
               }}
             />
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.95rem', color: 'var(--text-primary)', fontWeight: '600' }}>
-            <input 
-              type="checkbox" 
-              checked={isHeatmap} 
-              onChange={e => setIsHeatmap(e.target.checked)} 
-              style={{ cursor: 'pointer', width: '16px', height: '16px' }}
-            />
-            Heatmap View
-          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+            {isHeatmap && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                <span>-10%</span>
+                <div style={{ width: '120px', height: '10px', borderRadius: '2px', background: 'linear-gradient(to right, rgba(239,68,68,0.9), rgba(255,255,255,0.04), rgba(16,185,129,0.9))', border: '1px solid var(--border)' }} />
+                <span>+10%</span>
+              </div>
+            )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem', color: 'var(--text-primary)', fontWeight: '600' }}>
+              <input
+                type="checkbox"
+                checked={isHeatmap}
+                onChange={e => setIsHeatmap(e.target.checked)}
+                style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+              />
+              Heatmap
+            </label>
+          </div>
         </div>
 
+        <div style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'right', fontSize: '0.85rem' }}>
-          <thead>
+          <thead style={{ position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5 }}>
             <tr>
-              <th onClick={() => requestSort('name')} style={{ textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('name')} style={{ textAlign: 'left', cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                 Index {renderSortIndicator('name')}
               </th>
-              <th onClick={() => requestSort('price')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('price')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                 Price {renderSortIndicator('price')}
               </th>
-              <th onClick={() => requestSort('1D')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('1D')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                 1D {renderSortIndicator('1D')}
               </th>
-              <th onClick={() => requestSort('1W')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
-                1W {renderSortIndicator('1W')}
-              </th>
-              <th onClick={() => requestSort('1M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+              {!hiddenColumns['1W'] && (
+                <th onClick={() => requestSort('1W')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
+                  1W {renderSortIndicator('1W')}
+                </th>
+              )}
+              <th onClick={() => requestSort('1M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                 1M {renderSortIndicator('1M')}
               </th>
-              <th onClick={() => requestSort('rs1M')} title="1-Month Relative Strength vs NIFTY 50" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
-                1M RS {renderSortIndicator('rs1M')}
+              <th onClick={() => requestSort('rs1M')} title={`1-Month Relative Strength vs ${rrgBenchmark.split(':')[1]}`} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
+                RS vs {(rrgBenchmark.split(':')[1] || '').replace('NIFTY ', '') || 'BM'} {renderSortIndicator('rs1M')}
               </th>
               {activeTab !== 'broad' && (
                 <>
-                  <th onClick={() => requestSort('rrgRatio')} title={`JdK RS-Ratio against ${rrgBenchmark.split(':')[1]}`} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+                  <th onClick={() => requestSort('rrgRatio')} title={`JdK RS-Ratio against ${rrgBenchmark.split(':')[1]}`} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                     RS-Ratio {renderSortIndicator('rrgRatio')}
                   </th>
-                  <th onClick={() => requestSort('rrgMomentum')} title={`JdK RS-Momentum against ${rrgBenchmark.split(':')[1]}`} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+                  <th onClick={() => requestSort('rrgMomentum')} title={`JdK RS-Momentum against ${rrgBenchmark.split(':')[1]}`} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                     RS-Momentum {renderSortIndicator('rrgMomentum')}
                   </th>
                 </>
               )}
-              <th onClick={() => requestSort('3M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('3M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                 3M {renderSortIndicator('3M')}
               </th>
-              <th onClick={() => requestSort('6M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
-                6M {renderSortIndicator('6M')}
-              </th>
-              <th onClick={() => requestSort('1Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+              {!hiddenColumns['6M'] && (
+                <th onClick={() => requestSort('6M')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
+                  6M {renderSortIndicator('6M')}
+                </th>
+              )}
+              <th onClick={() => requestSort('1Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                 1Y {renderSortIndicator('1Y')}
               </th>
-              <th onClick={() => requestSort('dist52WHigh')} title="% Distance from 52-Week High" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
+              <th onClick={() => requestSort('dist52WHigh')} title="% Distance from 52-Week High" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                 % 52W H {renderSortIndicator('dist52WHigh')}
               </th>
-              <th onClick={() => requestSort('3Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
-                3Y {renderSortIndicator('3Y')}
-              </th>
-              <th onClick={() => requestSort('5Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)' }}>
-                5Y {renderSortIndicator('5Y')}
-              </th>
-              <th onClick={() => requestSort('rsi14')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+              {!hiddenColumns['3Y'] && (
+                <th onClick={() => requestSort('3Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
+                  3Y {renderSortIndicator('3Y')}
+                </th>
+              )}
+              {!hiddenColumns['5Y'] && (
+                <th onClick={() => requestSort('5Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
+                  5Y {renderSortIndicator('5Y')}
+                </th>
+              )}
+              <th onClick={() => requestSort('rsi14')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center', background: '#0f0f1e' }}>
                 RSI {renderSortIndicator('rsi14')}
               </th>
-              <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. The % below shows the blended return." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+              <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. Hover the score for a breakdown." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center', background: '#0f0f1e' }}>
                 Momentum {renderSortIndicator('momentumScore')}
               </th>
               {activeTab !== 'broad' && (
-                <th onClick={() => requestSort('signalRank')} title="Automated intelligence analyzing trend, strength and momentum" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                <th onClick={() => requestSort('signalRank')} title="Automated intelligence analyzing trend, strength and momentum" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center', background: '#0f0f1e' }}>
                   Signal {renderSortIndicator('signalRank')}
                 </th>
               )}
             </tr>
           </thead>
           <tbody>
-            {filteredData.length > 0 ? filteredData.map((row, idx) => (
-              <tr 
-                key={row.id} 
-                onClick={() => row.token && navigate(`/instrument/${row.token}?symbol=${row.id.split(':')[1]}`)}
-                style={{ cursor: row.token ? 'pointer' : 'default', borderBottom: idx !== filteredData.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none', transition: 'background 0.2s' }}
+            {filteredData.length > 0 ? filteredData.map((row, idx) => {
+              const openRow = () => row.token && navigate(`/instrument/${row.token}?symbol=${row.id.split(':')[1]}`);
+              const delta = row.rrgMomentumDelta;
+              return (
+              <tr
+                key={row.id}
+                tabIndex={row.token ? 0 : -1}
+                onClick={openRow}
+                onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && row.token) { e.preventDefault(); openRow(); } }}
+                style={{ cursor: row.token ? 'pointer' : 'default', borderBottom: idx !== filteredData.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none', transition: 'background 0.2s', outline: 'none' }}
                 onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
                 onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                onFocus={(e) => e.currentTarget.style.background = 'rgba(0,188,212,0.05)'}
+                onBlur={(e) => e.currentTarget.style.background = 'transparent'}
               >
                 <td style={{ textAlign: 'left', padding: '0.5rem', fontWeight: 'bold' }}>
                   {row.name}
@@ -826,7 +1047,7 @@ function SectorIndices() {
                 </td>
                 <td style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>₹{row.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                 <Cell value={row['1D']} />
-                <Cell value={row['1W']} />
+                {!hiddenColumns['1W'] && <Cell value={row['1W']} />}
                 <Cell value={row['1M']} />
                 <Cell value={row.rs1M} isHeatmapCell={false} />
                 {activeTab !== 'broad' && (
@@ -840,11 +1061,11 @@ function SectorIndices() {
                   </>
                 )}
                 <Cell value={row['3M']} />
-                <Cell value={row['6M']} />
+                {!hiddenColumns['6M'] && <Cell value={row['6M']} />}
                 <Cell value={row['1Y']} />
                 <Cell value={row.dist52WHigh} isHeatmapCell={false} />
-                <Cell value={row['3Y']} />
-                <Cell value={row['5Y']} />
+                {!hiddenColumns['3Y'] && <Cell value={row['3Y']} />}
+                {!hiddenColumns['5Y'] && <Cell value={row['5Y']} />}
                 <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
                   {row.rsi14 === null ? (
                     <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
@@ -867,11 +1088,13 @@ function SectorIndices() {
                     </span>
                   )}
                 </td>
-                <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
+                <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center', position: 'relative' }}
+                    onMouseEnter={() => row.momentumBreakdown && setMomentumPopover(row.id)}
+                    onMouseLeave={() => setMomentumPopover(null)}>
                   {row.momentumScore == null ? (
                     <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
                   ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', cursor: 'help' }}>
                       <span style={{
                         display: 'inline-block',
                         padding: '0.2rem 0.6rem',
@@ -893,16 +1116,62 @@ function SectorIndices() {
                       }}>
                         {row.momentumScore}
                       </span>
-                      {row.rrgMomentumDelta != null && row.rrgMomentumDelta > 0 && (
-                        <span title="RS-Momentum is improving week-over-week" style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: 'bold' }}>▲</span>
+                      {delta != null && delta > 0 && (
+                        <span title="RS-Momentum improving week-over-week" style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: 'bold' }}>▲</span>
                       )}
+                      {delta != null && delta < 0 && (
+                        <span title="RS-Momentum declining week-over-week" style={{ color: '#ef4444', fontSize: '0.8rem', fontWeight: 'bold' }}>▼</span>
+                      )}
+                    </div>
+                  )}
+                  {momentumPopover === row.id && row.momentumBreakdown && (
+                    <div onClick={(e) => e.stopPropagation()} style={{
+                      position: 'absolute', right: '50%', top: '100%', transform: 'translateX(50%)', marginTop: '4px',
+                      background: '#0f172a', border: '1px solid #334155', borderRadius: '6px',
+                      padding: '0.6rem 0.75rem', minWidth: '240px', zIndex: 30,
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.6)', fontFamily: "'JetBrains Mono', monospace",
+                      textAlign: 'left', whiteSpace: 'normal'
+                    }}>
+                      <div style={{ fontSize: '0.7rem', color: '#cbd5e1', fontWeight: 700, letterSpacing: '1px', borderBottom: '1px solid #334155', paddingBottom: '0.3rem', marginBottom: '0.4rem' }}>
+                        SCORE BREAKDOWN — {row.momentumScore}
+                      </div>
+                      {[
+                        { label: `1W × ${W_1W.toFixed(2)}`, value: row.momentumBreakdown.w1w },
+                        { label: `1M × ${W_1M.toFixed(2)}`, value: row.momentumBreakdown.w1m },
+                        { label: `3M × ${W_3M.toFixed(2)}`, value: row.momentumBreakdown.w3m },
+                      ].map((it, i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', padding: '0.1rem 0' }}>
+                          <span style={{ color: '#cbd5e1' }}>{it.label}</span>
+                          <span style={{ color: it.value >= 0 ? '#10b981' : '#ef4444', fontWeight: 600 }}>
+                            {it.value >= 0 ? '+' : ''}{it.value.toFixed(2)}
+                          </span>
+                        </div>
+                      ))}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', padding: '0.15rem 0', borderTop: '1px dashed #334155', marginTop: '0.25rem' }}>
+                        <span style={{ color: '#94a3b8' }}>Raw weighted</span>
+                        <span style={{ color: '#cbd5e1', fontWeight: 600 }}>{row.momentumBreakdown.raw.toFixed(2)}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', padding: '0.15rem 0' }}>
+                        <span style={{ color: '#94a3b8' }}>RSI({row.rsi14 ?? '—'}) multiplier</span>
+                        <span style={{ color: row.momentumBreakdown.rsiMult === 1 ? '#94a3b8' : row.momentumBreakdown.rsiMult > 1 ? '#10b981' : '#ef4444', fontWeight: 600 }}>
+                          ×{row.momentumBreakdown.rsiMult.toFixed(2)}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', padding: '0.3rem 0 0 0', borderTop: '1px solid #334155', marginTop: '0.3rem' }}>
+                        <span style={{ color: '#cbd5e1', fontWeight: 700 }}>Adjusted</span>
+                        <span style={{ color: '#fff', fontWeight: 700 }}>{row.momentumBreakdown.adjusted.toFixed(2)}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', padding: '0.1rem 0' }}>
+                        <span style={{ color: '#94a3b8' }}>Percentile rank</span>
+                        <span style={{ color: '#38bdf8', fontWeight: 700 }}>{row.momentumBreakdown.percentile}</span>
+                      </div>
                     </div>
                   )}
                 </td>
                 {activeTab !== 'broad' && (
                   <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
                     {row.marketSignal && (
-                      <span 
+                      <span
                         onClick={(e) => { e.stopPropagation(); setActiveSignalModal(row); }}
                         title="Click to see algorithmic breakdown"
                         className={row.marketSignal.pulse ? 'pulse-glow' : ''}
@@ -924,13 +1193,15 @@ function SectorIndices() {
                   </td>
                 )}
               </tr>
-            )) : (
+            );
+            }) : (
               <tr>
-                <td colSpan="14" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
+                <td colSpan="16" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
               </tr>
             )}
           </tbody>
         </table>
+        </div>
       </section>
 
       {/* Signal Education Modal */}
@@ -1057,6 +1328,7 @@ function RRGChart({
         }
       }
       setRrgHidden(initial);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setHasInitializedHidden(true);
     }
   }, [rrg, hasInitializedHidden, setRrgHidden]);
@@ -1238,7 +1510,25 @@ function RRGChart({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.75rem' }}>
         <div>
           <h3 style={{ margin: '0 0 0.2rem 0', fontSize: '1.1rem' }}>Relative Rotation Graph</h3>
-          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>Sectors rotate clockwise: Leading → Weakening → Lagging → Improving</p>
+          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
+            Sectors rotate clockwise: Leading → Weakening → Lagging → Improving
+            {(() => {
+              if (!rrg?.sectors?.length) return null;
+              let latestDate = null;
+              for (const s of rrg.sectors) {
+                if (s.series?.length) {
+                  const d = s.series[s.series.length - 1].date;
+                  if (!latestDate || d > latestDate) latestDate = d;
+                }
+              }
+              if (!latestDate) return null;
+              return (
+                <> &nbsp;•&nbsp; <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                  Data through {new Date(latestDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                </span></>
+              );
+            })()}
+          </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
           
