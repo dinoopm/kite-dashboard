@@ -7,7 +7,7 @@ const { SMA, EMA, RSI, MACD, BollingerBands, ATR, VWAP } = require('technicalind
 const YahooFinance = require('yahoo-finance2').default;
 const yahooFinance = new YahooFinance();
 
-require('dotenv').config();
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const { createClient } = require('@supabase/supabase-js');
 let supabase = null;
 if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
