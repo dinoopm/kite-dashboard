@@ -24,7 +24,7 @@ function Dashboard() {
         fetch('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments: ["NSE:NIFTY 50", "NSE:NIFTY BANK", "BSE:SENSEX"] }),
+          body: JSON.stringify({ instruments: ["NSE:NIFTY 50", "BSE:SENSEX", "NSE:NIFTY 100", "NSE:NIFTY MIDCAP 100", "NSE:NIFTY SMLCAP 100"] }),
           signal
         })
       ]);
