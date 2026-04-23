@@ -7,6 +7,13 @@ const { SMA, EMA, RSI, MACD, BollingerBands, ATR, VWAP } = require('technicalind
 const YahooFinance = require('yahoo-finance2').default;
 const yahooFinance = new YahooFinance();
 
+require('dotenv').config();
+const { createClient } = require('@supabase/supabase-js');
+let supabase = null;
+if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
+  supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -226,6 +233,22 @@ async function reconnectMcp() {
 }
 
 // ─── API Routes ────────────────────────────────────────────────
+
+app.get('/api/fiidii', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
+  try {
+    const { data, error } = await supabase
+      .from('fii_dii_activity')
+      .select('*')
+      .order('trade_date', { ascending: false })
+      .limit(10);
+      
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/api/cache-status', (req, res) => {
   res.json({

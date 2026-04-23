@@ -6,7 +6,8 @@ function Dashboard() {
     holdings: null,
     mfHoldings: null,
     margins: null,
-    indices: null
+    indices: null,
+    fiiDii: null
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -26,15 +27,17 @@ function Dashboard() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ instruments: ["NSE:NIFTY 50", "BSE:SENSEX", "NSE:NIFTY 100", "NSE:NIFTY MIDCAP 100", "NSE:NIFTY SMLCAP 100"] }),
           signal
-        })
+        }),
+        fetch('/api/fiidii', { signal }).catch(() => null)
       ]);
       const profileData = await profileRes.json();
       const holdingsData = await holdingsRes.json();
       const mfData = await mfRes.json();
       const marginsData = await marginsRes.json();
       const quotesData = await quotesRes.json();
+      const fiiDiiData = fiiDiiRes ? await fiiDiiRes.json() : null;
 
-      let p = null, h = null, m = null, cash = null, idx = null;
+      let p = null, h = null, m = null, cash = null, idx = null, fd = null;
 
       if (profileData?.content?.[0]?.text) {
         try { p = JSON.parse(profileData.content[0].text); } catch (e) { }
@@ -62,8 +65,11 @@ function Dashboard() {
           idx = JSON.parse(quotesData.content[0].text);
         } catch (e) { }
       }
+      if (Array.isArray(fiiDiiData)) {
+        fd = fiiDiiData;
+      }
 
-      setData({ profile: p, holdings: h, mfHoldings: m, margins: cash, indices: idx });
+      setData({ profile: p, holdings: h, mfHoldings: m, margins: cash, indices: idx, fiiDii: fd });
 
     } catch (err) {
       if (err.name === 'AbortError') return;
@@ -323,6 +329,38 @@ function Dashboard() {
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No losers today</div>
               )}
             </div>
+          </div>
+        </div>
+
+        {/* FII/DII Card */}
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3 style={{ margin: 0, fontSize: '1.2rem' }}>Institutional Activity</h3>
+            <span style={{ background: 'rgba(236, 72, 153, 0.1)', color: '#ec4899', padding: '0.3rem 0.8rem', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em' }}>FII / DII</span>
+          </div>
+          <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '0' }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem', flex: 1 }}>
+            {data.fiiDii && data.fiiDii.length > 0 ? (
+              data.fiiDii.slice(0, 3).map((day, idx) => {
+                const isFIIPos = day.fii_net >= 0;
+                const isDIIPos = day.dii_net >= 0;
+                return (
+                  <div key={idx} style={{ background: 'rgba(0,0,0,0.2)', padding: '0.8rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>{day.trade_date}</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+                      <span style={{ fontSize: '0.85rem' }}>FII Net:</span>
+                      <span className={isFIIPos ? 'positive' : 'negative'} style={{ fontSize: '0.85rem', fontWeight: 600 }}>{isFIIPos ? '+' : ''}₹{fmt(day.fii_net)} Cr</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '0.85rem' }}>DII Net:</span>
+                      <span className={isDIIPos ? 'positive' : 'negative'} style={{ fontSize: '0.85rem', fontWeight: 600 }}>{isDIIPos ? '+' : ''}₹{fmt(day.dii_net)} Cr</span>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No data available. Restart backend server to sync.</div>
+            )}
           </div>
         </div>
 
