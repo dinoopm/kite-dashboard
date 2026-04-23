@@ -1,10 +1,11 @@
 # Kite Analytics — project context
 
+
 ## What this app is
 A read-only equity analytics app for Indian markets (NSE). Built with a Node.js
 CommonJS backend and React 19 frontend. Already shipped: Dashboard, Portfolio,
 Technical Alerts, Indices Performance, VIX Index pages.
-Currently building: Sector Deep-Dive (see PRD_Sector_DeepDive.md).
+Currently building: Sector Deep-Dive (see ./docs/PRD_Sector_DeepDive.md).
 
 ## Tech stack — exact versions, do not deviate
 
