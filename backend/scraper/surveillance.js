@@ -1,9 +1,7 @@
-const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
 const { createClient } = require('@supabase/supabase-js');
-const axios = require('axios');
-const csv = require('csv-parse/sync');
+const puppeteer = require('puppeteer');
 
 // Load environment variables
 const envPath = path.resolve(__dirname, '../../.env');
@@ -19,100 +17,167 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Setup axios with NSE Akamai bypass headers
-const headers = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'Connection': 'keep-alive',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
-  'Sec-Fetch-User': '?1',
-  'Upgrade-Insecure-Requests': '1'
-};
-
-const session = axios.create({ headers, withCredentials: true, timeout: 15000 });
-
 async function syncSurveillance() {
+  let browser;
   try {
-    console.log("[Surveillance Scraper] Initiating handshake...");
-    const handshakeRes = await session.get('https://www.nseindia.com');
-    const cookies = handshakeRes.headers['set-cookie'] ? handshakeRes.headers['set-cookie'].join('; ') : '';
-    
-    await new Promise(r => setTimeout(r, 1000));
-    
-    const asmUrl = process.env.NSE_ASM_URL || 'https://archives.nseindia.com/content/equities/asm_latest.csv';
-    const gsmUrl = process.env.NSE_GSM_URL || 'https://archives.nseindia.com/content/equities/gsm_latest.csv';
-    
+    console.log("[Surveillance] Launching headless browser...");
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox'] // needed for CI/CD (GitHub Actions)
+    });
+
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+
     let affectedStocks = [];
 
-    // 1. Fetch ASM
-    try {
-        console.log("[Surveillance Scraper] Fetching ASM list...");
-        const asmRes = await session.get(asmUrl, {
-            headers: { ...headers, 'Cookie': cookies },
-            responseType: 'text'
+    // ─── 1. Scrape ASM ─────────────────────────────────────────
+    // Intercept the JSON API call that the page makes internally
+    let asmData = null;
+    page.on('response', async response => {
+      const url = response.url();
+      if (url.includes('/api/reportASM') && response.status() === 200) {
+        try { asmData = await response.json(); } catch(e) {}
+      }
+    });
+
+    console.log("[Surveillance] Loading ASM report page...");
+    await page.goto('https://www.nseindia.com/reports/asm', { waitUntil: 'networkidle2', timeout: 60000 });
+    await new Promise(r => setTimeout(r, 2000));
+
+    if (asmData) {
+      // Process Long Term ASM
+      if (asmData.longterm?.data) {
+        asmData.longterm.data.forEach(row => {
+          if (row.symbol) {
+            affectedStocks.push({
+              symbol: row.symbol.trim(),
+              measure: 'ASM',
+              stage: row.asmSurvIndicator || 'Unknown'
+            });
+          }
         });
-        
-        const records = csv.parse(asmRes.data, { columns: true, skip_empty_lines: true });
-        records.forEach(row => {
-             const symbol = row['Symbol'] || row['SYMBOL'];
-             if (symbol) {
-                 affectedStocks.push({ symbol: symbol.trim(), measure: 'ASM' });
-             }
+        console.log(`[Surveillance] Parsed ${asmData.longterm.data.length} Long Term ASM stocks.`);
+      }
+
+      // Process Short Term ASM
+      if (asmData.shortterm?.data) {
+        asmData.shortterm.data.forEach(row => {
+          if (row.symbol) {
+            affectedStocks.push({
+              symbol: row.symbol.trim(),
+              measure: 'ASM',
+              stage: row.asmSurvIndicator || 'Unknown'
+            });
+          }
         });
-        console.log(`[Surveillance Scraper] Parsed ${records.length} ASM stocks.`);
-    } catch(e) {
-        console.error("[Surveillance Scraper] Failed to fetch ASM:", e.message);
+        console.log(`[Surveillance] Parsed ${asmData.shortterm.data.length} Short Term ASM stocks.`);
+      }
+    } else {
+      console.warn("[Surveillance] Could not intercept ASM API response.");
     }
 
-    // 2. Fetch GSM
+    // ─── 2. Scrape GSM ─────────────────────────────────────────
+    let gsmData = null;
+    const gsmHandler = async response => {
+      const url = response.url();
+      // GSM endpoint may differ — intercept any JSON from the GSM page
+      if ((url.includes('/api/reportGSM') || url.includes('/api/gsm')) && response.status() === 200) {
+        try { gsmData = await response.json(); } catch(e) {}
+      }
+    };
+    page.on('response', gsmHandler);
+
+    console.log("[Surveillance] Loading GSM report page...");
     try {
-        console.log("[Surveillance Scraper] Fetching GSM list...");
-        const gsmRes = await session.get(gsmUrl, {
-            headers: { ...headers, 'Cookie': cookies },
-            responseType: 'text'
-        });
-        
-        const records = csv.parse(gsmRes.data, { columns: true, skip_empty_lines: true });
-        records.forEach(row => {
-             const symbol = row['Symbol'] || row['SYMBOL'];
-             if (symbol) {
-                 affectedStocks.push({ symbol: symbol.trim(), measure: 'GSM' });
-             }
-        });
-        console.log(`[Surveillance Scraper] Parsed ${records.length} GSM stocks.`);
+      await page.goto('https://www.nseindia.com/reports/gsm', { waitUntil: 'networkidle2', timeout: 60000 });
+      await new Promise(r => setTimeout(r, 2000));
     } catch(e) {
-        console.error("[Surveillance Scraper] Failed to fetch GSM:", e.message);
+      console.warn("[Surveillance] GSM page navigation failed, trying alternative URL...");
+      try {
+        await page.goto('https://www.nseindia.com/regulations/graded-surveillance-measure', { waitUntil: 'networkidle2', timeout: 60000 });
+        await new Promise(r => setTimeout(r, 2000));
+      } catch(e2) {
+        console.warn("[Surveillance] GSM alternative page also failed:", e2.message);
+      }
     }
+
+    if (gsmData) {
+      const gsmEntries = gsmData.data || (Array.isArray(gsmData) ? gsmData : []);
+      gsmEntries.forEach(row => {
+        const symbol = row.symbol || row.Symbol;
+        if (symbol) {
+          affectedStocks.push({
+            symbol: symbol.trim(),
+            measure: 'GSM',
+            stage: row.gsmSurvIndicator || row.stage || 'Unknown'
+          });
+        }
+      });
+      console.log(`[Surveillance] Parsed ${gsmEntries.length} GSM stocks.`);
+    } else {
+      // Fallback: try to extract GSM data from the DOM table (only if page loaded)
+      try {
+        console.log("[Surveillance] No GSM API intercepted. Trying DOM extraction...");
+        const gsmFromDom = await page.evaluate(() => {
+          const tables = document.querySelectorAll('table');
+          const stocks = [];
+          tables.forEach(table => {
+            const headers = [...table.querySelectorAll('thead th')].map(h => h.innerText.trim().toUpperCase());
+            const symbolIdx = headers.findIndex(h => h === 'SYMBOL');
+            const stageIdx = headers.findIndex(h => h.includes('STAGE') || h.includes('GSM'));
+            if (symbolIdx < 0) return;
+            [...table.querySelectorAll('tbody tr')].forEach(row => {
+              const cols = [...row.querySelectorAll('td')].map(td => td.innerText.trim());
+              if (cols[symbolIdx]) {
+                stocks.push({ symbol: cols[symbolIdx], stage: cols[stageIdx] || 'Unknown' });
+              }
+            });
+          });
+          return stocks;
+        });
+
+        gsmFromDom.forEach(row => {
+          affectedStocks.push({ symbol: row.symbol, measure: 'GSM', stage: row.stage });
+        });
+        if (gsmFromDom.length > 0) {
+          console.log(`[Surveillance] Extracted ${gsmFromDom.length} GSM stocks from DOM.`);
+        }
+      } catch(domErr) {
+        console.warn("[Surveillance] GSM DOM extraction failed (page may not have loaded):", domErr.message);
+      }
+    }
+
+    await browser.close();
+    browser = null;
 
     if (affectedStocks.length === 0) {
-        console.warn("[Surveillance Scraper] No stocks found. Both URLs may have failed or changed.");
-        return;
+      console.warn("[Surveillance] No stocks found from any source.");
+      return;
     }
 
-    console.log(`[Surveillance Scraper] Total surveillance stocks found: ${affectedStocks.length}. Upserting to Supabase...`);
+    console.log(`[Surveillance] Total surveillance stocks: ${affectedStocks.length}. Syncing to Supabase...`);
 
-    // We first clear the table to remove stocks that are no longer under surveillance
-    // Be careful here in a production app with multiple concurrent readers, 
-    // but for a weekly batch update this is the simplest way to clear old state.
+    // Clear old data and upsert new list
     const { error: deleteErr } = await supabase.from('surveillance_stocks').delete().neq('symbol', 'DUMMY');
-    if (deleteErr) throw new Error("Failed to clear old surveillance data: " + deleteErr.message);
+    if (deleteErr) throw new Error("Failed to clear old data: " + deleteErr.message);
 
-    // Upsert new list
-    const { error: insertErr } = await supabase
+    // Upsert in batches of 100 to avoid payload limits
+    for (let i = 0; i < affectedStocks.length; i += 100) {
+      const batch = affectedStocks.slice(i, i + 100);
+      const { error: insertErr } = await supabase
         .from('surveillance_stocks')
-        .upsert(affectedStocks, { onConflict: 'symbol' });
-        
-    if (insertErr) throw new Error("Supabase Insert Error: " + insertErr.message);
+        .upsert(batch, { onConflict: 'symbol' });
+      if (insertErr) throw new Error("Supabase Insert Error: " + insertErr.message);
+    }
 
-    console.log("[Surveillance Scraper] Successfully synced surveillance data.");
+    console.log(`[Surveillance] ✅ Successfully synced ${affectedStocks.length} stocks.`);
 
   } catch (err) {
-    console.error("[Surveillance Scraper] Fatal Error:", err);
+    console.error("[Surveillance] Fatal Error:", err);
     process.exit(1);
+  } finally {
+    if (browser) await browser.close();
   }
 }
 
