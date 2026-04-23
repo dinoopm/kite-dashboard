@@ -65,13 +65,14 @@ function Portfolio() {
 
   const getTotalInvestment = () => {
     if (!holdings || !Array.isArray(holdings)) return 0;
-    // Use t1_quantity + realised_quantity to get the true portfolio quantity as it matches Kite Console
-    return holdings.reduce((sum, h) => sum + (h.average_price * ((h.t1_quantity || 0) + (h.realised_quantity || 0))), 0);
+    // Use h.quantity — Kite's canonical held qty. t1_quantity + realised_quantity can both be 0
+    // for stocks in certain settlement states, silently excluding them from totals.
+    return holdings.reduce((sum, h) => sum + (h.average_price * (h.quantity || 0)), 0);
   };
 
   const getCurrentValue = () => {
     if (!holdings || !Array.isArray(holdings)) return 0;
-    return holdings.reduce((sum, h) => sum + (h.last_price * ((h.t1_quantity || 0) + (h.realised_quantity || 0))), 0);
+    return holdings.reduce((sum, h) => sum + (h.last_price * (h.quantity || 0)), 0);
   };
 
   const totalInv = getTotalInvestment();
@@ -82,7 +83,7 @@ function Portfolio() {
   const filteredAndSortedHoldings = (holdings || [])
     .filter(item => item.tradingsymbol.toLowerCase().includes(searchTerm.toLowerCase()))
     .map(item => {
-      const q = (item.t1_quantity || 0) + (item.realised_quantity || 0);
+      const q = item.quantity || 0;
       const currentValue = q * item.last_price;
       const investment = q * item.average_price;
       const itemPL = item.pnl !== undefined ? item.pnl : (currentValue - investment);
@@ -205,7 +206,7 @@ function Portfolio() {
           {(() => {
             const todaysReturn = (holdings || []).reduce((sum, h) => {
               const dayChange = h.day_change !== undefined ? h.day_change : (h.last_price - (h.close_price || h.last_price));
-              return sum + (dayChange * ((h.t1_quantity || 0) + (h.realised_quantity || 0)));
+              return sum + (dayChange * (h.quantity || 0));
             }, 0);
             const todaysReturnPct = currentVal ? ((todaysReturn / (currentVal - todaysReturn)) * 100) : 0;
 

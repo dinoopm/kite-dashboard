@@ -84,10 +84,13 @@ function Dashboard() {
   if (error) return <div className="dashboard-layout"><div className="glass-panel"><p className="negative">{error}</p><button onClick={() => fetchData()} style={{ padding: '0.5rem 1rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem' }}>Retry</button></div></div>;
 
   // Aggregating Stocks
+  // Use h.quantity (Kite's canonical held qty). t1_quantity + realised_quantity can be 0
+  // for stocks in certain settlement states (e.g. ZENTEC: qty=117 but both sub-fields=0),
+  // causing them to be silently excluded from Invested/Value totals.
   const stocks = Array.isArray(data.holdings) ? data.holdings : [];
-  const totalStockInv = stocks.reduce((sum, h) => sum + (h.average_price * ((h.t1_quantity || 0) + (h.realised_quantity || 0))), 0);
-  const totalStockVal = stocks.reduce((sum, h) => sum + (h.last_price * ((h.t1_quantity || 0) + (h.realised_quantity || 0))), 0);
-  const stockPl = stocks.reduce((sum, h) => sum + (h.pnl !== undefined ? h.pnl : ((h.last_price - h.average_price) * ((h.t1_quantity || 0) + (h.realised_quantity || 0)))), 0);
+  const totalStockInv = stocks.reduce((sum, h) => sum + (h.average_price * (h.quantity || 0)), 0);
+  const totalStockVal = stocks.reduce((sum, h) => sum + (h.last_price * (h.quantity || 0)), 0);
+  const stockPl = stocks.reduce((sum, h) => sum + (h.pnl !== undefined ? h.pnl : ((h.last_price - h.average_price) * (h.quantity || 0))), 0);
   const stockPlPct = totalStockInv ? ((stockPl / totalStockInv) * 100).toFixed(2) : 0;
 
   // Calculate Top Movers
