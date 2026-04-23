@@ -17,7 +17,7 @@ function Dashboard() {
       setLoading(true);
       setError(null);
 
-      const [profileRes, holdingsRes, mfRes, marginsRes, quotesRes] = await Promise.all([
+      const [profileRes, holdingsRes, mfRes, marginsRes, quotesRes, fiiDiiRes] = await Promise.all([
         fetch('/api/profile', { signal }),
         fetch('/api/holdings', { signal }),
         fetch('/api/mf-holdings', { signal }),
