@@ -1,4 +1,4 @@
-name: FII/DII Data Sync
+name: Market Data Sync
 
 on:
   schedule:
@@ -28,3 +28,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: node backend/scraper/sync.js
+
+      - name: Run Participant OI Scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: node backend/scraper/participant_oi.js

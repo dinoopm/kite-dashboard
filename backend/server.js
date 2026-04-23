@@ -250,6 +250,22 @@ app.get('/api/fiidii', async (req, res) => {
   }
 });
 
+app.get('/api/participant-oi', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
+  try {
+    const { data, error } = await supabase
+      .from('participant_oi')
+      .select('*')
+      .order('trade_date', { ascending: false })
+      .limit(20);
+      
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/cache-status', (req, res) => {
   res.json({
     ready: cacheReady,
