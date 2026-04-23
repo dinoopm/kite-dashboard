@@ -260,7 +260,7 @@ function Portfolio() {
                     <th onClick={() => handleSort('quantity')} style={{cursor: 'pointer'}}>Qty. <SortIcon field="quantity"/></th>
                     <th onClick={() => handleSort('average_price')} style={{cursor: 'pointer'}}>Avg. Cost <SortIcon field="average_price"/></th>
                     <th onClick={() => handleSort('last_price')} style={{cursor: 'pointer'}}>LTP <SortIcon field="last_price"/></th>
-                    <th onClick={() => handleSort('dayChange')} style={{cursor: 'pointer'}}>Day Chg. <SortIcon field="dayChange"/></th>
+                    <th onClick={() => handleSort('dayChangePct')} style={{cursor: 'pointer'}}>Day Chg. <SortIcon field="dayChangePct"/></th>
                     <th onClick={() => handleSort('investment')} style={{cursor: 'pointer'}}>Invested <SortIcon field="investment"/></th>
                     <th onClick={() => handleSort('currentValue')} style={{cursor: 'pointer'}}>Cur. Value <SortIcon field="currentValue"/></th>
                     <th onClick={() => handleSort('itemPL')} style={{cursor: 'pointer'}}>P&L <SortIcon field="itemPL"/></th>
