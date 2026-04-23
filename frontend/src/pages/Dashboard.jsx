@@ -344,6 +344,8 @@ function Dashboard() {
               data.fiiDii.slice(0, 3).map((day, idx) => {
                 const isFIIPos = day.fii_net >= 0;
                 const isDIIPos = day.dii_net >= 0;
+                const totalNet = day.fii_net + day.dii_net;
+                const isTotalPos = totalNet >= 0;
                 return (
                   <div key={idx} style={{ background: 'rgba(0,0,0,0.2)', padding: '0.8rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>{day.trade_date}</div>
@@ -351,9 +353,13 @@ function Dashboard() {
                       <span style={{ fontSize: '0.85rem' }}>FII Net:</span>
                       <span className={isFIIPos ? 'positive' : 'negative'} style={{ fontSize: '0.85rem', fontWeight: 600 }}>{isFIIPos ? '+' : ''}₹{fmt(day.fii_net)} Cr</span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.4rem' }}>
                       <span style={{ fontSize: '0.85rem' }}>DII Net:</span>
                       <span className={isDIIPos ? 'positive' : 'negative'} style={{ fontSize: '0.85rem', fontWeight: 600 }}>{isDIIPos ? '+' : ''}₹{fmt(day.dii_net)} Cr</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.4rem' }}>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', fontWeight: 500 }}>Net Flow:</span>
+                      <span className={isTotalPos ? 'positive' : 'negative'} style={{ fontSize: '0.85rem', fontWeight: 700 }}>{isTotalPos ? '+' : ''}₹{fmt(totalNet)} Cr</span>
                     </div>
                   </div>
                 );
