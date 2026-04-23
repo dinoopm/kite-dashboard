@@ -80,8 +80,26 @@ function Dashboard() {
     return () => controller.abort();
   }, [])
 
-  if (loading) return <div className="loader"></div>;
-  if (error) return <div className="dashboard-layout"><div className="glass-panel"><p className="negative">{error}</p><button onClick={() => fetchData()} style={{ padding: '0.5rem 1rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem' }}>Retry</button></div></div>;
+  if (loading) return (
+    <div className="dashboard-layout" style={{ justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
+      <div className="loader" style={{ width: '48px', height: '48px', borderWidth: '4px' }}></div>
+      <p style={{ marginTop: '1rem', color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>SYNCING PORTFOLIO</p>
+    </div>
+  );
+  if (error) return (
+    <div className="dashboard-layout">
+      <div className="glass-panel" style={{ textAlign: 'center', padding: '4rem 2rem', maxWidth: '500px', margin: '4rem auto' }}>
+        <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>⚠️</div>
+        <p className="negative" style={{ fontSize: '1.2rem', marginBottom: '1.5rem' }}>{error}</p>
+        <button 
+          onClick={() => { const c = new AbortController(); fetchData(c.signal); }} 
+          style={{ padding: '0.75rem 2rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '30px', cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s', boxShadow: '0 4px 14px rgba(56, 189, 248, 0.4)' }}
+        >
+          Retry Connection
+        </button>
+      </div>
+    </div>
+  );
 
   // Aggregating Stocks
   // Use h.quantity (Kite's canonical held qty). t1_quantity + realised_quantity can be 0
@@ -104,7 +122,7 @@ function Dashboard() {
     }).sort((a, b) => b.pChgPct - a.pChgPct);
 
     topWinners = movers.filter(m => m.pChgPct > 0).slice(0, 3);
-    topLosers = movers.filter(m => m.pChgPct < 0).reverse().slice(0, 3);
+    topLosers = movers.filter(m => m.pChgPct < 0).sort((a, b) => a.pChgPct - b.pChgPct).slice(0, 3); // Bug fix: avoiding .reverse() mutation
   }
 
   // Aggregating MFs
@@ -129,20 +147,22 @@ function Dashboard() {
 
   return (
     <div className="dashboard-layout">
-      <header className="header">
+      {/* Header */}
+      <header className="header" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '1.5rem', marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h1>Overview Dashboard</h1>
-          <p>Welcome back, {data.profile?.user_name || "Trader"}</p>
+          <h1 style={{ fontSize: '2.5rem', margin: '0 0 0.5rem 0', background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Dashboard</h1>
+          <p style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-secondary)' }}>Welcome back, <strong style={{ color: 'var(--text-primary)' }}>{data.profile?.user_name || "Trader"}</strong></p>
         </div>
-        <div className="glass-panel" style={{ padding: '0.5rem 1rem' }}>
-          <span className="label">User ID: </span>
-          <strong>{data.profile?.user_id}</strong>
+        <div className="glass-panel" style={{ padding: '0.6rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.75rem', borderRadius: '30px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}>
+          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--success)', boxShadow: '0 0 10px var(--success)' }}></div>
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>User ID:</span>
+          <strong style={{ letterSpacing: '0.05em' }}>{data.profile?.user_id}</strong>
         </div>
       </header>
 
       {/* Major Indices */}
       {data.indices && (
-        <section style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+        <section style={{ display: 'flex', gap: '1rem', marginBottom: '2.5rem', flexWrap: 'wrap' }}>
           {Object.entries(data.indices).map(([symbol, quote]) => {
             const name = symbol.split(':')[1];
             // Provide a fallback if net_change wasn't explicitly available
@@ -150,11 +170,16 @@ function Dashboard() {
             const changePct = quote.ohlc?.close ? parseFloat(((change / quote.ohlc.close) * 100).toFixed(2)) : 0;
             const isPositive = change >= 0;
             return (
-              <div key={symbol} className="glass-panel" style={{ flex: '1', minWidth: '200px', padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <span className="label" style={{ fontSize: '0.85rem' }}>{name}</span>
-                <span className="value" style={{ fontSize: '1.25rem' }}>{fmt(quote.last_price)}</span>
-                <span className={`label ${isPositive ? 'positive' : 'negative'}`} style={{ fontSize: '0.85rem' }}>
-                  {isPositive ? '+' : ''}{change.toFixed(2)} ({changePct.toFixed(2)}%)
+              <div key={symbol} className="glass-panel stat-card" style={{ flex: '1', minWidth: '220px', padding: '1.25rem', background: 'linear-gradient(145deg, rgba(30,41,59,0.8) 0%, rgba(15,23,42,0.9) 100%)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                  <span className="label" style={{ margin: 0 }}>{name}</span>
+                  <div style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', background: isPositive ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', color: isPositive ? 'var(--success)' : 'var(--danger)', fontSize: '0.75rem', fontWeight: 600 }}>
+                    {isPositive ? '▲' : '▼'} {changePct.toFixed(2)}%
+                  </div>
+                </div>
+                <span className="value" style={{ fontSize: '1.75rem' }}>{fmt(quote.last_price)}</span>
+                <span className={`label ${isPositive ? 'positive' : 'negative'}`} style={{ marginTop: '0.25rem', marginBottom: 0, textTransform: 'none' }}>
+                  {isPositive ? '+' : ''}{change.toFixed(2)} pts
                 </span>
               </div>
             );
@@ -163,125 +188,139 @@ function Dashboard() {
       )}
 
       {/* Net Worth / Grand Totals */}
-      <section className="glass-panel" style={{ marginBottom: '2rem', background: 'linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%)', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-        <h2 style={{ marginBottom: '1.5rem', color: 'var(--text-primary)' }}>Net Portfolio</h2>
+      <section style={{ marginBottom: '2.5rem' }}>
+        <h2 style={{ marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-primary)' }}>
+          <span style={{ color: 'var(--accent)' }}>✦</span> Net Portfolio
+        </h2>
         <div className="grid">
-          <div>
+          <div className="glass-panel stat-card" style={{ padding: '1.5rem', borderLeft: '4px solid var(--text-secondary)' }}>
             <span className="label">Total Invested</span>
-            <span className="value" style={{ fontSize: '1.5rem' }}>₹{fmt(totalInv)}</span>
+            <span className="value">₹{fmt(totalInv)}</span>
           </div>
-          <div>
+          <div className="glass-panel stat-card" style={{ padding: '1.5rem', borderLeft: '4px solid var(--accent)' }}>
             <span className="label">Total Current Value</span>
-            <span className="value" style={{ fontSize: '1.5rem', color: 'var(--accent)' }}>₹{fmt(totalVal)}</span>
+            <span className="value" style={{ color: 'var(--accent)' }}>₹{fmt(totalVal)}</span>
           </div>
-          <div>
+          <div className="glass-panel stat-card" style={{ padding: '1.5rem', borderLeft: `4px solid ${totalPl >= 0 ? 'var(--success)' : 'var(--danger)'}` }}>
             <span className="label">Total P&L</span>
-            <span className={`value ${totalPl >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.5rem' }}>
-              {totalPl >= 0 ? '+' : ''}₹{fmt(totalPl)} ({totalPlPct}%)
+            <span className={`value ${totalPl >= 0 ? 'positive' : 'negative'}`}>
+              {totalPl >= 0 ? '+' : ''}₹{fmt(totalPl)}
+            </span>
+            <span className={`label ${totalPl >= 0 ? 'positive' : 'negative'}`} style={{ marginTop: '0.25rem', marginBottom: 0, textTransform: 'none' }}>
+              {totalPl >= 0 ? '▲' : '▼'} {totalPlPct}% Overall Return
             </span>
           </div>
         </div>
       </section>
 
-      <section className="grid" style={{ marginBottom: '2rem', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
+      {/* Detailed Breakdown */}
+      <section className="grid" style={{ marginBottom: '2rem', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
 
         {/* Stocks Card */}
-        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0 }}>Equities</h3>
-            <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>{stocks.length} Assets</span>
+            <h3 style={{ margin: 0, fontSize: '1.2rem' }}>Equities</h3>
+            <span style={{ background: 'rgba(56, 189, 248, 0.1)', color: 'var(--accent)', padding: '0.3rem 0.8rem', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em' }}>{stocks.length} ASSETS</span>
           </div>
-          <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }} />
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span className="label">Invested</span>
-            <strong>₹{fmt(totalStockInv)}</strong>
+          <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '0' }} />
+          <div className="stat-card" style={{ marginTop: '0.5rem' }}>
+            <span className="label">Current Value</span>
+            <span className="value" style={{ fontSize: '1.75rem' }}>₹{fmt(totalStockVal)}</span>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span className="label">Current</span>
-            <strong>₹{fmt(totalStockVal)}</strong>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span className="label">P&L</span>
-            <strong className={stockPl >= 0 ? 'positive' : 'negative'}>
-              {stockPl >= 0 ? '+' : ''}₹{fmt(stockPl)} ({stockPlPct}%)
-            </strong>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', marginTop: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Invested</span>
+              <span style={{ fontWeight: 500 }}>₹{fmt(totalStockInv)}</span>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block' }}>P&L</span>
+              <strong className={stockPl >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.95rem' }}>
+                {stockPl >= 0 ? '▲' : '▼'} ₹{fmt(Math.abs(stockPl))} ({stockPlPct}%)
+              </strong>
+            </div>
           </div>
         </div>
 
         {/* Mutual Funds Card */}
-        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0 }}>Mutual Funds</h3>
-            <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>{mfs.length} Assets</span>
+            <h3 style={{ margin: 0, fontSize: '1.2rem' }}>Mutual Funds</h3>
+            <span style={{ background: 'rgba(162, 155, 254, 0.1)', color: '#a29bfe', padding: '0.3rem 0.8rem', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em' }}>{mfs.length} ASSETS</span>
           </div>
-          <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }} />
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span className="label">Invested</span>
-            <strong>₹{fmt(totalMfInv)}</strong>
+          <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '0' }} />
+          <div className="stat-card" style={{ marginTop: '0.5rem' }}>
+            <span className="label">Current Value</span>
+            <span className="value" style={{ fontSize: '1.75rem' }}>₹{fmt(totalMfVal)}</span>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span className="label">Current</span>
-            <strong>₹{fmt(totalMfVal)}</strong>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span className="label">P&L</span>
-            <strong className={mfPl >= 0 ? 'positive' : 'negative'}>
-              {mfPl >= 0 ? '+' : ''}₹{fmt(mfPl)} ({mfPlPct}%)
-            </strong>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', marginTop: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Invested</span>
+              <span style={{ fontWeight: 500 }}>₹{fmt(totalMfInv)}</span>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block' }}>P&L</span>
+              <strong className={mfPl >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.95rem' }}>
+                {mfPl >= 0 ? '▲' : '▼'} ₹{fmt(Math.abs(mfPl))} ({mfPlPct}%)
+              </strong>
+            </div>
           </div>
         </div>
 
         {/* Cash Margins Card */}
-        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0 }}>Cash & Margins</h3>
-            <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>Equity</span>
+            <h3 style={{ margin: 0, fontSize: '1.2rem' }}>Cash & Margins</h3>
+            <span style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)', padding: '0.3rem 0.8rem', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em' }}>LIVE</span>
           </div>
-          <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }} />
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span className="label">Available Margin (Live)</span>
-            <strong style={{ color: 'var(--accent)' }}>₹{fmt(availableMargin)}</strong>
+          <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '0' }} />
+          <div className="stat-card" style={{ marginTop: '0.5rem' }}>
+            <span className="label">Available Margin</span>
+            <span className="value" style={{ fontSize: '1.75rem', color: 'var(--accent)' }}>₹{fmt(availableMargin)}</span>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span className="label">Opening Balance</span>
-            <strong>₹{fmt(openingBalance)}</strong>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span className="label">Utilised</span>
-            <strong>₹{fmt(marginsObj?.equity?.utilised?.debits || 0)}</strong>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', marginTop: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Opening</span>
+              <span style={{ fontWeight: 500 }}>₹{fmt(openingBalance)}</span>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block' }}>Utilised</span>
+              <span style={{ fontWeight: 500, color: 'var(--danger)' }}>₹{fmt(marginsObj?.equity?.utilised?.debits || 0)}</span>
+            </div>
           </div>
         </div>
 
         {/* Today's Movers Card */}
-        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0 }}>Today's Movers</h3>
-            <span style={{ background: 'var(--bg-dark)', padding: '0.2rem 0.6rem', borderRadius: '4px', fontSize: '0.8rem' }}>Equity Top 3</span>
+            <h3 style={{ margin: 0, fontSize: '1.2rem' }}>Today's Movers</h3>
+            <span style={{ background: 'rgba(243, 156, 18, 0.1)', color: '#f39c12', padding: '0.3rem 0.8rem', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 600, letterSpacing: '0.05em' }}>TOP 3 EQUITY</span>
           </div>
-          <hr style={{ borderColor: 'rgba(255,255,255,0.1)', margin: '0.5rem 0' }} />
+          <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '0' }} />
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            <div>
-              <span className="label" style={{ color: 'var(--success)', display: 'block', marginBottom: '0.5rem' }}>Top 3 Winners</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem', flex: 1 }}>
+            {/* Winners */}
+            <div style={{ background: 'rgba(16, 185, 129, 0.05)', padding: '0.8rem', borderRadius: '8px', border: '1px solid rgba(16, 185, 129, 0.1)' }}>
+              <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--success)', fontWeight: 700, letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Top Winners</div>
               {topWinners.length > 0 ? topWinners.map((gainer, idx) => (
-                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
-                  <strong>{gainer.tradingsymbol}</strong>
-                  <span className="positive">+{gainer.pChgPct.toFixed(2)}%</span>
+                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: idx !== topWinners.length - 1 ? '0.4rem' : '0' }}>
+                  <strong style={{ fontSize: '0.9rem' }}>{gainer.tradingsymbol}</strong>
+                  <span className="positive" style={{ fontSize: '0.9rem', fontWeight: 600 }}>+{gainer.pChgPct.toFixed(2)}%</span>
                 </div>
               )) : (
-                <div className="value" style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>--</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No gainers today</div>
               )}
             </div>
 
-            <div>
-              <span className="label" style={{ color: 'var(--danger)', display: 'block', marginBottom: '0.5rem' }}>Top 3 Losers</span>
+            {/* Losers */}
+            <div style={{ background: 'rgba(239, 68, 68, 0.05)', padding: '0.8rem', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.1)', marginTop: 'auto' }}>
+              <div style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: 'var(--danger)', fontWeight: 700, letterSpacing: '0.05em', marginBottom: '0.6rem' }}>Top Losers</div>
               {topLosers.length > 0 ? topLosers.map((loser, idx) => (
-                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
-                  <strong>{loser.tradingsymbol}</strong>
-                  <span className="negative">{loser.pChgPct.toFixed(2)}%</span>
+                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: idx !== topLosers.length - 1 ? '0.4rem' : '0' }}>
+                  <strong style={{ fontSize: '0.9rem' }}>{loser.tradingsymbol}</strong>
+                  <span className="negative" style={{ fontSize: '0.9rem', fontWeight: 600 }}>{loser.pChgPct.toFixed(2)}%</span>
                 </div>
               )) : (
-                <div className="value" style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>--</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No losers today</div>
               )}
             </div>
           </div>
