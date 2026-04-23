@@ -266,6 +266,20 @@ app.get('/api/participant-oi', async (req, res) => {
   }
 });
 
+app.get('/api/surveillance', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
+  try {
+    const { data, error } = await supabase
+      .from('surveillance_stocks')
+      .select('*');
+      
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/cache-status', (req, res) => {
   res.json({
     ready: cacheReady,
