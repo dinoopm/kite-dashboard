@@ -112,6 +112,39 @@ async function refreshTodayCandle(token) {
   }
 }
 
+// Sector lookup via Yahoo Finance, cached in-memory for the life of the process.
+// First /api/alerts call after boot pays one Yahoo round-trip per holding;
+// subsequent calls are instant. `null` is a valid cached value (lookup failed).
+const sectorCache = {};
+async function getSectorCached(symbol) {
+  if (sectorCache[symbol] !== undefined) return sectorCache[symbol];
+  try {
+    const yahooSym = toYahooSymbol(symbol);
+    const q = await yahooFinance.quoteSummary(yahooSym, { modules: ['assetProfile'] });
+    sectorCache[symbol] = q?.assetProfile?.sector || null;
+  } catch {
+    sectorCache[symbol] = null;
+  }
+  return sectorCache[symbol];
+}
+
+// Surface sectors where ≥3 holdings are flagged AVOID/SELL — concentration risk.
+function computeSectorConcentration(alerts) {
+  const bySector = {};
+  for (const a of alerts) {
+    const sec = a.sector || 'Unknown';
+    if (!bySector[sec]) bySector[sec] = { total: 0, flagged: 0, symbols: [] };
+    bySector[sec].total += 1;
+    if (a.tradePlan?.action === 'AVOID' || a.tradePlan?.action === 'SELL (AT RANGE)') {
+      bySector[sec].flagged += 1;
+      bySector[sec].symbols.push(a.symbol);
+    }
+  }
+  return Object.entries(bySector)
+    .filter(([, v]) => v.flagged >= 3)
+    .map(([sector, v]) => ({ sector, flagged: v.flagged, total: v.total, symbols: v.symbols }));
+}
+
 // Kite MCP returns at most ~1 year of daily candles per request.
 // To get multi-year data we fetch in 1-year chunks and concatenate.
 async function fetchHistoricalMultiYear(token, years = 5) {
@@ -1120,7 +1153,7 @@ app.get('/api/alerts', async (req, res) => {
 
         // Assign SL and TGT
         tradePlan.sl = candidateSL;
-        tradePlan.tgt = (tradePlan.action === 'BUY SEEN' || tradePlan.action.includes('BREAKOUT'))
+        tradePlan.tgt = (tradePlan.action === 'BUY SEEN' || tradePlan.action === 'ADD' || tradePlan.action.includes('BREAKOUT'))
           ? candidateTgtBreakout
           : candidateTgtBuy;
 
@@ -1130,6 +1163,24 @@ app.get('/api/alerts', async (req, res) => {
           tradePlan.action = 'HOLD / WAIT';
           tradePlan.reason = `Setup is bullish but reward/risk is only ${tradePlan.rrRatio}× (needs ≥1.5×). TG ₹${tradePlan.tgt} vs SL ₹${tradePlan.sl} — not enough upside.`;
         }
+
+        // --- Holding-aware overrides: rename BUY SEEN→ADD when already owned,
+        // and HOLD (OVERBOUGHT)→TRIM when sitting on ≥25% unrealized profit.
+        // Runs AFTER R:R gate so a demoted BUY SEEN doesn't accidentally become ADD.
+        const isOwned = (h.quantity ?? 0) > 0;
+        const positionPnlPct = (h.average_price > 0 && h.last_price)
+          ? ((h.last_price - h.average_price) / h.average_price) * 100
+          : 0;
+        if (isOwned && tradePlan.action === 'BUY SEEN') {
+          tradePlan.action = 'ADD';
+          tradePlan.reason = `You own ${h.quantity} @ ₹${h.average_price.toFixed(1)}. ${tradePlan.reason}`;
+        }
+        if (isOwned && tradePlan.action === 'HOLD (OVERBOUGHT)' && positionPnlPct >= 25) {
+          tradePlan.action = 'TRIM';
+          tradePlan.reason = `Up ${positionPnlPct.toFixed(0)}% on this position and RSI is stretched to ${rsi14 !== null ? rsi14.toFixed(0) : 'high'}. Consider booking partial profits.`;
+        }
+
+        const sector = await getSectorCached(symbol);
 
         alerts.push({
           symbol,
@@ -1160,12 +1211,36 @@ app.get('/api/alerts', async (req, res) => {
           rsiHistory,
           confidence,
           confBreakdown,
-          alerts: stockAlerts
+          alerts: stockAlerts,
+          // Holding context — every row on this page IS a holding.
+          quantity: h.quantity ?? 0,
+          avgPrice: h.average_price ?? 0,
+          pnl: h.pnl ?? 0,
+          pnlPct: (h.average_price > 0 && (h.quantity ?? 0) > 0)
+            ? +(((h.last_price - h.average_price) / h.average_price) * 100).toFixed(2)
+            : null,
+          dayChangeRupee: +(((h.day_change ?? 0) * (h.quantity ?? 0))).toFixed(2),
+          sector
         });
       }
     }
 
-    res.json(alerts);
+    const totalInvested = alerts.reduce((s, a) => s + ((a.avgPrice || 0) * (a.quantity || 0)), 0);
+    const totalPnl      = alerts.reduce((s, a) => s + (a.pnl || 0), 0);
+    const summary = {
+      todayPnlRupee: +alerts.reduce((s, a) => s + (a.dayChangeRupee || 0), 0).toFixed(2),
+      totalPnlRupee: +totalPnl.toFixed(2),
+      totalPnlPct:   totalInvested > 0 ? +((totalPnl / totalInvested) * 100).toFixed(2) : null,
+      totalInvested: +totalInvested.toFixed(2),
+      totalHoldings: alerts.length,
+      flagCounts: {
+        avoid: alerts.filter(a => a.tradePlan?.action === 'AVOID').length,
+        trim:  alerts.filter(a => a.tradePlan?.action === 'TRIM').length,
+        add:   alerts.filter(a => a.tradePlan?.action === 'ADD').length,
+      },
+      sectorConcentration: computeSectorConcentration(alerts),
+    };
+    res.json({ alerts, summary });
   } catch (err) {
     console.error("Alerts computation error:", err);
     res.status(500).json({ error: "Failed to compute alerts: " + err.message });

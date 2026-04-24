@@ -5,6 +5,7 @@ const REFRESH_INTERVAL_MS = 60000
 
 function Alerts() {
   const [alerts, setAlerts] = useState(null)
+  const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [filter, setFilter] = useState('all')
@@ -15,6 +16,7 @@ function Alerts() {
   const [showLegend, setShowLegend] = useState(false)
   const [lastUpdated, setLastUpdated] = useState(null)
   const [modalStock, setModalStock] = useState(null)
+  const [tradePlanModalStock, setTradePlanModalStock] = useState(null)
   const searchInputRef = useRef(null)
 
   useEffect(() => {
@@ -35,7 +37,15 @@ function Alerts() {
         const res = await fetch('/api/alerts')
         if (!res.ok) throw new Error('Failed to fetch alerts')
         const data = await res.json()
-        setAlerts(data)
+        // Backend now returns { alerts, summary }; tolerate the legacy array shape
+        // so the FE doesn't break if a stale build is deployed.
+        if (Array.isArray(data)) {
+          setAlerts(data)
+          setSummary(null)
+        } else {
+          setAlerts(data.alerts || [])
+          setSummary(data.summary || null)
+        }
         setLastUpdated(new Date())
         setLoading(false)
       } catch (err) {
@@ -87,6 +97,13 @@ function Alerts() {
     return () => window.removeEventListener('keydown', handleEsc)
   }, [modalStock])
 
+  // ESC key to close trade plan modal
+  useEffect(() => {
+    const handleEsc = (e) => { if (e.key === 'Escape') setTradePlanModalStock(null) }
+    if (tradePlanModalStock) window.addEventListener('keydown', handleEsc)
+    return () => window.removeEventListener('keydown', handleEsc)
+  }, [tradePlanModalStock])
+
   if (loading || cacheProgress) return (
     <div className="dashboard-layout" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '50vh', gap: '1rem' }}>
       <div className="loader"></div>
@@ -119,23 +136,38 @@ function Alerts() {
     .filter(s => s.symbol.toLowerCase().includes(searchQuery.toLowerCase()))
     .filter(s => {
       if (filter === 'all') return true
+      if (filter === 'hurting') return (s.dayChangePct ?? 0) < -2
+      if (filter === 'runners') return (s.dayChangePct ?? 0) > 2
       return biasClass(s) === filter
     })
     .filter(s => filterBreakouts ? s.isBreakout : true)
 
-  // Effective sort direction: in the BEAR tab, "most actionable" means
-  // lowest bullish-bias first. Flip the default direction for confidence so
-  // the list reads top-down as most-bearish → least-bearish.
-  const effectiveDir = (filter === 'bearish' && sortConfig.key === 'confidence')
-    ? (sortConfig.direction === 'desc' ? 'asc' : 'desc')
-    : sortConfig.direction
+  // Effective sort direction:
+  //   - BEAR tab: confidence ascending (most-bearish on top).
+  //   - HURTING tab: dayChangeRupee ascending (biggest cash loss on top).
+  //   - RUNNERS tab: dayChangeRupee descending (biggest cash gain on top).
+  //   - Otherwise: respect the user's chosen direction.
+  let effectiveDir = sortConfig.direction
+  let effectiveKey = sortConfig.key
+  if (filter === 'bearish' && sortConfig.key === 'confidence') {
+    effectiveDir = sortConfig.direction === 'desc' ? 'asc' : 'desc'
+  }
+  if (filter === 'hurting' && sortConfig.key === 'confidence') {
+    effectiveKey = 'dayChangeRupee'
+    effectiveDir = 'asc'
+  }
+  if (filter === 'runners' && sortConfig.key === 'confidence') {
+    effectiveKey = 'dayChangeRupee'
+    effectiveDir = 'desc'
+  }
 
   filteredStocks.sort((a, b) => {
     let vA, vB
-    if (sortConfig.key === 'symbol') { vA = a.symbol; vB = b.symbol }
-    if (sortConfig.key === 'vwap') { vA = a.vwapDeviation || 0; vB = b.vwapDeviation || 0 }
-    if (sortConfig.key === 'aggressor') { vA = a.aggressorDelta || 0; vB = b.aggressorDelta || 0 }
-    if (sortConfig.key === 'confidence') { vA = a.confidence || 0; vB = b.confidence || 0 }
+    if (effectiveKey === 'symbol') { vA = a.symbol; vB = b.symbol }
+    if (effectiveKey === 'vwap') { vA = a.vwapDeviation || 0; vB = b.vwapDeviation || 0 }
+    if (effectiveKey === 'aggressor') { vA = a.aggressorDelta || 0; vB = b.aggressorDelta || 0 }
+    if (effectiveKey === 'confidence') { vA = a.confidence || 0; vB = b.confidence || 0 }
+    if (effectiveKey === 'dayChangeRupee') { vA = a.dayChangeRupee || 0; vB = b.dayChangeRupee || 0 }
     if (vA < vB) return effectiveDir === 'asc' ? -1 : 1
     if (vA > vB) return effectiveDir === 'asc' ? 1 : -1
     return 0
@@ -150,6 +182,8 @@ function Alerts() {
     { key: 'all', label: 'ALL', color: '#cbd5e1' },
     { key: 'bullish', label: '▲ BULL', color: '#10b981' },
     { key: 'bearish', label: '▼ BEAR', color: '#ef4444' },
+    { key: 'hurting', label: '🔥 HURTING', color: '#ef4444' },
+    { key: 'runners', label: '🏆 RUNNERS', color: '#10b981' },
   ]
 
   return (
@@ -225,6 +259,84 @@ function Alerts() {
         }
         .conviction-click:hover { transform: scale(1.08); filter: brightness(1.2); }
       `}</style>
+
+      {/* Holdings Summary Banner */}
+      {summary && (
+        <div style={{
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.6rem',
+          marginBottom: '1rem', padding: '0.65rem 0.85rem',
+          background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
+          borderRadius: '6px', fontFamily: "'JetBrains Mono', monospace", fontSize: '0.7rem'
+        }}>
+          <span style={{
+            display: 'inline-flex', alignItems: 'baseline', gap: '0.4rem',
+            padding: '0.25rem 0.55rem', borderRadius: '4px',
+            background: summary.todayPnlRupee >= 0 ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
+            border: `1px solid ${summary.todayPnlRupee >= 0 ? '#10b981' : '#ef4444'}`,
+          }} title="Sum of today's rupee impact across every holding">
+            <span style={{ fontSize: '0.55rem', color: '#94a3b8', letterSpacing: '0.5px' }}>TODAY</span>
+            <span style={{ fontWeight: 800, color: summary.todayPnlRupee >= 0 ? '#10b981' : '#ef4444' }}>
+              {summary.todayPnlRupee >= 0 ? '+' : '−'}₹{Math.abs(summary.todayPnlRupee).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+            </span>
+          </span>
+          <span style={{ color: '#cbd5e1' }}>
+            <span style={{ color: '#94a3b8' }}>HOLDINGS</span>{' '}
+            <span style={{ fontWeight: 800, color: '#f8fafc' }}>{summary.totalHoldings}</span>
+          </span>
+          {summary.flagCounts?.add > 0 && (
+            <button
+              onClick={() => setFilter('all')}
+              style={{
+                padding: '0.2rem 0.5rem', border: '1px solid #10b981',
+                color: '#10b981', background: 'rgba(16,185,129,0.1)',
+                borderRadius: '4px', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.65rem', fontWeight: 700
+              }}
+              title="Holdings flagged as ADD — already-owned breakouts"
+            >
+              ▲ ADD {summary.flagCounts.add}
+            </button>
+          )}
+          {summary.flagCounts?.trim > 0 && (
+            <button
+              onClick={() => setFilter('all')}
+              style={{
+                padding: '0.2rem 0.5rem', border: '1px solid #06b6d4',
+                color: '#06b6d4', background: 'rgba(6,182,212,0.1)',
+                borderRadius: '4px', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.65rem', fontWeight: 700
+              }}
+              title="Holdings up ≥25% with stretched RSI — book partial profits"
+            >
+              ✂ TRIM {summary.flagCounts.trim}
+            </button>
+          )}
+          {summary.flagCounts?.avoid > 0 && (
+            <button
+              onClick={() => setFilter('bearish')}
+              style={{
+                padding: '0.2rem 0.5rem', border: '1px solid #ef4444',
+                color: '#ef4444', background: 'rgba(239,68,68,0.1)',
+                borderRadius: '4px', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.65rem', fontWeight: 700
+              }}
+              title="Holdings flagged AVOID — broken technicals or wild swings"
+            >
+              ▼ AVOID {summary.flagCounts.avoid}
+            </button>
+          )}
+          {summary.sectorConcentration?.length > 0 && summary.sectorConcentration.map(sc => (
+            <span
+              key={sc.sector}
+              style={{
+                padding: '0.2rem 0.5rem', border: '1px solid #f59e0b',
+                color: '#f59e0b', background: 'rgba(245,158,11,0.1)',
+                borderRadius: '4px', fontSize: '0.65rem', fontWeight: 700
+              }}
+              title={`Flagged tickers: ${sc.symbols.join(', ')}`}
+            >
+              ⚠ {sc.sector}: {sc.flagged} flagged
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Terminal Header */}
       <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', borderBottom: '1px solid #1e293b', paddingBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
@@ -395,14 +507,16 @@ function Alerts() {
             const rectWidth = Math.abs(agg) * 50
 
             const tp = stock.tradePlan || { action: 'UNK', tgt: null, sl: null, rrRatio: null }
-            const isBuyAction = tp.action === 'BUY SEEN'
+            const isBuyAction = tp.action === 'BUY SEEN' || tp.action === 'ADD'
             const isBreakoutAction = tp.action.includes('BREAKOUT')
             const isBearishAction = tp.action.includes('SELL') || tp.action === 'AVOID'
+            const isTrimAction = tp.action === 'TRIM'
             const actColor = isBuyAction ? '#10b981'
               : isBearishAction ? '#ef4444'
                 : isBreakoutAction ? '#fcd34d'
-                  : '#f59e0b'
-            const actGlyph = isBuyAction ? '▲ ' : isBearishAction ? '▼ ' : ''
+                  : isTrimAction ? '#06b6d4'
+                    : '#f59e0b'
+            const actGlyph = isBuyAction ? '▲ ' : isBearishAction ? '▼ ' : isTrimAction ? '✂ ' : ''
 
             const trendLabel = stock.regime === 'STRONG TREND' && stock.trendDirection
               ? (stock.trendDirection === 'BULL' ? 'STRONG TREND ▲' : 'STRONG TREND ▼')
@@ -435,7 +549,7 @@ function Alerts() {
                         </span>
                       )}
                     </div>
-                    <div className="mono" style={{ fontSize: '0.85rem', color: '#cbd5e1', marginTop: '0.2rem', marginLeft: '1.2rem', display: 'flex', alignItems: 'baseline', gap: '0.6rem' }}>
+                    <div className="mono" style={{ fontSize: '0.85rem', color: '#cbd5e1', marginTop: '0.2rem', marginLeft: '1.2rem', display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
                       <span>{stock.price?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       {stock.dayChangePct !== null && stock.dayChangePct !== undefined && (
                         <span
@@ -451,6 +565,23 @@ function Alerts() {
                         </span>
                       )}
                     </div>
+                    {stock.quantity > 0 && (
+                      <div
+                        className="mono"
+                        style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: '0.2rem', marginLeft: '1.2rem', letterSpacing: '0.3px', display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}
+                        title={`Today's rupee impact ${stock.dayChangeRupee >= 0 ? '+' : '−'}₹${Math.abs(stock.dayChangeRupee || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}; lifetime ₹${(stock.pnl || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
+                      >
+                        <span>Qty {stock.quantity} @ ₹{stock.avgPrice?.toFixed(1)}</span>
+                        {stock.pnlPct !== null && stock.pnlPct !== undefined && (
+                          <span style={{
+                            fontWeight: 700,
+                            color: stock.pnlPct > 0 ? '#10b981' : stock.pnlPct < 0 ? '#ef4444' : '#94a3b8'
+                          }}>
+                            {stock.pnlPct > 0 ? '+' : ''}{stock.pnlPct.toFixed(2)}%
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Core Technicals */}
@@ -516,12 +647,19 @@ function Alerts() {
 
                   {/* Trade Plan */}
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.2rem' }}>
-                    <span title={tp.reason} style={{
-                      fontSize: '0.65rem', fontWeight: 800, padding: '0.15rem 0.5rem',
-                      border: `1px solid ${actColor}`, color: actColor, borderRadius: '4px',
-                      textShadow: `0 0 4px rgba(${actColor === '#10b981' ? '16,185,129' : actColor === '#ef4444' ? '239,68,68' : '245,158,11'}, 0.2)`,
-                      cursor: 'help', whiteSpace: 'nowrap'
-                    }}>
+                    <span
+                      title={`${tp.reason}\n\nClick for full breakdown.`}
+                      onClick={() => setTradePlanModalStock(stock)}
+                      style={{
+                        fontSize: '0.65rem', fontWeight: 800, padding: '0.15rem 0.5rem',
+                        border: `1px solid ${actColor}`, color: actColor, borderRadius: '4px',
+                        textShadow: `0 0 4px rgba(${actColor === '#10b981' ? '16,185,129' : actColor === '#ef4444' ? '239,68,68' : '245,158,11'}, 0.2)`,
+                        cursor: 'pointer', whiteSpace: 'nowrap',
+                        transition: 'transform 0.12s, filter 0.12s'
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.06)'; e.currentTarget.style.filter = 'brightness(1.15)' }}
+                      onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.filter = 'brightness(1)' }}
+                    >
                       {actGlyph}{tp.action}
                     </span>
 
@@ -767,6 +905,189 @@ function Alerts() {
             </div>
           </div>
         </div>
+        )
+      })()}
+
+      {/* Trade Plan Explainer Modal */}
+      {tradePlanModalStock && (() => {
+        const s = tradePlanModalStock
+        const tp = s.tradePlan || {}
+        const action = tp.action || 'UNKNOWN'
+
+        const isBuy = action === 'BUY SEEN' || action === 'ADD'
+        const isBreakoutAct = action.includes('BREAKOUT')
+        const isBearAct = action.includes('SELL') || action === 'AVOID'
+        const isTrim = action === 'TRIM'
+        const accentColor = isBuy ? '#10b981'
+          : isBearAct ? '#ef4444'
+            : isBreakoutAct ? '#fcd34d'
+              : isTrim ? '#06b6d4'
+                : '#f59e0b'
+
+        const verdicts = {
+          'BUY SEEN':           { headline: 'Clean buy setup', body: 'Momentum, trend alignment, volume, and reward/risk all line up. The engine sees a textbook entry here — but always confirm with your own thesis before clicking buy.' },
+          'ADD':                { headline: 'Add to existing position', body: 'You already own this and a fresh buy setup just triggered. Consider scaling into your position — but stay within your sizing rules.' },
+          'BREAKOUT (CAUTION)': { headline: 'Breakout, but unconfirmed', body: 'Price crossed the 20-day ceiling, but either volume is light (<1.5× avg) or conviction is moderate. Wait 1–2 sessions to see if the breakout holds with rising volume.' },
+          'BREAKOUT (WEAK)':    { headline: 'Likely fakeout', body: 'Resistance was breached, but technicals AND volume are weak. High probability this is a bull trap — do not chase. Wait for momentum + volume to confirm.' },
+          'HOLD / WAIT':        { headline: 'No clean edge yet', body: 'Either signals are mixed or the reward/risk is below the 1.5× minimum. If you own it, hold; if you don\'t, wait for a better setup.' },
+          'HOLD (OVERBOUGHT)':  { headline: 'Strong but stretched', body: 'Momentum is good, but RSI is above 70. Hold what you own; do NOT add fresh capital here — wait for RSI to cool below 65.' },
+          'TRIM':               { headline: 'Book partial profits', body: 'You are up significantly and the stock is overbought. The engine suggests trimming part of your position to lock in gains, while leaving a runner.' },
+          'SELL (AT RANGE)':    { headline: 'Pinned at the ceiling', body: 'The stock is range-bound and pressed against the 20-day high. Range tops usually push price back. Book profits if you\'re long; do not buy here.' },
+          'AVOID':              { headline: 'Stay out', body: 'Technicals are severely broken or volatility is erratic. Execution risk is high — wide stops, gap risk, asymmetric drawdowns. Sit this one out.' },
+        }
+        const v = verdicts[action] || { headline: action, body: 'See engine reason below.' }
+
+        const tgUpsidePct = (tp.tgt && s.price) ? ((tp.tgt - s.price) / s.price) * 100 : null
+        const slDownsidePct = (tp.sl && s.price) ? ((tp.sl - s.price) / s.price) * 100 : null
+
+        const rr = tp.rrRatio
+        let rrVerdict = '—'
+        let rrColor = '#94a3b8'
+        if (rr !== null && rr !== undefined) {
+          if (rr >= 2)        { rrVerdict = 'Excellent — generous upside vs the risk taken.';    rrColor = '#10b981' }
+          else if (rr >= 1.5) { rrVerdict = 'Acceptable — clears the 1.5× minimum.';            rrColor = '#06b6d4' }
+          else if (rr >= 1)   { rrVerdict = 'Marginal — upside roughly equals downside.';        rrColor = '#f59e0b' }
+          else                { rrVerdict = 'Poor — target is closer than stop. Skip or wait.';  rrColor = '#ef4444' }
+        }
+
+        const regimeNotes = {
+          'STRONG TREND': 'Price has aligned moving averages and is moving in a clear direction. Trend-following plays (continuation, pullback buys) work best here.',
+          'RANGE-BOUND':  'Price is oscillating between support and resistance with no directional bias. Buy near the floor, sell near the ceiling — do not chase breakouts that fail.',
+          'WILD SWINGS':  'Volatility is elevated — sharp single-day moves or wide ATR. Wider stops are needed; gap risk is real. Position sizing should be smaller than usual.',
+        }
+
+        return (
+          <div className="conv-modal-backdrop" onClick={() => setTradePlanModalStock(null)}>
+            <div className="conv-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '560px' }}>
+              {/* Header */}
+              <div className="conv-modal-header">
+                <div>
+                  <div style={{ fontSize: '0.65rem', color: '#94a3b8', letterSpacing: '1px', marginBottom: '0.25rem' }}>
+                    TRADE PLAN
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '1.1rem', fontWeight: 800, color: '#f8fafc' }}>{s.symbol}</span>
+                    <span style={{
+                      fontSize: '0.85rem', fontWeight: 800,
+                      padding: '0.2rem 0.6rem',
+                      border: `1px solid ${accentColor}`,
+                      color: accentColor,
+                      borderRadius: '4px'
+                    }}>
+                      {action}
+                    </span>
+                    <span className="mono" style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
+                      ₹{s.price?.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+                <button className="conv-modal-close" onClick={() => setTradePlanModalStock(null)}>✕</button>
+              </div>
+
+              {/* Body */}
+              <div className="conv-modal-body">
+                {/* Verdict */}
+                <div style={{
+                  padding: '0.75rem 0.85rem', borderRadius: '6px',
+                  background: 'rgba(255,255,255,0.02)', border: `1px solid ${accentColor}33`,
+                  marginBottom: '1rem'
+                }}>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 700, color: accentColor, marginBottom: '0.35rem' }}>
+                    {v.headline}
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#cbd5e1', lineHeight: 1.55 }}>
+                    {v.body}
+                  </div>
+                </div>
+
+                {/* Why this tag */}
+                {tp.reason && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ fontSize: '0.6rem', color: '#64748b', letterSpacing: '1px', fontWeight: 700, marginBottom: '0.4rem' }}>
+                      WHY THIS TAG (THIS STOCK)
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: '#94a3b8', lineHeight: 1.55, padding: '0.5rem 0.7rem', background: 'rgba(255,255,255,0.02)', borderLeft: `2px solid ${accentColor}`, borderRadius: '4px' }}>
+                      {tp.reason}
+                    </div>
+                  </div>
+                )}
+
+                {/* TG / SL cards */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginBottom: '1rem' }}>
+                  <div style={{ padding: '0.65rem 0.75rem', background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.55rem', color: '#10b981', letterSpacing: '1px', fontWeight: 700, marginBottom: '0.3rem' }}>TARGET (TG)</div>
+                    <div className="mono" style={{ fontSize: '1rem', fontWeight: 800, color: '#10b981' }}>
+                      {tp.tgt !== null && tp.tgt !== undefined ? `₹${tp.tgt}` : '—'}
+                    </div>
+                    {tgUpsidePct !== null && (
+                      <div style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: '0.25rem' }}>
+                        {tgUpsidePct >= 0 ? '+' : ''}{tgUpsidePct.toFixed(2)}% from current price
+                      </div>
+                    )}
+                    <div style={{ fontSize: '0.62rem', color: '#cbd5e1', marginTop: '0.4rem', lineHeight: 1.5 }}>
+                      Where to take profits. Based on the 20-day ceiling (or, after a breakout, projected via ATR).
+                    </div>
+                  </div>
+                  <div style={{ padding: '0.65rem 0.75rem', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '0.55rem', color: '#ef4444', letterSpacing: '1px', fontWeight: 700, marginBottom: '0.3rem' }}>STOP LOSS (SL)</div>
+                    <div className="mono" style={{ fontSize: '1rem', fontWeight: 800, color: '#ef4444' }}>
+                      {tp.sl !== null && tp.sl !== undefined ? `₹${tp.sl}` : '—'}
+                    </div>
+                    {slDownsidePct !== null && (
+                      <div style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: '0.25rem' }}>
+                        {slDownsidePct.toFixed(2)}% from current price
+                      </div>
+                    )}
+                    <div style={{ fontSize: '0.62rem', color: '#cbd5e1', marginTop: '0.4rem', lineHeight: 1.5 }}>
+                      Exit if price falls here. Set just below the 20-day floor (minus a small ATR buffer to avoid wicks).
+                    </div>
+                  </div>
+                </div>
+
+                {/* R:R */}
+                <div style={{
+                  padding: '0.7rem 0.85rem', borderRadius: '6px',
+                  background: 'rgba(255,255,255,0.02)', border: `1px solid ${rrColor}33`,
+                  marginBottom: '1rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={{ fontSize: '0.55rem', color: '#64748b', letterSpacing: '1px', fontWeight: 700, marginBottom: '0.2rem' }}>
+                        REWARD : RISK
+                      </div>
+                      <div className="mono" style={{ fontSize: '1.1rem', fontWeight: 800, color: rrColor }}>
+                        {rr !== null && rr !== undefined ? `${rr}×` : '—'}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '0.65rem', color: '#cbd5e1', maxWidth: '320px', textAlign: 'right', lineHeight: 1.5 }}>
+                      {rrVerdict}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '0.6rem', color: '#64748b', marginTop: '0.5rem', lineHeight: 1.5 }}>
+                    Formula: (TG − price) ÷ (price − SL). For every ₹1 you risk on the stop, this is how many ₹ the target offers. The engine demotes BUY SEEN to HOLD/WAIT when this drops below 1.5×.
+                  </div>
+                </div>
+
+                {/* Regime */}
+                <div style={{ marginBottom: '0.5rem' }}>
+                  <div style={{ fontSize: '0.55rem', color: '#64748b', letterSpacing: '1px', fontWeight: 700, marginBottom: '0.35rem' }}>
+                    MARKET REGIME
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginBottom: '0.4rem' }}>
+                    <span className="mono" style={{
+                      fontSize: '0.85rem', fontWeight: 800,
+                      color: s.regime === 'STRONG TREND' ? '#10b981' : s.regime === 'WILD SWINGS' ? '#ef4444' : '#f59e0b'
+                    }}>
+                      {s.regime}{s.regime === 'STRONG TREND' && s.trendDirection ? (s.trendDirection === 'BULL' ? ' ▲' : ' ▼') : ''}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: '#94a3b8', lineHeight: 1.55 }}>
+                    {regimeNotes[s.regime] || 'Regime unclassified.'}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         )
       })()}
     </div>
