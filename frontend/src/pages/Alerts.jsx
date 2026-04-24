@@ -419,15 +419,28 @@ function Alerts() {
                         </span>
                       )}
                     </div>
-                    <div className="mono" style={{ fontSize: '0.85rem', color: '#cbd5e1', marginTop: '0.2rem', marginLeft: '1.2rem' }}>
-                      {stock.price?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    <div className="mono" style={{ fontSize: '0.85rem', color: '#cbd5e1', marginTop: '0.2rem', marginLeft: '1.2rem', display: 'flex', alignItems: 'baseline', gap: '0.6rem' }}>
+                      <span>{stock.price?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      {stock.dayChangePct !== null && stock.dayChangePct !== undefined && (
+                        <span
+                          title={`Today vs previous close${stock.prevClose ? ` (₹${stock.prevClose})` : ''}`}
+                          style={{
+                            fontSize: '0.65rem',
+                            fontWeight: 700,
+                            letterSpacing: '0.3px',
+                            color: stock.dayChangePct > 0 ? '#10b981' : stock.dayChangePct < 0 ? '#ef4444' : '#94a3b8'
+                          }}
+                        >
+                          DAY {stock.dayChangePct > 0 ? '+' : ''}{stock.dayChangePct.toFixed(2)}%
+                        </span>
+                      )}
                     </div>
                   </div>
 
                   {/* Core Technicals */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <span className="dotted-underline" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }} title="20-day VWAP deviation: gap between current price and the 20-day volume-weighted average.">VWAP-20 DEV</span>
+                      <span className="dotted-underline" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }} title="Price distance from the 20-day volume-weighted average. Positive = stretched above average (mean-reversion risk). This is NOT today's price change — see DAY % next to the price.">vs 20D AVG</span>
                       <span className="mono" style={{ fontSize: '0.9rem', color: devColor, fontWeight: 700 }}>
                         {dev > 0 ? '+' : ''}{dev.toFixed(2)}%
                       </span>
@@ -464,12 +477,25 @@ function Alerts() {
                       <span style={{ color: agg > 0 ? '#00E5FF' : agg < 0 ? '#FF3D00' : '#94a3b8' }}>{agg.toFixed(2)}</span>
                       <span>+1.0</span>
                     </div>
-                    {stock.volSurge !== undefined && stock.volSurge > 0 && (
-                      <div className="mono" style={{ fontSize: '0.55rem', color: stock.volumeConfirmed ? '#10b981' : '#94a3b8', marginTop: '0.2rem', letterSpacing: '0.5px' }}
-                        title={stock.volumeConfirmed ? 'Volume confirmed: ≥1.5× 20-day average' : 'Volume below 1.5× 20-day average'}>
-                        VOL {stock.volSurge.toFixed(1)}× {stock.volumeConfirmed ? '✓' : ''}
-                      </div>
-                    )}
+                    {stock.volSurge !== undefined && stock.volSurge > 0 && (() => {
+                      const side = stock.volumeConfirmedSide // 'up' | 'down' | null
+                      const volColor = side === 'up' ? '#10b981'
+                        : side === 'down' ? '#ef4444'
+                          : '#94a3b8'
+                      const volGlyph = side === 'up' ? '✓'
+                        : side === 'down' ? '✗'
+                          : ''
+                      const volTitle = side === 'up'
+                        ? 'Accumulation confirmed — today up on ≥1.5× 20-day average volume'
+                        : side === 'down'
+                          ? 'Distribution confirmed — today down on ≥1.5× 20-day average volume (heavy selling)'
+                          : 'Volume below 1.5× 20-day average'
+                      return (
+                        <div className="mono" style={{ fontSize: '0.55rem', color: volColor, marginTop: '0.2rem', letterSpacing: '0.5px' }} title={volTitle}>
+                          VOL {stock.volSurge.toFixed(1)}× {volGlyph}
+                        </div>
+                      )
+                    })()}
                   </div>
 
                   {/* Trade Plan */}

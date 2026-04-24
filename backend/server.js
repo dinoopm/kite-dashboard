@@ -27,6 +27,8 @@ let mcpTransport = null;
 const historyCache = {};   // { instrument_token: [ {date, open, high, low, close, volume} ] }
 const historicalFullCache = {};  // { token: { data: [...], timestamp: Date.now() } } — 1hr TTL for sector indices
 const HISTORICAL_FULL_TTL = 60 * 60 * 1000; // 1 hour
+const todayRefreshAt = {}; // { token: timestamp } — last time we pulled today's partial bar
+const TODAY_REFRESH_COOLDOWN_MS = 60 * 1000; // don't hammer Kite for intraday refresh more than 1×/min/token
 let holdingsCache = [];    // raw holdings array
 let cacheReady = false;
 let cacheWarming = false;
@@ -70,6 +72,44 @@ async function fetchHistorical(token, fromDate, toDate, interval = 'day') {
   });
   if (result.isError) return null;
   return parseMcpText(result);
+}
+
+// Refresh today's partial daily candle for a single token if the cached tail
+// is stale (older than today) or if we haven't polled within the cooldown.
+// Replaces cached[last] if its date matches today, else appends.
+async function refreshTodayCandle(token) {
+  const now = Date.now();
+  const last = todayRefreshAt[token] || 0;
+  if (now - last < TODAY_REFRESH_COOLDOWN_MS) return;
+  todayRefreshAt[token] = now;
+
+  try {
+    const cached = historyCache[token];
+    if (!cached || cached.length === 0) return;
+
+    const today = new Date();
+    const todayKey = today.toISOString().slice(0, 10);
+    const tailKey = (cached[cached.length - 1]?.date || '').slice(0, 10);
+
+    // Pull a 2-day window so we always get today's bar (if market is open/closed today).
+    const from = new Date(today);
+    from.setDate(today.getDate() - 1);
+    const data = await fetchHistorical(token, from, today, 'day');
+    if (!Array.isArray(data) || data.length === 0) return;
+
+    const latest = data[data.length - 1];
+    const latestKey = (latest?.date || '').slice(0, 10);
+    if (!latestKey) return;
+
+    if (latestKey === tailKey) {
+      cached[cached.length - 1] = latest;
+    } else if (latestKey > tailKey) {
+      cached.push(latest);
+    }
+  } catch (err) {
+    // Non-fatal: fall through with stale cache.
+    console.log(`  ⚠️  refreshTodayCandle(${token}) failed: ${err.message}`);
+  }
 }
 
 // Kite MCP returns at most ~1 year of daily candles per request.
@@ -778,6 +818,11 @@ app.get('/api/alerts', async (req, res) => {
       const token = h.instrument_token;
       const symbol = h.tradingsymbol;
       const lastPrice = h.last_price;
+
+      // Best-effort refresh of today's daily candle so volSurge / dayChange
+      // reflect live intraday state rather than yesterday's EOD bar.
+      await refreshTodayCandle(token);
+
       let cached = historyCache[token];
 
       // Skip if no cached data and we can't compute
@@ -980,6 +1025,18 @@ app.get('/api/alerts', async (req, res) => {
         const volSurge = avgVol20 > 0 ? todayVol / avgVol20 : 0;
         const volumeConfirmed = volSurge >= 1.5;
 
+        // Direction of today's bar — used to color the volume-confirmation glyph.
+        // Green ✓ on up days (accumulation), red ✗ on down days (distribution).
+        const todayBar = cached[cached.length - 1];
+        const prevCloseBar = cached[cached.length - 2]?.close ?? todayBar?.open ?? null;
+        const barDir = (prevCloseBar != null && currentPrice != null)
+          ? (currentPrice > prevCloseBar ? 'up' : currentPrice < prevCloseBar ? 'down' : 'flat')
+          : 'flat';
+        const volumeConfirmedSide = volumeConfirmed ? barDir : null;
+        const dayChangePct = (prevCloseBar && currentPrice)
+          ? +(((currentPrice - prevCloseBar) / prevCloseBar) * 100).toFixed(2)
+          : null;
+
         const isBreakout = !!(resistanceLvl && currentPrice >= resistanceLvl);
         const distanceToRes = (resistanceLvl && currentPrice) ? (resistanceLvl - currentPrice) / currentPrice : 0;
 
@@ -1070,6 +1127,10 @@ app.get('/api/alerts', async (req, res) => {
           aggressorDelta: +(aggressorDelta).toFixed(3),
           volSurge: +volSurge.toFixed(2),
           volumeConfirmed,
+          volumeDirection: barDir,
+          volumeConfirmedSide,
+          dayChangePct,
+          prevClose: prevCloseBar ? +prevCloseBar.toFixed(2) : null,
           divergence,
           regime,
           trendDirection,
