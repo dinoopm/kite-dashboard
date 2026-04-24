@@ -100,18 +100,35 @@ function Alerts() {
     </div>
   )
 
+  // Canonical bull/bear classification — driven by the bullish-bias score so it
+  // matches the modal. Avoids the prior bug where a stock with even one bullish
+  // alert landed in the BULL tab regardless of overall setup.
+  const biasClass = (s) => {
+    const c = s.confidence ?? 50
+    if (c > 60) return 'bullish'
+    if (c < 40) return 'bearish'
+    return 'mixed'
+  }
+
   const allAlertsList = (alerts || []).flatMap(s => s.alerts.map(a => ({ ...a, symbol: s.symbol, price: s.price, rsi: s.rsi })))
-  const bullishCount = allAlertsList.filter(a => a.severity === 'bullish').length
-  const bearishCount = allAlertsList.filter(a => a.severity === 'bearish').length
+  const bullishCount = (alerts || []).filter(s => biasClass(s) === 'bullish').length
+  const bearishCount = (alerts || []).filter(s => biasClass(s) === 'bearish').length
   const breakoutCount = (alerts || []).filter(s => s.isBreakout).length
 
   let filteredStocks = (alerts || [])
     .filter(s => s.symbol.toLowerCase().includes(searchQuery.toLowerCase()))
     .filter(s => {
       if (filter === 'all') return true
-      return s.alerts.some(a => a.severity === filter)
+      return biasClass(s) === filter
     })
     .filter(s => filterBreakouts ? s.isBreakout : true)
+
+  // Effective sort direction: in the BEAR tab, "most actionable" means
+  // lowest bullish-bias first. Flip the default direction for confidence so
+  // the list reads top-down as most-bearish → least-bearish.
+  const effectiveDir = (filter === 'bearish' && sortConfig.key === 'confidence')
+    ? (sortConfig.direction === 'desc' ? 'asc' : 'desc')
+    : sortConfig.direction
 
   filteredStocks.sort((a, b) => {
     let vA, vB
@@ -119,8 +136,8 @@ function Alerts() {
     if (sortConfig.key === 'vwap') { vA = a.vwapDeviation || 0; vB = b.vwapDeviation || 0 }
     if (sortConfig.key === 'aggressor') { vA = a.aggressorDelta || 0; vB = b.aggressorDelta || 0 }
     if (sortConfig.key === 'confidence') { vA = a.confidence || 0; vB = b.confidence || 0 }
-    if (vA < vB) return sortConfig.direction === 'asc' ? -1 : 1
-    if (vA > vB) return sortConfig.direction === 'asc' ? 1 : -1
+    if (vA < vB) return effectiveDir === 'asc' ? -1 : 1
+    if (vA > vB) return effectiveDir === 'asc' ? 1 : -1
     return 0
   })
 
@@ -359,10 +376,9 @@ function Alerts() {
           </div>
 
           {filteredStocks.map(stock => {
-            const isBullish = stock.alerts.some(a => a.severity === 'bullish')
-            const isBearish = stock.alerts.some(a => a.severity === 'bearish')
-            const dotColor = isBullish ? '#10b981' : isBearish ? '#ef4444' : '#f59e0b'
-            const dotGlyph = isBullish ? '▲' : isBearish ? '▼' : '■'
+            const bias = biasClass(stock)
+            const dotColor = bias === 'bullish' ? '#10b981' : bias === 'bearish' ? '#ef4444' : '#f59e0b'
+            const dotGlyph = bias === 'bullish' ? '▲' : bias === 'bearish' ? '▼' : '■'
 
             const dev = stock.vwapDeviation !== null && stock.vwapDeviation !== undefined ? stock.vwapDeviation : 0
             const devColor = dev > 0.5 ? '#10b981' : dev < -0.5 ? '#ef4444' : 'var(--text-secondary)'
