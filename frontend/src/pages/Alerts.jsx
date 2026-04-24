@@ -553,7 +553,12 @@ function Alerts() {
                         </span>
                       )
                     })()}
-                    <span style={{ fontSize: '0.55rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Conviction ⓘ</span>
+                    <span
+                      style={{ fontSize: '0.55rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}
+                      title="Bullish bias: 0 = strongly bearish, 50 = balanced, 100 = strongly bullish. Click for breakdown."
+                    >
+                      Bullish Bias ⓘ
+                    </span>
                   </div>
 
                 </div>
@@ -614,7 +619,10 @@ function Alerts() {
           const agg = modalStock.aggressorDelta || 0
           if (agg > 0.3) bd.push({ label: 'Strong accumulation (money flow)', value: 10 })
           if (agg < -0.2) bd.push({ label: 'Distribution (money flow)', value: -10 })
-          if (modalStock.regime === 'STRONG TREND') bd.push({ label: 'Trending regime', value: 5 })
+          if (modalStock.regime === 'STRONG TREND') {
+            if (modalStock.trendDirection === 'BULL') bd.push({ label: 'Strong bullish trend', value: 5 })
+            else if (modalStock.trendDirection === 'BEAR') bd.push({ label: 'Strong bearish trend', value: -5 })
+          }
           if (modalStock.regime === 'WILD SWINGS') bd.push({ label: 'Volatile regime', value: -10 })
           if (modalStock.sma50 && modalStock.sma200 && modalStock.price > modalStock.sma50 && modalStock.price > modalStock.sma200) {
             bd.push({ label: 'Price leads both MAs', value: 10 })
@@ -628,7 +636,12 @@ function Alerts() {
             {/* Header */}
             <div className="conv-modal-header">
               <div>
-                <div style={{ fontSize: '0.65rem', color: '#94a3b8', letterSpacing: '1px', marginBottom: '0.25rem' }}>CONVICTION BREAKDOWN</div>
+                <div
+                  style={{ fontSize: '0.65rem', color: '#94a3b8', letterSpacing: '1px', marginBottom: '0.25rem' }}
+                  title="Bullish bias score: 0 = strongly bearish, 50 = balanced, 100 = strongly bullish. Not a confidence in the trade direction."
+                >
+                  BULLISH BIAS BREAKDOWN
+                </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem' }}>
                   <span style={{ fontSize: '1.1rem', fontWeight: 800, color: '#f8fafc' }}>{modalStock.symbol}</span>
                   {(() => {
@@ -713,9 +726,9 @@ function Alerts() {
               }}>
                 <div style={{ fontSize: '0.6rem', color: '#64748b', letterSpacing: '1px', fontWeight: 700, marginBottom: '0.4rem' }}>HOW IT WORKS</div>
                 <div style={{ fontSize: '0.7rem', color: '#94a3b8', lineHeight: 1.6 }}>
-                  Score starts at <span className="mono" style={{ color: '#f8fafc', fontWeight: 700 }}>30</span> (base).
-                  Each technical signal adds or subtracts points based on its strength.
-                  Final score is clamped to <span className="mono" style={{ color: '#f8fafc' }}>0–100</span>.
+                  Measures <strong style={{ color: '#f8fafc' }}>bullish bias</strong>, not direction-neutral confidence.
+                  Score starts at <span className="mono" style={{ color: '#f8fafc', fontWeight: 700 }}>30</span> (base); bullish signals add points, bearish signals subtract.
+                  Clamped to <span className="mono" style={{ color: '#f8fafc' }}>0–100</span>: <span style={{ color: '#ef4444' }}>&lt;40 bearish</span>, <span style={{ color: '#f59e0b' }}>40–75 mixed</span>, <span style={{ color: '#10b981' }}>&gt;75 bullish</span>.
                 </div>
                 <div className="mono" style={{ fontSize: '0.65rem', color: '#475569', marginTop: '0.5rem' }}>
                   {breakdown.map(c => (c.value >= 0 ? `+${c.value}` : `${c.value}`)).join(' ')} = <span style={{ color: '#f8fafc', fontWeight: 700 }}>{breakdown.reduce((s, c) => s + c.value, 0)}</span> → clamped to <span style={{ color: modalStock.confidence > 75 ? '#10b981' : modalStock.confidence < 40 ? '#ef4444' : '#f59e0b', fontWeight: 800 }}>{modalStock.confidence}%</span>

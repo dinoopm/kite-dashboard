@@ -898,9 +898,28 @@ app.get('/api/alerts', async (req, res) => {
         (currentPrice < sma50 && currentPrice < sma200 && Math.abs(sma50 - sma200) / sma200 < 0.02)
       );
       const isAlignedTrend = isBullishAligned || isBearishAligned;
+
+      // Today's single-bar true range (high-low, extended by any prev-close gap).
+      // Used to detect flash moves that ATR14 smoothing would otherwise hide —
+      // e.g. a one-day −9% crash keeps SMAs aligned, so ATR14 barely ticks up,
+      // and the regime would misread as a healthy "STRONG TREND".
+      const todayBar = cached[cached.length - 1];
+      const prevBarClose = cached[cached.length - 2]?.close ?? null;
+      const todayTR = todayBar
+        ? Math.max(
+            (todayBar.high ?? 0) - (todayBar.low ?? 0),
+            prevBarClose ? Math.abs((todayBar.high ?? 0) - prevBarClose) : 0,
+            prevBarClose ? Math.abs((todayBar.low ?? 0) - prevBarClose) : 0
+          )
+        : 0;
+      const todayRangePct = (todayBar?.close && todayTR) ? (todayTR / todayBar.close) : 0;
+
       if (atr14Arr.length > 20) {
         const atrSMA20 = atr14Arr.slice(-20).reduce((a, b) => a + b, 0) / 20;
-        if (atr > 1.5 * atrSMA20) {
+        const todayShockVsAtr = atr > 0 ? (todayTR / atr) : 0;
+        // WILD SWINGS if either: smoothed volatility is elevated, OR today's single bar
+        // is >2× ATR14, OR today's absolute range exceeds 4% of price (flash move).
+        if (atr > 1.5 * atrSMA20 || todayShockVsAtr > 2 || todayRangePct > 0.04) {
           regime = "WILD SWINGS";
         } else if (isAlignedTrend) {
           regime = "STRONG TREND";
@@ -937,7 +956,10 @@ app.get('/api/alerts', async (req, res) => {
       if (sma50 && sma200 && sma50 > sma200) addConf('SMA50 > SMA200 (golden state)', 10);
       if (vwapDeviation !== null && vwapDeviation > 0) addConf('Price above 20d VWAP', 10);
       if (aggressorDelta > 0.3) addConf('Strong accumulation (money flow)', 10);
-      if (regime === 'STRONG TREND') addConf('Trending regime', 5);
+      if (regime === 'STRONG TREND') {
+        if (trendDirection === 'BULL') addConf('Strong bullish trend', 5);
+        else if (trendDirection === 'BEAR') addConf('Strong bearish trend', -5);
+      }
       if (sma50 && sma200 && currentPrice > sma50 && currentPrice > sma200) addConf('Price leads both MAs', 10);
       // === PENALTY SIGNALS ===
       if (rsi14 !== null && rsi14 >= 75) addConf('RSI severely overbought', -10);
@@ -1027,8 +1049,7 @@ app.get('/api/alerts', async (req, res) => {
 
         // Direction of today's bar — used to color the volume-confirmation glyph.
         // Green ✓ on up days (accumulation), red ✗ on down days (distribution).
-        const todayBar = cached[cached.length - 1];
-        const prevCloseBar = cached[cached.length - 2]?.close ?? todayBar?.open ?? null;
+        const prevCloseBar = prevBarClose ?? todayBar?.open ?? null;
         const barDir = (prevCloseBar != null && currentPrice != null)
           ? (currentPrice > prevCloseBar ? 'up' : currentPrice < prevCloseBar ? 'down' : 'flat')
           : 'flat';
