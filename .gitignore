@@ -25,3 +25,7 @@ backend/backend.log
 
 # MCP auth cache (contains tokens)
 ~/.mcp-auth/
+
+# One-off debugging probes — keep them local, don't commit
+scratch*.py
+scratch*.js
