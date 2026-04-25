@@ -243,6 +243,10 @@ async function warmCache(retries = 3) {
     cacheReady = true;
     cacheWarming = false;
     console.log(`✅ Cache warm-up complete: ${cached}/${holdings.length} instruments cached`);
+
+    // Fire-and-forget: warm the sector RRG cache so the Sector Indices page
+    // sees complete data on first open instead of partial/flickering results.
+    prewarmRrgHistoricalCache().catch(e => console.error("RRG prewarm error:", e.message));
   } catch (err) {
     cacheWarming = false;
     console.error("❌ Cache warm-up failed:", err.message);
@@ -477,6 +481,30 @@ const callWithTimeout = (cmdObj, ms = 15000) => {
 
 // Track instrument indicator fetches to prevent duplicate/race conditions
 const indicatorPromises = {};
+
+// Coalesce concurrent /api/historical-full fetches for the same token. Without this,
+// multiple parallel callers each launch their own fetchHistoricalMultiYear MCP storm.
+const historicalFullPromises = {};   // { token: Promise<data[]> }
+const historicalFullWarming = { active: false, total: 0, loaded: 0, startedAt: null };
+
+async function getOrFetchFullHistory(token) {
+  const cached = historicalFullCache[token];
+  if (cached && (Date.now() - cached.timestamp < HISTORICAL_FULL_TTL)) {
+    return { data: cached.data, cached: true };
+  }
+  if (historicalFullPromises[token]) {
+    return { data: await historicalFullPromises[token], cached: false };
+  }
+  historicalFullPromises[token] = fetchHistoricalMultiYear(token, 5)
+    .then(data => {
+      if (Array.isArray(data) && data.length > 0) {
+        historicalFullCache[token] = { data, timestamp: Date.now() };
+      }
+      return data || [];
+    })
+    .finally(() => { delete historicalFullPromises[token]; });
+  return { data: await historicalFullPromises[token], cached: false };
+}
 
 async function fetchWithCache(toolName, cacheKey, args = {}) {
   const now = Date.now();
@@ -1315,29 +1343,22 @@ app.get('/api/historical-full/:token', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
   try {
     const { token } = req.params;
-
-    // Check cache first
-    const cached = historicalFullCache[token];
-    if (cached && (Date.now() - cached.timestamp < HISTORICAL_FULL_TTL)) {
-      console.log(`📊 Serving cached 5Y history for token ${token} (${cached.data.length} candles)`);
-      return res.json({
-        cached: true,
-        content: [{ type: "text", text: JSON.stringify(cached.data) }]
-      });
+    const isCacheHit = !!(historicalFullCache[token] && (Date.now() - historicalFullCache[token].timestamp < HISTORICAL_FULL_TTL));
+    if (isCacheHit) {
+      console.log(`📊 Serving cached 5Y history for token ${token} (${historicalFullCache[token].data.length} candles)`);
+    } else if (!historicalFullPromises[token]) {
+      console.log(`📊 Fetching full 5Y history for token ${token}...`);
+    } else {
+      console.log(`⏳ Coalescing /api/historical-full call for token ${token} into in-flight fetch...`);
     }
-
-    console.log(`📊 Fetching full 5Y history for token ${token}...`);
-    const data = await fetchHistoricalMultiYear(token, 5);
-    if (Array.isArray(data) && data.length > 0) {
-      // Store in cache
-      historicalFullCache[token] = { data, timestamp: Date.now() };
+    const { data, cached } = await getOrFetchFullHistory(token);
+    if (!cached && Array.isArray(data) && data.length > 0) {
       console.log(`  ✅ Got ${data.length} candles from ${data[0].date.substring(0, 10)} to ${data[data.length - 1].date.substring(0, 10)}`);
-      return res.json({
-        cached: false,
-        content: [{ type: "text", text: JSON.stringify(data) }]
-      });
     }
-    res.json({ cached: false, content: [{ type: "text", text: "[]" }] });
+    return res.json({
+      cached,
+      content: [{ type: "text", text: JSON.stringify(Array.isArray(data) ? data : []) }]
+    });
   } catch (err) {
     console.error("Historical-full error:", err.message);
     res.status(500).json({ error: err.message });
@@ -1432,10 +1453,58 @@ function computeSMA(values, period) {
 // RRG token cache — maps instrument key to token, populated from quotes
 const rrgTokenCache = {};
 
+// Pre-warm historicalFullCache for all RRG sector tokens at startup so the first
+// /api/rrg call has complete data — eliminates the partial-cache stampede where
+// the frontend sees flickering momentum scores while sectors trickle in serially.
+async function prewarmRrgHistoricalCache() {
+  if (historicalFullWarming.active) return;
+
+  if (Object.keys(rrgTokenCache).length === 0) {
+    const allKeys = ["NSE:NIFTY 50", "NSE:NIFTY 500", "NSE:NIFTY MIDCAP 100", ...RRG_SECTOR_KEYS];
+    try {
+      const q = await callWithTimeout({ name: "get_quotes", arguments: { instruments: allKeys } });
+      const quotes = parseMcpText(q) || {};
+      for (const k of allKeys) {
+        if (quotes[k]?.instrument_token) rrgTokenCache[k] = String(quotes[k].instrument_token);
+      }
+    } catch (e) {
+      console.log(`⚠️ RRG prewarm token resolve failed: ${e.message}`);
+      return;
+    }
+  }
+
+  const tokens = [...new Set(Object.values(rrgTokenCache))];
+  Object.assign(historicalFullWarming, { active: true, total: tokens.length, loaded: 0, startedAt: Date.now() });
+  console.log(`🔥 Pre-warming historicalFullCache for ${tokens.length} sector tokens...`);
+
+  for (const token of tokens) {
+    const c = historicalFullCache[token];
+    if (c && (Date.now() - c.timestamp < HISTORICAL_FULL_TTL)) {
+      historicalFullWarming.loaded++;
+      continue;
+    }
+    try {
+      await getOrFetchFullHistory(token);
+      historicalFullWarming.loaded++;
+    } catch (e) {
+      console.log(`  ⚠️ prewarm token ${token}: ${e.message}`);
+    }
+    await new Promise(r => setTimeout(r, 800));
+  }
+
+  historicalFullWarming.active = false;
+  console.log(`✅ RRG prewarm complete: ${historicalFullWarming.loaded}/${tokens.length} cached`);
+}
+
 app.get('/api/rrg', async (req, res) => {
   try {
     const benchmarkKey = req.query.benchmark || "NSE:NIFTY 50";
     console.log(`📊 RRG requested. Benchmark: ${benchmarkKey}. Token cache size: ${Object.keys(rrgTokenCache).length}, HistFull cache size: ${Object.keys(historicalFullCache).length}`);
+    const progress = {
+      loaded: historicalFullWarming.loaded,
+      total: historicalFullWarming.total || (RRG_SECTOR_KEYS.length + 1),
+      active: historicalFullWarming.active,
+    };
 
     // Step 1: Resolve tokens if not yet cached
     // Tokens are populated as a side-effect by /api/quotes (called by frontend on page load).
@@ -1461,21 +1530,21 @@ app.get('/api/rrg', async (req, res) => {
         }
       } catch (quoteErr) {
         console.log(`  ⚠️ Token resolution failed: ${quoteErr.message}. Will retry next call.`);
-        return res.json({ benchmark: "NIFTY 50", sectors: [], message: "Token resolution pending. Retrying..." });
+        return res.json({ ready: false, benchmark: benchmarkKey, sectors: [], progress, message: "Token resolution pending. Retrying..." });
       }
     }
 
     const benchmarkToken = rrgTokenCache[benchmarkKey];
     if (!benchmarkToken) {
       console.log(`  ❌ Cannot resolve benchmark token for ${benchmarkKey}. Token cache keys:`, Object.keys(rrgTokenCache).join(', '));
-      return res.json({ benchmark: benchmarkKey, sectors: [], message: `Benchmark token (${benchmarkKey}) not yet resolved.` });
+      return res.json({ ready: false, benchmark: benchmarkKey, sectors: [], progress, message: `Benchmark token (${benchmarkKey}) not yet resolved.` });
     }
 
     // Step 2: Get benchmark historical data
     const benchmarkCached = historicalFullCache[benchmarkToken];
     if (!benchmarkCached || !benchmarkCached.data || benchmarkCached.data.length === 0) {
       console.log(`  ⏳ Benchmark token ${benchmarkToken} (${benchmarkKey}) not in historicalFullCache. Cache keys: ${Object.keys(historicalFullCache).slice(0, 10).join(', ')}...`);
-      return res.json({ benchmark: benchmarkKey, sectors: [], message: "Benchmark historical data not yet cached." });
+      return res.json({ ready: false, benchmark: benchmarkKey, sectors: [], progress, message: "Benchmark historical data not yet cached." });
     }
 
     console.log(`  ✅ Benchmark data: ${benchmarkCached.data.length} daily candles`);
@@ -1579,10 +1648,13 @@ app.get('/api/rrg', async (req, res) => {
     console.log(`  ✅ RRG computed against ${benchmarkKey}: ${sectors.length} sectors, ${skipped.length} skipped`);
     if (skipped.length > 0) console.log(`  ⚠️ Skipped: ${skipped.join(' | ')}`);
 
+    const ready = sectors.length >= Math.min(RRG_SECTOR_KEYS.length, 15);
     res.json({
+      ready,
       benchmark: benchmarkKey,
       generatedAt: new Date().toISOString(),
-      sectors
+      sectors,
+      progress,
     });
   } catch (err) {
     console.error("RRG computation error:", err);

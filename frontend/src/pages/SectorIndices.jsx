@@ -86,6 +86,7 @@ function SectorIndices() {
 
   // ─── RRG State ─────────────────────────────────────────────
   const [rrg, setRrg] = useState(null);
+  const [rrgProgress, setRrgProgress] = useState(null);
   const [rrgBenchmark, setRrgBenchmark] = useState("NSE:NIFTY 50");
   const [rrgLoading, setRrgLoading] = useState(false);
   const [rrgTailLength, setRrgTailLength] = useState(7);
@@ -215,20 +216,27 @@ function SectorIndices() {
   }, []);
 
   // ─── RRG Data Fetch ─────────────────────────────────────────
+  // Only commit RRG to component state once the backend signals ready=true.
+  // Until then, surface progress so the table shows a clean loading state
+  // instead of partial data that flickers as more sectors arrive.
   const fetchRRGData = useCallback(async () => {
-    if (!mountedRef.current) return;
+    if (!mountedRef.current) return { count: 0, ready: false };
     try {
       const res = await fetch(`/api/rrg?benchmark=${encodeURIComponent(rrgBenchmark)}`);
-      const data = await res.json();
-      if (mountedRef.current && data.sectors && data.sectors.length > 0) {
-        setRrg(data);
+      const payload = await res.json();
+      if (!mountedRef.current) return { count: 0, ready: false };
+      if (payload.ready && Array.isArray(payload.sectors) && payload.sectors.length > 0) {
+        setRrg(payload);
+        setRrgProgress(payload.progress || null);
         setRrgLoading(false);
-        return data.sectors.length;
+      } else {
+        setRrgProgress(payload.progress || null);
       }
+      return { count: payload.sectors?.length || 0, ready: !!payload.ready };
     } catch (err) {
       console.error('RRG fetch error:', err);
     }
-    return 0;
+    return { count: 0, ready: false };
   }, [rrgBenchmark]);
 
   useEffect(() => {
@@ -241,16 +249,16 @@ function SectorIndices() {
       if (cancelled || !mountedRef.current) return;
       attempts += 1;
       setRrgLoading(true);
-      const count = await fetchRRGData();
+      const { ready, count } = await fetchRRGData();
       if (cancelled || !mountedRef.current) return;
 
-      if (count >= 5) {
-        // Warm enough — switch to periodic refresh.
+      if (ready) {
+        // Backend has a stable, complete RRG result — switch to periodic refresh.
         refreshTimer = setInterval(() => { fetchRRGData(); }, RRG_REFRESH_MS);
         return;
       }
       if (attempts >= RRG_MAX_WARMUP_POLLS) {
-        console.warn(`RRG warm-up gave up after ${attempts} polls; backend is only returning ${count} sectors.`);
+        console.warn(`RRG warm-up gave up after ${attempts} polls; backend reports ${count} sectors but ready=false.`);
         // Still set a refresh in case the backend catches up.
         refreshTimer = setInterval(() => { fetchRRGData(); }, RRG_REFRESH_MS);
         return;
@@ -470,7 +478,12 @@ function SectorIndices() {
     const breakdownById = {};
     const scoreMap = {};
 
-    if (scorable.length > 0) {
+    // Gate the percentile rerank until enough rows have history. Without this
+    // gate, scores reshuffle every time a single sector's history arrives —
+    // visually that looks like flickering "wrong" data.
+    const enoughHistory = tabRows.length === 0 || scorable.length >= Math.ceil(tabRows.length * 0.6);
+
+    if (enoughHistory && scorable.length > 0) {
       const rawScores = scorable.map(r => {
         const w1w = (r['1W'] || 0) * W_1W;
         const w1m = (r['1M'] || 0) * W_1M;
@@ -952,6 +965,11 @@ function SectorIndices() {
           </div>
         </div>
 
+        {rrg === null && rrgProgress && rrgProgress.total > 0 && (
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', padding: '0.25rem 0 0.5rem' }}>
+            Loading sector momentum… {rrgProgress.loaded}/{rrgProgress.total}
+          </div>
+        )}
         <div style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'right', fontSize: '0.85rem' }}>
           <thead style={{ position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5 }}>
@@ -1091,7 +1109,9 @@ function SectorIndices() {
                 <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center', position: 'relative' }}
                     onMouseEnter={() => row.momentumBreakdown && setMomentumPopover(row.id)}
                     onMouseLeave={() => setMomentumPopover(null)}>
-                  {row.momentumScore == null ? (
+                  {rrg === null ? (
+                    <span style={{ color: 'var(--text-secondary)', opacity: 0.45 }}>—</span>
+                  ) : row.momentumScore == null ? (
                     <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
                   ) : (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', cursor: 'help' }}>
@@ -1170,7 +1190,9 @@ function SectorIndices() {
                 </td>
                 {activeTab !== 'broad' && (
                   <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
-                    {row.marketSignal && (
+                    {rrg === null ? (
+                      <span style={{ color: 'var(--text-secondary)', opacity: 0.45 }}>—</span>
+                    ) : row.marketSignal && (
                       <span
                         onClick={(e) => { e.stopPropagation(); setActiveSignalModal(row); }}
                         title="Click to see algorithmic breakdown"
