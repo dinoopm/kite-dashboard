@@ -724,15 +724,37 @@ function Alerts() {
                     const span = stock.resistance - stock.support
                     if (span <= 0) return null
                     const pPos = Math.max(0, Math.min(100, ((stock.price - stock.support) / span) * 100))
+                    // Signed distance from current price: negative = below current (support side),
+                    // positive = above current (resistance side).
+                    const distToSupport    = ((stock.support    - stock.price) / stock.price) * 100
+                    const distToResistance = ((stock.resistance - stock.price) / stock.price) * 100
 
                     return (
                       <>
-                        <span className="mono" style={{ color: '#f59e0b', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>S: ₹{stock.support.toFixed(1)}</span>
+                        <span
+                          className="mono"
+                          style={{ color: '#f59e0b', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}
+                          title={`${distToSupport.toFixed(2)}% below current price — support floor`}
+                        >
+                          S: ₹{stock.support.toFixed(1)}
+                          <span style={{ color: '#94a3b8', fontWeight: 500, fontSize: '0.6rem' }}>
+                            ({distToSupport.toFixed(2)}%)
+                          </span>
+                        </span>
                         <div style={{ flex: 1, height: '4px', background: '#1e293b', borderRadius: '2px', position: 'relative' }}>
                           <div style={{ position: 'absolute', left: 0, width: `${pPos}%`, height: '100%', background: 'rgba(255,255,255,0.1)', borderRadius: '2px 0 0 2px' }}></div>
                           <div style={{ position: 'absolute', left: `${pPos}%`, top: '-4px', bottom: '-4px', width: '3px', background: '#f8fafc', borderRadius: '1px', transform: 'translateX(-50%)', boxShadow: '0 0 4px rgba(255,255,255,0.5)', zIndex: 5 }}></div>
                         </div>
-                        <span className="mono" style={{ color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>R: ₹{stock.resistance.toFixed(1)}</span>
+                        <span
+                          className="mono"
+                          style={{ color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}
+                          title={`${distToResistance.toFixed(2)}% above current price — resistance ceiling`}
+                        >
+                          R: ₹{stock.resistance.toFixed(1)}
+                          <span style={{ color: '#94a3b8', fontWeight: 500, fontSize: '0.6rem' }}>
+                            (+{distToResistance.toFixed(2)}%)
+                          </span>
+                        </span>
                       </>
                     )
                   })()}

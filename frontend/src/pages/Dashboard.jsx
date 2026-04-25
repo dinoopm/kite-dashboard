@@ -341,7 +341,7 @@ function Dashboard() {
           <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '0' }} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem', flex: 1 }}>
             {data.fiiDii && data.fiiDii.length > 0 ? (
-              data.fiiDii.slice(0, 3).map((day, idx) => {
+              data.fiiDii.slice(0, 1).map((day, idx) => {
                 const isFIIPos = day.fii_net >= 0;
                 const isDIIPos = day.dii_net >= 0;
                 const totalNet = day.fii_net + day.dii_net;

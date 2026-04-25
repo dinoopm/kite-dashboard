@@ -310,12 +310,15 @@ async function reconnectMcp() {
 app.get('/api/fiidii', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
   try {
+    // Default to just the latest row (the dashboard widget only renders one).
+    // Callers needing history can pass ?limit=N (capped at 30 to keep payload bounded).
+    const limit = Math.min(parseInt(req.query.limit, 10) || 1, 30);
     const { data, error } = await supabase
       .from('fii_dii_activity')
       .select('*')
       .order('trade_date', { ascending: false })
-      .limit(10);
-      
+      .limit(limit);
+
     if (error) throw error;
     res.json(data);
   } catch (err) {
