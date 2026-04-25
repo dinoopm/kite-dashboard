@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { useState, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import Dashboard from './pages/Dashboard'
@@ -8,6 +8,26 @@ import Alerts from './pages/Alerts'
 import SectorIndices from './pages/SectorIndices'
 import VixIndex from './pages/VixIndex'
 import Navbar from './components/Navbar'
+
+const PAGE_TITLES = {
+  '/':          'Dashboard',
+  '/portfolio': 'Portfolio',
+  '/alerts':    'Technical Alerts',
+  '/indices':   'Sector Indices',
+  '/vix':       'India VIX',
+}
+
+function TitleManager() {
+  const { pathname } = useLocation()
+  useEffect(() => {
+    const base = 'Kite Analytics'
+    const label = pathname.startsWith('/instrument/')
+      ? 'Instrument'
+      : PAGE_TITLES[pathname]
+    document.title = label ? `${label} — ${base}` : base
+  }, [pathname])
+  return null
+}
 
 function App() {
   const [authState, setAuthState] = useState('loading') // 'loading' | 'authenticated' | 'unauthenticated'
@@ -124,6 +144,7 @@ function App() {
 
   return (
     <BrowserRouter>
+      <TitleManager />
       <div style={{ maxWidth: '1600px', width: '95%', margin: '0 auto', padding: '2rem 1rem' }}>
         <Navbar onDisconnect={handleDisconnect} />
         <Routes>
