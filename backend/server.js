@@ -1499,10 +1499,18 @@ async function prewarmRrgHistoricalCache() {
 app.get('/api/rrg', async (req, res) => {
   try {
     const benchmarkKey = req.query.benchmark || "NSE:NIFTY 50";
-    console.log(`📊 RRG requested. Benchmark: ${benchmarkKey}. Token cache size: ${Object.keys(rrgTokenCache).length}, HistFull cache size: ${Object.keys(historicalFullCache).length}`);
+
+    // Optional: compute RRG for a custom set of securities instead of RRG_SECTOR_KEYS
+    let keysToCompute = RRG_SECTOR_KEYS;
+    if (req.query.securities) {
+      const raw = decodeURIComponent(req.query.securities);
+      keysToCompute = raw.startsWith('[') ? JSON.parse(raw) : raw.split(',').map(s => s.trim());
+    }
+
+    console.log(`📊 RRG requested. Benchmark: ${benchmarkKey}. Securities: ${keysToCompute.length}. Token cache size: ${Object.keys(rrgTokenCache).length}, HistFull cache size: ${Object.keys(historicalFullCache).length}`);
     const progress = {
       loaded: historicalFullWarming.loaded,
-      total: historicalFullWarming.total || (RRG_SECTOR_KEYS.length + 1),
+      total: historicalFullWarming.total || (keysToCompute.length + 1),
       active: historicalFullWarming.active,
     };
 
@@ -1512,7 +1520,7 @@ app.get('/api/rrg', async (req, res) => {
     if (Object.keys(rrgTokenCache).length === 0) {
       console.log('  ⏳ RRG: Token cache empty. Attempting to resolve via MCP get_quotes...');
       try {
-        const allKeys = [benchmarkKey, ...RRG_SECTOR_KEYS];
+        const allKeys = [benchmarkKey, ...keysToCompute];
         const quoteResult = await callWithTimeout({
           name: "get_quotes",
           arguments: { instruments: allKeys }
@@ -1532,6 +1540,19 @@ app.get('/api/rrg', async (req, res) => {
         console.log(`  ⚠️ Token resolution failed: ${quoteErr.message}. Will retry next call.`);
         return res.json({ ready: false, benchmark: benchmarkKey, sectors: [], progress, message: "Token resolution pending. Retrying..." });
       }
+    }
+
+    // Batch-resolve any missing tokens for custom securities list
+    const missingKeys = keysToCompute.filter(k => !rrgTokenCache[k]);
+    if (missingKeys.length > 0) {
+      console.log(`  ⏳ Resolving ${missingKeys.length} missing tokens for custom securities...`);
+      try {
+        const qr = await callWithTimeout({ name: 'get_quotes', arguments: { instruments: missingKeys } });
+        const q = parseMcpText(qr) || {};
+        for (const k of Object.keys(q)) {
+          if (q[k]?.instrument_token) rrgTokenCache[k] = String(q[k].instrument_token);
+        }
+      } catch (e) { console.log(`  ⚠️ Token resolution for custom list failed: ${e.message}`); }
     }
 
     const benchmarkToken = rrgTokenCache[benchmarkKey];
@@ -1557,11 +1578,11 @@ app.get('/api/rrg', async (req, res) => {
       benchmarkMap[w.key] = w.close;
     }
 
-    // Step 3: Compute RS-Ratio and RS-Momentum for each sector
+    // Step 3: Compute RS-Ratio and RS-Momentum for each security
     const sectors = [];
     const skipped = [];
 
-    for (const sectorKey of RRG_SECTOR_KEYS) {
+    for (const sectorKey of keysToCompute) {
       const token = rrgTokenCache[sectorKey];
       if (!token) { skipped.push(`${sectorKey}: no token`); continue; }
 
@@ -1634,7 +1655,7 @@ app.get('/api/rrg', async (req, res) => {
         else if (latest.rsRatio < 100 && latest.rsMomentum >= 100) quadrant = 'Improving';
 
         sectors.push({
-          name: RRG_SECTOR_NAMES[sectorKey] || sectorKey,
+          name: RRG_SECTOR_NAMES[sectorKey] || sectorKey.split(':')[1] || sectorKey,
           key: sectorKey,
           token,
           quadrant,
@@ -1648,7 +1669,7 @@ app.get('/api/rrg', async (req, res) => {
     console.log(`  ✅ RRG computed against ${benchmarkKey}: ${sectors.length} sectors, ${skipped.length} skipped`);
     if (skipped.length > 0) console.log(`  ⚠️ Skipped: ${skipped.join(' | ')}`);
 
-    const ready = sectors.length >= Math.min(RRG_SECTOR_KEYS.length, 15);
+    const ready = sectors.length >= Math.min(keysToCompute.length, Math.ceil(keysToCompute.length * 0.7));
     res.json({
       ready,
       benchmark: benchmarkKey,
@@ -1687,6 +1708,59 @@ app.post('/api/quotes', async (req, res) => {
 
     res.json(result);
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Sector Constituents ────────────────────────────────────────
+const sectorConstituentsCache = {}; // { sectorKey: { data, timestamp } }
+const SECTOR_CONSTITUENTS_TTL = 30 * 60 * 1000; // 30 min
+
+app.get('/api/sector-constituents/:sector', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    const sectorKey = decodeURIComponent(req.params.sector);
+    const cached = sectorConstituentsCache[sectorKey];
+    if (cached && Date.now() - cached.timestamp < SECTOR_CONSTITUENTS_TTL) {
+      return res.json(cached.data);
+    }
+
+    const { data: rows, error } = await supabase
+      .from('sector_constituents')
+      .select('*')
+      .eq('sector_key', sectorKey)
+      .order('sort_order');
+
+    if (error) return res.status(500).json({ error: error.message });
+    if (!rows || rows.length === 0) return res.status(404).json({ error: `No constituents for ${sectorKey}` });
+
+    // Batch-resolve instrument tokens
+    const instruments = rows.map(r => `NSE:${r.symbol}`);
+    const quoteResult = await callWithTimeout({ name: 'get_quotes', arguments: { instruments } });
+    const quotes = parseMcpText(quoteResult) || {};
+
+    // Populate rrgTokenCache as side-effect
+    for (const key of Object.keys(quotes)) {
+      if (quotes[key]?.instrument_token) rrgTokenCache[key] = String(quotes[key].instrument_token);
+    }
+
+    const constituents = rows.map(r => {
+      const key = `NSE:${r.symbol}`;
+      const q = quotes[key];
+      return {
+        symbol: r.symbol,
+        name: r.name,
+        isin: r.isin,
+        key,
+        token: q?.instrument_token ? String(q.instrument_token) : null,
+      };
+    });
+
+    const payload = { sector: sectorKey, constituents };
+    sectorConstituentsCache[sectorKey] = { data: payload, timestamp: Date.now() };
+    res.json(payload);
+  } catch (err) {
+    console.error('sector-constituents error:', err);
     res.status(500).json({ error: err.message });
   }
 });
