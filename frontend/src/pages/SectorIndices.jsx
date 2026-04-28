@@ -34,6 +34,10 @@ const RRG_MAX_WARMUP_POLLS = 18;    // Give up after ~3 minutes
 const HIST_FETCH_DELAY_MS = 1500;
 const HIST_CACHE_DELAY_MS = 50;
 
+// Benchmarks the RRG/RS columns can be evaluated against. Loaded regardless of
+// which tab is active so "RS vs <benchmark>" is populated on first render.
+const RRG_BENCHMARK_KEYS = new Set(["NSE:NIFTY 50", "NSE:NIFTY 500", "NSE:NIFTY MIDCAP 100"]);
+
 const INDICES = [
   { key: "NSE:NIFTY 50", name: "NIFTY 50", category: "broad" },
   { key: "NSE:NIFTY NEXT 50", name: "NIFTY NEXT 50", category: "broad" },
@@ -68,13 +72,25 @@ const INDICES = [
   { key: "NSE:NIFTY IND DEFENCE", name: "NIFTY INDIA DEFENCE", category: "sector" },
 ];
 
+// Empty placeholder row so unloaded-tab indices still render in the table.
+const emptyRowFor = (entry) => ({
+  id: entry.key, name: entry.name, category: entry.category, token: null,
+  price: 0, '1D': null,
+  '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '3Y': null, '5Y': null,
+  sparkline: null, aboveSma50: null, rsi14: null, dist52WHigh: null, rs1M: null,
+});
+
 function SectorIndices() {
   const navigate = useNavigate();
-  const [data, setData] = useState([]);
+  const [data, setData] = useState(() => INDICES.map(emptyRowFor));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('sector');
+  // Tabs whose quote/history fetches have been kicked off. Broad Market is
+  // deferred until the user opens that tab so the initial Sector view loads fast.
+  const [loadedTabs, setLoadedTabs] = useState(() => new Set(['sector']));
+  const historyLoadedRef = useRef(new Set());
   const [isHeatmap, setIsHeatmap] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [hiddenColumns, setHiddenColumns] = useState({ '1W': false, '6M': false, '3Y': false, '5Y': false });
@@ -121,25 +137,27 @@ function SectorIndices() {
   }, []);
 
   useEffect(() => {
-    let initialDone = false;
+    let cancelled = false;
     let refreshTimer = null;
+
+    const activeIndices = INDICES.filter(i => loadedTabs.has(i.category) || RRG_BENCHMARK_KEYS.has(i.key));
+    if (activeIndices.length === 0) return;
+    const activeKeys = activeIndices.map(i => i.key);
 
     const pullQuotes = async () => {
       try {
-        if (!initialDone) setLoading(true);
-        const allKeys = [...new Set([...INDICES.map(i => i.key), 'NSE:NIFTY 500', 'NSE:NIFTY MIDCAP 100'])];
-
         const res = await fetch('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments: allKeys })
+          body: JSON.stringify({ instruments: activeKeys })
         });
 
         const resData = await res.json();
+        if (cancelled || !mountedRef.current) return;
 
         if (resData?.content?.[0]?.text) {
           const quotes = JSON.parse(resData.content[0].text);
-          const quotesData = INDICES.map(entry => {
+          const updates = activeIndices.map(entry => {
             const quote = quotes[entry.key] || {};
             const lastPrice = quote.last_price ?? null;
             const prevClose = quote.ohlc?.close;
@@ -153,54 +171,35 @@ function SectorIndices() {
 
             return {
               id: entry.key,
-              name: entry.name,
-              category: entry.category,
               token: quote.instrument_token,
               price: lastPrice ?? 0,
               '1D': pct1D,
             };
           });
 
-          if (!mountedRef.current) return;
+          setData(prev => prev.map(row => {
+            const u = updates.find(x => x.id === row.id);
+            return u ? { ...row, price: u.price, '1D': u['1D'], token: u.token ?? row.token } : row;
+          }));
+          setLoading(false);
+          setLastUpdated(new Date());
 
-          if (!initialDone) {
-            // First load: seed the table and kick off progressive history fetch.
-            const initialData = quotesData.map(q => ({
-              ...q,
-              '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '3Y': null, '5Y': null,
-              sparkline: null, aboveSma50: null, rsi14: null, dist52WHigh: null, rs1M: null,
-            }));
-            setData(initialData);
-            setLoading(false);
-            setLastUpdated(new Date());
-            initialDone = true;
-
-            const altBenchmarkKeys = ['NSE:NIFTY 500', 'NSE:NIFTY MIDCAP 100'];
-            const historyQueue = initialData.filter(d => d.token);
-            for (const key of altBenchmarkKeys) {
-              if (!historyQueue.find(d => d.id === key) && quotes[key]?.instrument_token) {
-                historyQueue.push({
-                  id: key, name: key,
-                  token: String(quotes[key].instrument_token),
-                  price: quotes[key].last_price || 0
-                });
-              }
-            }
-            loadHistoricalDataProgressively(historyQueue);
-          } else {
-            // Subsequent refreshes: merge price + 1D only, preserve history fields.
-            setData(prev => prev.map(row => {
-              const q = quotesData.find(x => x.id === row.id);
-              return q ? { ...row, price: q.price, '1D': q['1D'], token: q.token ?? row.token } : row;
-            }));
-            setLastUpdated(new Date());
-          }
-        } else if (!initialDone) {
+          // Kick off history loading for indices we haven't queued yet.
+          const newHistoryQueue = updates
+            .filter(u => u.token && !historyLoadedRef.current.has(u.id))
+            .map(u => {
+              const meta = INDICES.find(i => i.key === u.id);
+              return { id: u.id, name: meta?.name || u.id, token: u.token, price: u.price };
+            });
+          for (const q of newHistoryQueue) historyLoadedRef.current.add(q.id);
+          if (newHistoryQueue.length > 0) loadHistoricalDataProgressively(newHistoryQueue);
+        } else {
           throw new Error('Failed to parse quotes');
         }
       } catch (err) {
-        if (!mountedRef.current) return;
-        if (!initialDone) {
+        if (cancelled || !mountedRef.current) return;
+        // Only surface the error on first load (nothing yet has populated).
+        if (historyLoadedRef.current.size === 0) {
           console.error(err);
           setError("Failed to load initial benchmark data. Backend might be down.");
           setLoading(false);
@@ -211,9 +210,11 @@ function SectorIndices() {
 
     pullQuotes();
     refreshTimer = setInterval(pullQuotes, QUOTES_REFRESH_MS);
-    return () => { if (refreshTimer) clearInterval(refreshTimer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => {
+      cancelled = true;
+      if (refreshTimer) clearInterval(refreshTimer);
+    };
+  }, [loadedTabs]);
 
   // ─── RRG Data Fetch ─────────────────────────────────────────
   const fetchRRGData = useCallback(async () => {
@@ -747,7 +748,16 @@ function SectorIndices() {
           ].map(tab => (
             <button
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => {
+                setActiveTab(tab.key);
+                if (!loadedTabs.has(tab.key)) {
+                  setLoadedTabs(prev => {
+                    const next = new Set(prev);
+                    next.add(tab.key);
+                    return next;
+                  });
+                }
+              }}
               style={{
                 padding: '0.5rem 1.2rem',
                 borderRadius: '8px',

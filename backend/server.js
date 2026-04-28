@@ -545,11 +545,6 @@ app.get('/api/holdings', async (req, res) => {
   try {
     const result = await fetchWithCache("get_holdings", "holdings", { limit: 50 });
     res.json(result);
-    // Trigger cache warmup on first successful holdings fetch
-    if (!cacheReady && !result.isError) {
-      console.log("🔑 Authenticated session detected, starting cache warm-up...");
-      warmCache();
-    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
