@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Cell as RechartsCell, ResponsiveContainer } from 'recharts';
 import RRGChart from '../components/RRGChart';
+import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 
 // ─── RRG Color Palette ─────────────────────────────────────────
 const RRG_COLORS = [
@@ -118,10 +119,18 @@ function SectorIndices() {
 
   // Progressive loading queue refs
   const mountedRef = useRef(true);
+  // Top-level abort controller used by long-running progressive loops
+  // (loadHistoricalDataProgressively is invoked from inside pullQuotes, so it
+  // needs an abort signal that lives across the full mount lifetime).
+  const pageAbortRef = useRef(null);
 
   useEffect(() => {
     mountedRef.current = true;
-    return () => { mountedRef.current = false; };
+    pageAbortRef.current = new AbortController();
+    return () => {
+      mountedRef.current = false;
+      pageAbortRef.current?.abort();
+    };
   }, []);
 
   // Cmd/Ctrl+K focuses the search input.
@@ -137,23 +146,29 @@ function SectorIndices() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     let refreshTimer = null;
 
     const activeIndices = INDICES.filter(i => loadedTabs.has(i.category) || RRG_BENCHMARK_KEYS.has(i.key));
     if (activeIndices.length === 0) return;
     const activeKeys = activeIndices.map(i => i.key);
 
+    const fireIfVisible = (fn) => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') fn();
+    };
+
     const pullQuotes = async () => {
       try {
-        const res = await fetch('/api/quotes', {
+        const res = await fetchWithAbort('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments: activeKeys })
+          body: JSON.stringify({ instruments: activeKeys }),
+          signal
         });
 
         const resData = await res.json();
-        if (cancelled || !mountedRef.current) return;
+        if (signal.aborted || !mountedRef.current) return;
 
         if (resData?.content?.[0]?.text) {
           const quotes = JSON.parse(resData.content[0].text);
@@ -197,7 +212,8 @@ function SectorIndices() {
           throw new Error('Failed to parse quotes');
         }
       } catch (err) {
-        if (cancelled || !mountedRef.current) return;
+        if (err.name === 'AbortError' || signal.aborted || !mountedRef.current) return;
+        if (err.name === 'RateLimitedError') return;
         // Only surface the error on first load (nothing yet has populated).
         if (historyLoadedRef.current.size === 0) {
           console.error(err);
@@ -209,18 +225,18 @@ function SectorIndices() {
     };
 
     pullQuotes();
-    refreshTimer = setInterval(pullQuotes, QUOTES_REFRESH_MS);
+    refreshTimer = setInterval(() => fireIfVisible(pullQuotes), QUOTES_REFRESH_MS);
     return () => {
-      cancelled = true;
+      controller.abort();
       if (refreshTimer) clearInterval(refreshTimer);
     };
   }, [loadedTabs]);
 
   // ─── RRG Data Fetch ─────────────────────────────────────────
-  const fetchRRGData = useCallback(async () => {
-    if (!mountedRef.current) return;
+  const fetchRRGData = useCallback(async (signal) => {
+    if (!mountedRef.current) return 0;
     try {
-      const res = await fetch(`/api/rrg?benchmark=${encodeURIComponent(rrgBenchmark)}`);
+      const res = await fetchWithAbort(`/api/rrg?benchmark=${encodeURIComponent(rrgBenchmark)}`, { signal });
       const data = await res.json();
       if (mountedRef.current && data.sectors && data.sectors.length > 0) {
         setRrg(data);
@@ -228,33 +244,40 @@ function SectorIndices() {
         return data.sectors.length;
       }
     } catch (err) {
+      if (err.name === 'AbortError' || (signal && signal.aborted)) return 0;
+      if (err.name === 'RateLimitedError') return 0;
       console.error('RRG fetch error:', err);
     }
     return 0;
   }, [rrgBenchmark]);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
     let attempts = 0;
     let warmupTimer = null;
     let refreshTimer = null;
 
+    const fireIfVisible = (fn) => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') fn();
+    };
+
     const pollRRG = async () => {
-      if (cancelled || !mountedRef.current) return;
+      if (signal.aborted || !mountedRef.current) return;
       attempts += 1;
       setRrgLoading(true);
-      const count = await fetchRRGData();
-      if (cancelled || !mountedRef.current) return;
+      const count = await fetchRRGData(signal);
+      if (signal.aborted || !mountedRef.current) return;
 
       if (count >= 5) {
-        // Warm enough — switch to periodic refresh.
-        refreshTimer = setInterval(() => { fetchRRGData(); }, RRG_REFRESH_MS);
+        // Warm enough — switch to periodic refresh; pause when tab hidden.
+        refreshTimer = setInterval(() => fireIfVisible(() => fetchRRGData(signal)), RRG_REFRESH_MS);
         return;
       }
       if (attempts >= RRG_MAX_WARMUP_POLLS) {
         console.warn(`RRG warm-up gave up after ${attempts} polls; backend is only returning ${count} sectors.`);
         // Still set a refresh in case the backend catches up.
-        refreshTimer = setInterval(() => { fetchRRGData(); }, RRG_REFRESH_MS);
+        refreshTimer = setInterval(() => fireIfVisible(() => fetchRRGData(signal)), RRG_REFRESH_MS);
         return;
       }
       warmupTimer = setTimeout(pollRRG, RRG_POLL_MS);
@@ -262,7 +285,7 @@ function SectorIndices() {
 
     const kickoff = setTimeout(pollRRG, 5000);
     return () => {
-      cancelled = true;
+      controller.abort();
       clearTimeout(kickoff);
       if (warmupTimer) clearTimeout(warmupTimer);
       if (refreshTimer) clearInterval(refreshTimer);
@@ -275,19 +298,20 @@ function SectorIndices() {
       setRrgLoading(true);
       setRrgScrubEnd(null);  // Series length may differ between benchmarks — reset to latest.
       setRrgAnimFrame(0);
-      fetchRRGData();
+      fetchRRGData(pageAbortRef.current?.signal);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rrgBenchmark]);
 
   const loadHistoricalDataProgressively = async (indicesList) => {
+    const signal = pageAbortRef.current?.signal;
     for (let index of indicesList) {
-      if (!mountedRef.current) break;
+      if (!mountedRef.current || signal?.aborted) break;
 
       let wasCached = false;
       try {
         // Use the multi-year endpoint that fetches 5Y data in yearly chunks
-        const res = await fetch(`/api/historical-full/${index.token}`);
+        const res = await fetchWithAbort(`/api/historical-full/${index.token}`, { signal });
         const resData = await res.json();
         wasCached = !!resData?.cached;
 
@@ -343,18 +367,19 @@ function SectorIndices() {
           }
         }
       } catch (e) {
+        if (e.name === 'AbortError' || signal?.aborted) break;
+        if (e.name === 'RateLimitedError') break;
         console.error("Failed history for", index.name, e);
       }
-      
+
+      if (signal?.aborted || !mountedRef.current) break;
       // Only enforce rate-limit spacing when the backend actually hit the upstream.
-      if (mountedRef.current) {
-        await new Promise(r => setTimeout(r, wasCached ? HIST_CACHE_DELAY_MS : HIST_FETCH_DELAY_MS));
-      }
+      await new Promise(r => setTimeout(r, wasCached ? HIST_CACHE_DELAY_MS : HIST_FETCH_DELAY_MS));
     }
     // After all historical data is loaded, do a final RRG refresh to pick up all sectors
-    if (mountedRef.current) {
+    if (mountedRef.current && !signal?.aborted) {
       console.log('Progressive loading complete — refreshing RRG data...');
-      fetchRRGData();
+      fetchRRGData(signal);
     }
   };
 

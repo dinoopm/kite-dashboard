@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 
 // ─── VIX Zone Definitions ─────────────────────────────────────
 const VIX_ZONES = [
@@ -120,50 +121,46 @@ function VixIndex() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' });
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
 
   // Fetch quotes
   useEffect(() => {
-    const fetchQuotes = async () => {
+    const controller = new AbortController();
+    (async () => {
       try {
-        const res = await fetch('/api/quotes', {
+        const res = await fetchWithAbort('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments: ['NSE:INDIA VIX', 'NSE:NIFTY 50', 'BSE:SENSEX'] })
+          body: JSON.stringify({ instruments: ['NSE:INDIA VIX', 'NSE:NIFTY 50', 'BSE:SENSEX'] }),
+          signal: controller.signal
         });
         const data = await res.json();
         if (data?.content?.[0]?.text) {
           const q = JSON.parse(data.content[0].text);
-          if (mountedRef.current) {
-            setVixQuote(q['NSE:INDIA VIX'] || null);
-            setNiftyQuote(q['NSE:NIFTY 50'] || null);
-            setSensexQuote(q['BSE:SENSEX'] || null);
-            setLoading(false);
-          }
+          setVixQuote(q['NSE:INDIA VIX'] || null);
+          setNiftyQuote(q['NSE:NIFTY 50'] || null);
+          setSensexQuote(q['BSE:SENSEX'] || null);
+          setLoading(false);
         }
       } catch (err) {
-        if (mountedRef.current) setError(err.message);
+        if (err.name === 'AbortError') return;
+        setError(err.message);
       }
-    };
-    fetchQuotes();
+    })();
+    return () => controller.abort();
   }, []);
 
   // Fetch VIX history
   useEffect(() => {
-    const fetchHistory = async () => {
-      if (!vixQuote) return;
+    if (!vixQuote) return;
+    const controller = new AbortController();
+    (async () => {
       try {
         const token = vixQuote.instrument_token;
-        const res = await fetch(`/api/historical/${token}?tf=${timeframe}`);
+        const res = await fetchWithAbort(`/api/historical/${token}?tf=${timeframe}`, { signal: controller.signal });
         const data = await res.json();
         if (data?.content?.[0]?.text) {
           const candles = JSON.parse(data.content[0].text);
-          if (mountedRef.current && Array.isArray(candles)) {
+          if (Array.isArray(candles)) {
             const processed = candles.map((c, i) => {
               const prevClose = i > 0 ? candles[i - 1].close : c.open;
               const delta = prevClose ? ((c.close - prevClose) / prevClose) * 100 : 0;
@@ -180,10 +177,11 @@ function VixIndex() {
           }
         }
       } catch (err) {
+        if (err.name === 'AbortError') return;
         console.error('VIX history fetch error:', err);
       }
-    };
-    fetchHistory();
+    })();
+    return () => controller.abort();
   }, [vixQuote, timeframe]);
 
   // Compute derived metrics

@@ -112,6 +112,42 @@ async function refreshTodayCandle(token) {
   }
 }
 
+// Refresh today's partial daily candle in historicalFullCache (used by sector-alerts).
+async function refreshTodayCandle_FullHistory(token) {
+  const now = Date.now();
+  const last = todayRefreshAt[token] || 0;
+  if (now - last < TODAY_REFRESH_COOLDOWN_MS) return;
+  todayRefreshAt[token] = now;
+
+  try {
+    const cached = historicalFullCache[token]?.data;
+    if (!Array.isArray(cached) || cached.length === 0) return;
+
+    const today = new Date();
+    const todayKey = today.toISOString().slice(0, 10);
+    const tailKey = (cached[cached.length - 1]?.date || '').slice(0, 10);
+
+    // Pull a 2-day window so we always get today's bar (if market is open/closed today).
+    const from = new Date(today);
+    from.setDate(today.getDate() - 1);
+    const data = await fetchHistorical(token, from, today, 'day');
+    if (!Array.isArray(data) || data.length === 0) return;
+
+    const latest = data[data.length - 1];
+    const latestKey = (latest?.date || '').slice(0, 10);
+    if (!latestKey) return;
+
+    if (latestKey === tailKey) {
+      cached[cached.length - 1] = latest;
+    } else if (latestKey > tailKey) {
+      cached.push(latest);
+    }
+  } catch (err) {
+    // Non-fatal: fall through with stale cache.
+    console.log(`  ⚠️  refreshTodayCandle_FullHistory(${token}) failed: ${err.message}`);
+  }
+}
+
 // Sector lookup via Yahoo Finance, cached in-memory for the life of the process.
 // First /api/alerts call after boot pays one Yahoo round-trip per holding;
 // subsequent calls are instant. `null` is a valid cached value (lookup failed).
@@ -466,6 +502,18 @@ const apiPromises = {
   profile: null, holdings: null, mfHoldings: null, margins: null
 };
 
+// Detect upstream Kite rate-limit errors so we can return a structured 429
+// to the frontend (which uses `Retry-After` to back off polling).
+function detectRateLimit(err) {
+  if (!err) return null;
+  const msg = (err.message || String(err)).toLowerCase();
+  if (msg.includes('too many requests') || msg.includes('rate limit') || msg.includes('429')) {
+    const m = msg.match(/retry[\s-]?after[^0-9]*(\d+)/);
+    return { retryAfter: m ? parseInt(m[1], 10) : 5 };
+  }
+  return null;
+}
+
 // Timeout for MCP client calls (15s) to avoid hanging forever when mcp-remote hangs
 const callWithTimeout = (cmdObj, ms = 15000) => {
   if (!mcpClient) return Promise.reject(new Error("MCP not connected"));
@@ -476,7 +524,16 @@ const callWithTimeout = (cmdObj, ms = 15000) => {
   return Promise.race([
     mcpClient.callTool(cmdObj),
     timeoutPromise
-  ]).finally(() => clearTimeout(timeoutId));
+  ]).finally(() => clearTimeout(timeoutId)).catch(err => {
+    const rl = detectRateLimit(err);
+    if (rl) {
+      const e = new Error('rate_limited');
+      e.statusCode = 429;
+      e.retryAfter = rl.retryAfter;
+      throw e;
+    }
+    throw err;
+  });
 };
 
 // Track instrument indicator fetches to prevent duplicate/race conditions
@@ -848,6 +905,354 @@ app.get('/api/indicators/:token', async (req, res) => {
   }
 });
 
+// ─── Per-stock alert computation ──────────────────────────────
+// Pure function over a candle series. Used by both /api/alerts (holdings) and
+// /api/sector-alerts/:sectorId (sector drill-down). Returns the alert object,
+// or null if the stock has no actionable signals.
+//
+// `holding` is the raw Kite holdings row when called from /api/alerts; pass
+// undefined for the sector path to skip qty/PnL fields and the holdings-aware
+// trade-plan overrides (BUY SEEN→ADD if owned, HOLD OVERBOUGHT→TRIM if +25%).
+async function computeStockAlert({ symbol, token, lastPrice, candles, holding, sector }) {
+  if (!candles || candles.length < 15) return null;
+
+  const closes = candles.map(c => c.close);
+  const currentPrice = lastPrice || closes[closes.length - 1];
+
+  const sma5Arr = SMA.calculate({ period: 5, values: closes });
+  const sma20Arr = SMA.calculate({ period: 20, values: closes });
+  const sma50Arr = SMA.calculate({ period: 50, values: closes });
+  const sma200Arr = SMA.calculate({ period: 200, values: closes });
+  const rsi14Arr = RSI.calculate({ period: 14, values: closes });
+
+  const highs = candles.map(c => c.high);
+  const lows = candles.map(c => c.low);
+
+  const atr14Arr = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
+
+  // Calculate 20-period Anchored VWAP
+  const recent20 = candles.slice(-20);
+  let vwap20 = null;
+  let vwapDeviation = null;
+  if (recent20.length === 20) {
+    const vwapArr = VWAP.calculate({
+      high: recent20.map(c => c.high),
+      low: recent20.map(c => c.low),
+      close: recent20.map(c => c.close),
+      volume: recent20.map(c => c.volume || 1)
+    });
+    vwap20 = vwapArr.length > 0 ? vwapArr[vwapArr.length - 1] : null;
+    if (vwap20) {
+      vwapDeviation = ((currentPrice - vwap20) / vwap20) * 100;
+    }
+  }
+
+  // Institutional Net Aggressor Proxy via Money Flow Multiplier (MFM)
+  let aggressorDelta = 0;
+  if (candles.length >= 14) {
+    const window = candles.slice(-14);
+    let totalMoneyFlowVolume = 0;
+    let totalVolume = 0;
+    window.forEach(c => {
+      const range = c.high - c.low || 0.01;
+      const multiplier = ((c.close - c.low) - (c.high - c.close)) / range;
+      totalMoneyFlowVolume += (multiplier * (c.volume || 1));
+      totalVolume += (c.volume || 1);
+    });
+    aggressorDelta = totalVolume > 0 ? totalMoneyFlowVolume / totalVolume : 0;
+  }
+
+  const sma5 = sma5Arr.length > 0 ? sma5Arr[sma5Arr.length - 1] : null;
+  const sma20 = sma20Arr.length > 0 ? sma20Arr[sma20Arr.length - 1] : null;
+  const sma50 = sma50Arr.length > 0 ? sma50Arr[sma50Arr.length - 1] : null;
+  const sma200 = sma200Arr.length > 0 ? sma200Arr[sma200Arr.length - 1] : null;
+  const rsi14 = rsi14Arr.length > 0 ? rsi14Arr[rsi14Arr.length - 1] : null;
+  const atr = atr14Arr.length > 0 ? atr14Arr[atr14Arr.length - 1] : null;
+  const rsiHistory = rsi14Arr.slice(-10).map(v => parseFloat(v.toFixed(1)));
+
+  // Regime Classification & Divergence Detection
+  let regime = "RANGE-BOUND";
+  let trendDirection = "NEUTRAL";
+  const isBullishAligned = (sma50 && sma200) && (
+    (currentPrice > sma50 && sma50 > sma200) ||
+    (currentPrice > sma50 && currentPrice > sma200 && Math.abs(sma50 - sma200) / sma200 < 0.02)
+  );
+  const isBearishAligned = (sma50 && sma200) && (
+    (currentPrice < sma50 && sma50 < sma200) ||
+    (currentPrice < sma50 && currentPrice < sma200 && Math.abs(sma50 - sma200) / sma200 < 0.02)
+  );
+  const isAlignedTrend = isBullishAligned || isBearishAligned;
+
+  const todayBar = candles[candles.length - 1];
+  const prevBarClose = candles[candles.length - 2]?.close ?? null;
+  const todayTR = todayBar
+    ? Math.max(
+        (todayBar.high ?? 0) - (todayBar.low ?? 0),
+        prevBarClose ? Math.abs((todayBar.high ?? 0) - prevBarClose) : 0,
+        prevBarClose ? Math.abs((todayBar.low ?? 0) - prevBarClose) : 0
+      )
+    : 0;
+  const todayRangePct = (todayBar?.close && todayTR) ? (todayTR / todayBar.close) : 0;
+
+  if (atr14Arr.length > 20) {
+    const atrSMA20 = atr14Arr.slice(-20).reduce((a, b) => a + b, 0) / 20;
+    const todayShockVsAtr = atr > 0 ? (todayTR / atr) : 0;
+    if (atr > 1.5 * atrSMA20 || todayShockVsAtr > 2 || todayRangePct > 0.04) {
+      regime = "WILD SWINGS";
+    } else if (isAlignedTrend) {
+      regime = "STRONG TREND";
+    }
+  } else if (isAlignedTrend) {
+    regime = "STRONG TREND";
+  }
+  if (regime === "STRONG TREND") {
+    trendDirection = isBullishAligned ? "BULL" : "BEAR";
+  }
+
+  let divergence = null;
+  if (closes.length >= 20 && rsi14Arr.length >= 20) {
+    const priceWindow = closes.slice(-20);
+    const rsiWindow = rsi14Arr.slice(-20);
+    const p1 = priceWindow[0], p2 = priceWindow[19];
+    const r1 = rsiWindow[0], r2 = rsiWindow[19];
+    if (p2 < p1 && r2 > r1 && r2 < 45) divergence = "BUY SETUP";
+    if (p2 > p1 && r2 < r1 && r2 > 55) divergence = "SELL SETUP";
+  }
+
+  // Confidence score (0-100) — starts at 30 for wider dynamic range
+  let confidence = 30;
+  const confBreakdown = [{ label: 'Base', value: 30 }];
+  const addConf = (label, value) => { confidence += value; confBreakdown.push({ label, value }); };
+  if (rsi14 !== null) {
+    if (rsi14 > 40 && rsi14 < 70) addConf('RSI in healthy zone', 10);
+    if (rsi14 <= 30) addConf('RSI oversold (rebound setup)', 15);
+  }
+  if (sma5 && sma20 && sma5 > sma20) addConf('SMA5 > SMA20 (short-term momentum)', 15);
+  if (sma50 && sma200 && sma50 > sma200) addConf('SMA50 > SMA200 (golden state)', 10);
+  if (vwapDeviation !== null && vwapDeviation > 0) addConf('Price above 20d VWAP', 10);
+  if (aggressorDelta > 0.3) addConf('Strong accumulation (money flow)', 10);
+  if (regime === 'STRONG TREND') {
+    if (trendDirection === 'BULL') addConf('Strong bullish trend', 5);
+    else if (trendDirection === 'BEAR') addConf('Strong bearish trend', -5);
+  }
+  if (sma50 && sma200 && currentPrice > sma50 && currentPrice > sma200) addConf('Price leads both MAs', 10);
+  if (rsi14 !== null && rsi14 >= 75) addConf('RSI severely overbought', -10);
+  if (sma50 && sma200 && sma50 < sma200) {
+    if (currentPrice > sma50 && currentPrice > sma200) addConf('Death cross (softened: price leads)', -5);
+    else addConf('Death cross', -10);
+  }
+  if (sma5 && sma20 && sma5 < sma20) addConf('SMA5 < SMA20 (short-term bearish)', -5);
+  if (vwapDeviation !== null && vwapDeviation < -2) addConf('Deep below 20d VWAP', -10);
+  if (aggressorDelta < -0.2) addConf('Distribution (money flow)', -10);
+  if (regime === 'WILD SWINGS') addConf('Volatile regime', -10);
+  confidence = Math.min(100, Math.max(0, Math.round(confidence)));
+
+  const stockAlerts = [];
+
+  if (rsi14 !== null) {
+    if (rsi14 <= 30) {
+      stockAlerts.push({ type: 'rsi', severity: 'bullish', message: `RSI is ${rsi14.toFixed(1)} — Stock is oversold/undervalued. Potential buying opportunity.` });
+    } else if (rsi14 >= 70) {
+      stockAlerts.push({ type: 'rsi', severity: 'bearish', message: `RSI is ${rsi14.toFixed(1)} — Stock is overbought/overvalued. Consider booking profits.` });
+    } else if (rsi14 <= 40) {
+      stockAlerts.push({ type: 'rsi', severity: 'warning', message: `RSI is ${rsi14.toFixed(1)} — Approaching oversold zone. Watch for reversal.` });
+    } else if (rsi14 >= 60) {
+      stockAlerts.push({ type: 'rsi', severity: 'info', message: `RSI is ${rsi14.toFixed(1)} — Strong bullish momentum zone.` });
+    }
+  }
+
+  if (sma5 !== null && sma20 !== null) {
+    if (currentPrice > sma5 && currentPrice > sma20) {
+      stockAlerts.push({ type: 'sma_short', severity: 'bullish', message: `Trading above SMA 5 (₹${sma5.toFixed(1)}) and SMA 20 (₹${sma20.toFixed(1)}) — Short-term momentum is bullish.` });
+    } else if (currentPrice < sma5 && currentPrice < sma20) {
+      stockAlerts.push({ type: 'sma_short', severity: 'bearish', message: `Trading below SMA 5 (₹${sma5.toFixed(1)}) and SMA 20 (₹${sma20.toFixed(1)}) — Short-term momentum is bearish.` });
+    } else if (currentPrice > sma5 && currentPrice < sma20) {
+      stockAlerts.push({ type: 'sma_short', severity: 'warning', message: `Trading above SMA 5 but below SMA 20 — Short-term recovery attempt; trend not yet confirmed.` });
+    }
+  }
+
+  if (sma50 !== null && sma200 !== null) {
+    if (currentPrice > sma50 && currentPrice > sma200) {
+      stockAlerts.push({ type: 'sma_long', severity: 'bullish', message: `Trading above SMA 50 (₹${sma50.toFixed(1)}) and SMA 200 (₹${sma200.toFixed(1)}) — Long-term trend is strongly bullish.` });
+    } else if (currentPrice < sma50 && currentPrice < sma200) {
+      stockAlerts.push({ type: 'sma_long', severity: 'bearish', message: `Trading below SMA 50 (₹${sma50.toFixed(1)}) and SMA 200 (₹${sma200.toFixed(1)}) — Long-term trend is bearish. Caution.` });
+    } else if (currentPrice > sma50 && currentPrice < sma200) {
+      stockAlerts.push({ type: 'sma_long', severity: 'warning', message: `Trading above SMA 50 but below SMA 200 — Mid-term recovery, but long-term trend still bearish.` });
+    }
+    if (sma50Arr.length >= 6 && sma200Arr.length >= 6) {
+      const prevSma50 = sma50Arr[sma50Arr.length - 6];
+      const prevSma200 = sma200Arr[sma200Arr.length - 6];
+      const wasSma50Above = prevSma50 > prevSma200;
+      const isSma50Above = sma50 > sma200;
+
+      const recentFive50 = sma50Arr.slice(-3);
+      const recentFive200 = sma200Arr.slice(-3);
+      const stable = recentFive50.every((v, i) => (v > recentFive200[i]) === isSma50Above);
+      const gapPct = Math.abs(sma50 - sma200) / sma200;
+      const confirmed = stable && gapPct >= 0.0025;
+
+      if (isSma50Above && !wasSma50Above && confirmed) {
+        stockAlerts.push({ type: 'cross', severity: 'bullish', message: `Golden Cross confirmed — SMA 50 (₹${sma50.toFixed(1)}) crossed above SMA 200 (₹${sma200.toFixed(1)}).` });
+      } else if (!isSma50Above && wasSma50Above && confirmed) {
+        stockAlerts.push({ type: 'cross', severity: 'bearish', message: `Death Cross confirmed — SMA 50 (₹${sma50.toFixed(1)}) crossed below SMA 200 (₹${sma200.toFixed(1)}).` });
+      }
+    }
+  }
+
+  if (stockAlerts.length === 0) return null;
+
+  // 20-day Donchian channels from the PRIOR 20 bars (excluding today) so an
+  // intraday/EOD bar pressing against the ceiling isn't self-confirming.
+  const prior20 = candles.length > 20 ? candles.slice(-21, -1) : candles.slice(0, -1);
+  const priorHighs = prior20.map(c => c.high).filter(v => v != null);
+  const priorLows = prior20.map(c => c.low).filter(v => v != null);
+  const priorVols = prior20.map(c => c.volume).filter(v => v != null && v > 0);
+  const supportLvl = priorLows.length > 0 ? Math.min(...priorLows) : (atr ? currentPrice - 1.5 * atr : null);
+  const resistanceLvl = priorHighs.length > 0 ? Math.max(...priorHighs) : (atr ? currentPrice + 1.5 * atr : null);
+
+  const avgVol20 = priorVols.length > 0 ? priorVols.reduce((a, b) => a + b, 0) / priorVols.length : 0;
+  const todayVol = candles[candles.length - 1]?.volume || 0;
+  const volSurge = avgVol20 > 0 ? todayVol / avgVol20 : 0;
+  const volumeConfirmed = volSurge >= 1.5;
+
+  const prevCloseBar = prevBarClose ?? todayBar?.open ?? null;
+  const barDir = (prevCloseBar != null && currentPrice != null)
+    ? (currentPrice > prevCloseBar ? 'up' : currentPrice < prevCloseBar ? 'down' : 'flat')
+    : 'flat';
+  const volumeConfirmedSide = volumeConfirmed ? barDir : null;
+  const dayChangePct = (prevCloseBar && currentPrice)
+    ? +(((currentPrice - prevCloseBar) / prevCloseBar) * 100).toFixed(2)
+    : null;
+
+  const isBreakout = !!(resistanceLvl && currentPrice >= resistanceLvl);
+  const distanceToRes = (resistanceLvl && currentPrice) ? (resistanceLvl - currentPrice) / currentPrice : 0;
+
+  const candidateSL = supportLvl ? +(supportLvl - (atr ? atr * 0.3 : 0)).toFixed(1) : null;
+  const candidateTgtBreakout = resistanceLvl
+    ? (currentPrice >= resistanceLvl
+        ? +(currentPrice + (atr ? atr * 1.5 : 0)).toFixed(1)
+        : +(resistanceLvl).toFixed(1))
+    : null;
+  const candidateTgtBuy = resistanceLvl ? +(resistanceLvl).toFixed(1) : null;
+  const rrFor = (tgt, sl) => (tgt !== null && sl !== null && currentPrice > sl)
+    ? +((tgt - currentPrice) / (currentPrice - sl)).toFixed(2)
+    : null;
+
+  const tradePlan = { action: 'HOLD / WAIT', sl: null, tgt: null, reason: 'Market structure currently yields no asymmetric edge.' };
+
+  if (isBreakout && confidence >= 75 && volumeConfirmed) {
+    tradePlan.action = 'BUY SEEN';
+    tradePlan.reason = `Price broke above the 20-day high (₹${resistanceLvl.toFixed(1)}) on ${volSurge.toFixed(1)}× avg volume. Breakout confirmed.`;
+  } else if (isBreakout && confidence >= 75 && !volumeConfirmed) {
+    tradePlan.action = 'BREAKOUT (CAUTION)';
+    tradePlan.reason = `Price crossed the 20-day ceiling (₹${resistanceLvl.toFixed(1)}) with strong score ${confidence}%, but volume is only ${volSurge.toFixed(1)}× avg (<1.5×). Wait for volume confirmation.`;
+  } else if (isBreakout && confidence >= 50 && volumeConfirmed) {
+    tradePlan.action = 'BREAKOUT (CAUTION)';
+    tradePlan.reason = `Price crossed the 20-day ceiling (₹${resistanceLvl.toFixed(1)}) on ${volSurge.toFixed(1)}× volume, but conviction is moderate at ${confidence}%. Watch for follow-through.`;
+  } else if (isBreakout && confidence >= 50) {
+    tradePlan.action = 'BREAKOUT (WEAK)';
+    tradePlan.reason = `Breakout above ₹${resistanceLvl.toFixed(1)} lacks both strong score (${confidence}%) and volume (${volSurge.toFixed(1)}×). High risk of a false breakout.`;
+  } else if (isBreakout) {
+    tradePlan.action = 'BREAKOUT (WEAK)';
+    tradePlan.reason = `Price breached resistance (₹${resistanceLvl.toFixed(1)}) but underlying technicals are weak (score ${confidence}%). Likely bull trap.`;
+  } else if (confidence >= 80 && distanceToRes > 0.02) {
+    tradePlan.action = 'BUY SEEN';
+    tradePlan.reason = `Momentum is high with ${(distanceToRes * 100).toFixed(1)}% room to run before the 20-day resistance ceiling.`;
+  } else if (confidence >= 85 && regime !== 'RANGE-BOUND') {
+    tradePlan.action = 'BUY SEEN';
+    tradePlan.reason = 'Extreme conviction score in a trending regime. Strong breakout candidate.';
+  }
+
+  if (rsi14 !== null && rsi14 >= 70 && (tradePlan.action === 'BUY SEEN' || tradePlan.action === 'BREAKOUT (CAUTION)')) {
+    tradePlan.action = 'HOLD (OVERBOUGHT)';
+    tradePlan.reason = `Momentum is green, but RSI is stretched to ${rsi14.toFixed(0)} — buying now carries immediate pullback risk.`;
+  }
+
+  if (!isBreakout && (confidence <= 45 || regime === 'WILD SWINGS')) {
+    tradePlan.action = 'AVOID';
+    tradePlan.reason = regime === 'WILD SWINGS' ? 'Erratic price action (ATR expanded). High execution risk.' : 'Systemic technical levels are severely broken down.';
+  }
+
+  if (!isBreakout && regime === "RANGE-BOUND" && resistanceLvl && currentPrice >= resistanceLvl * 0.98 && confidence < 75) {
+    tradePlan.action = 'SELL (AT RANGE)';
+    tradePlan.reason = 'Price is compressing against a strict technical ceiling inside a sideways range.';
+  }
+
+  tradePlan.sl = candidateSL;
+  tradePlan.tgt = (tradePlan.action === 'BUY SEEN' || tradePlan.action === 'ADD' || tradePlan.action.includes('BREAKOUT'))
+    ? candidateTgtBreakout
+    : candidateTgtBuy;
+
+  tradePlan.rrRatio = rrFor(tradePlan.tgt, tradePlan.sl);
+  if (tradePlan.action === 'BUY SEEN' && tradePlan.rrRatio !== null && tradePlan.rrRatio < 1.5) {
+    tradePlan.action = 'HOLD / WAIT';
+    tradePlan.reason = `Setup is bullish but reward/risk is only ${tradePlan.rrRatio}× (needs ≥1.5×). TG ₹${tradePlan.tgt} vs SL ₹${tradePlan.sl} — not enough upside.`;
+  }
+
+  // Holdings-aware overrides — only when called from /api/alerts (holding present).
+  if (holding) {
+    const isOwned = (holding.quantity ?? 0) > 0;
+    const positionPnlPct = (holding.average_price > 0 && holding.last_price)
+      ? ((holding.last_price - holding.average_price) / holding.average_price) * 100
+      : 0;
+    if (isOwned && tradePlan.action === 'BUY SEEN') {
+      tradePlan.action = 'ADD';
+      tradePlan.reason = `You own ${holding.quantity} @ ₹${holding.average_price.toFixed(1)}. ${tradePlan.reason}`;
+    }
+    if (isOwned && tradePlan.action === 'HOLD (OVERBOUGHT)' && positionPnlPct >= 25) {
+      tradePlan.action = 'TRIM';
+      tradePlan.reason = `Up ${positionPnlPct.toFixed(0)}% on this position and RSI is stretched to ${rsi14 !== null ? rsi14.toFixed(0) : 'high'}. Consider booking partial profits.`;
+    }
+  }
+
+  const resolvedSector = sector !== undefined ? sector : await getSectorCached(symbol);
+
+  const out = {
+    symbol,
+    token,
+    price: currentPrice,
+    rsi: rsi14 ? +rsi14.toFixed(2) : null,
+    sma5: sma5 ? +sma5.toFixed(2) : null,
+    sma20: sma20 ? +sma20.toFixed(2) : null,
+    sma50: sma50 ? +sma50.toFixed(2) : null,
+    sma200: sma200 ? +sma200.toFixed(2) : null,
+    vwap20: vwap20 ? +vwap20.toFixed(2) : null,
+    vwapDeviation: vwapDeviation !== null ? +vwapDeviation.toFixed(2) : null,
+    atr: atr ? +atr.toFixed(2) : null,
+    support: supportLvl ? +supportLvl.toFixed(2) : null,
+    resistance: resistanceLvl ? +resistanceLvl.toFixed(2) : null,
+    aggressorDelta: +(aggressorDelta).toFixed(3),
+    volSurge: +volSurge.toFixed(2),
+    volumeConfirmed,
+    volumeDirection: barDir,
+    volumeConfirmedSide,
+    dayChangePct,
+    prevClose: prevCloseBar ? +prevCloseBar.toFixed(2) : null,
+    divergence,
+    regime,
+    trendDirection,
+    isBreakout,
+    tradePlan,
+    rsiHistory,
+    confidence,
+    confBreakdown,
+    alerts: stockAlerts,
+    sector: resolvedSector,
+  };
+
+  if (holding) {
+    out.quantity = holding.quantity ?? 0;
+    out.avgPrice = holding.average_price ?? 0;
+    out.pnl = holding.pnl ?? 0;
+    out.pnlPct = (holding.average_price > 0 && (holding.quantity ?? 0) > 0)
+      ? +(((holding.last_price - holding.average_price) / holding.average_price) * 100).toFixed(2)
+      : null;
+    out.dayChangeRupee = +(((holding.day_change ?? 0) * (holding.quantity ?? 0))).toFixed(2);
+  }
+
+  return out;
+}
+
 // ─── Portfolio Alerts ──────────────────────────────────────────
 app.get('/api/alerts', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
@@ -882,373 +1287,9 @@ app.get('/api/alerts', async (req, res) => {
       // reflect live intraday state rather than yesterday's EOD bar.
       await refreshTodayCandle(token);
 
-      let cached = historyCache[token];
-
-      // Skip if no cached data and we can't compute
-      if (!cached || cached.length < 15) continue;
-
-      const closes = cached.map(c => c.close);
-      const currentPrice = lastPrice || closes[closes.length - 1];
-
-      // Compute indicators
-      const sma5Arr = SMA.calculate({ period: 5, values: closes });
-      const sma20Arr = SMA.calculate({ period: 20, values: closes });
-      const sma50Arr = SMA.calculate({ period: 50, values: closes });
-      const sma200Arr = SMA.calculate({ period: 200, values: closes });
-      const rsi14Arr = RSI.calculate({ period: 14, values: closes });
-
-      // Prepare inputs for ATR and VWAP
-      const highs = cached.map(c => c.high);
-      const lows = cached.map(c => c.low);
-      const volumes = cached.map(c => c.volume || 1); // fallback to 1 to avoid div by 0
-
-      const atr14Arr = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
-
-      // Calculate 20-period Anchored VWAP
-      const recent20 = cached.slice(-20);
-      let vwap20 = null;
-      let vwapDeviation = null;
-      if (recent20.length === 20) {
-        const vwapArr = VWAP.calculate({
-          high: recent20.map(c => c.high),
-          low: recent20.map(c => c.low),
-          close: recent20.map(c => c.close),
-          volume: recent20.map(c => c.volume || 1)
-        });
-        vwap20 = vwapArr.length > 0 ? vwapArr[vwapArr.length - 1] : null;
-        if (vwap20) {
-          vwapDeviation = ((currentPrice - vwap20) / vwap20) * 100;
-        }
-      }
-
-      // Institutional Net Aggressor Proxy via Money Flow Multiplier (MFM)
-      let aggressorDelta = 0;
-      if (cached.length >= 14) {
-        const window = cached.slice(-14);
-        let totalMoneyFlowVolume = 0;
-        let totalVolume = 0;
-
-        window.forEach(c => {
-          const range = c.high - c.low || 0.01;
-          const multiplier = ((c.close - c.low) - (c.high - c.close)) / range;
-          totalMoneyFlowVolume += (multiplier * (c.volume || 1));
-          totalVolume += (c.volume || 1);
-        });
-        aggressorDelta = totalVolume > 0 ? totalMoneyFlowVolume / totalVolume : 0;
-      }
-
-      const sma5 = sma5Arr.length > 0 ? sma5Arr[sma5Arr.length - 1] : null;
-      const sma20 = sma20Arr.length > 0 ? sma20Arr[sma20Arr.length - 1] : null;
-      const sma50 = sma50Arr.length > 0 ? sma50Arr[sma50Arr.length - 1] : null;
-      const sma200 = sma200Arr.length > 0 ? sma200Arr[sma200Arr.length - 1] : null;
-      const rsi14 = rsi14Arr.length > 0 ? rsi14Arr[rsi14Arr.length - 1] : null;
-      const atr = atr14Arr.length > 0 ? atr14Arr[atr14Arr.length - 1] : null;
-      const rsiHistory = rsi14Arr.slice(-10).map(v => parseFloat(v.toFixed(1)));
-
-      // Regime Classification & Divergence Detection
-      let regime = "RANGE-BOUND";
-      let trendDirection = "NEUTRAL";
-      const isBullishAligned = (sma50 && sma200) && (
-        (currentPrice > sma50 && sma50 > sma200) ||
-        (currentPrice > sma50 && currentPrice > sma200 && Math.abs(sma50 - sma200) / sma200 < 0.02)
-      );
-      const isBearishAligned = (sma50 && sma200) && (
-        (currentPrice < sma50 && sma50 < sma200) ||
-        (currentPrice < sma50 && currentPrice < sma200 && Math.abs(sma50 - sma200) / sma200 < 0.02)
-      );
-      const isAlignedTrend = isBullishAligned || isBearishAligned;
-
-      // Today's single-bar true range (high-low, extended by any prev-close gap).
-      // Used to detect flash moves that ATR14 smoothing would otherwise hide —
-      // e.g. a one-day −9% crash keeps SMAs aligned, so ATR14 barely ticks up,
-      // and the regime would misread as a healthy "STRONG TREND".
-      const todayBar = cached[cached.length - 1];
-      const prevBarClose = cached[cached.length - 2]?.close ?? null;
-      const todayTR = todayBar
-        ? Math.max(
-            (todayBar.high ?? 0) - (todayBar.low ?? 0),
-            prevBarClose ? Math.abs((todayBar.high ?? 0) - prevBarClose) : 0,
-            prevBarClose ? Math.abs((todayBar.low ?? 0) - prevBarClose) : 0
-          )
-        : 0;
-      const todayRangePct = (todayBar?.close && todayTR) ? (todayTR / todayBar.close) : 0;
-
-      if (atr14Arr.length > 20) {
-        const atrSMA20 = atr14Arr.slice(-20).reduce((a, b) => a + b, 0) / 20;
-        const todayShockVsAtr = atr > 0 ? (todayTR / atr) : 0;
-        // WILD SWINGS if either: smoothed volatility is elevated, OR today's single bar
-        // is >2× ATR14, OR today's absolute range exceeds 4% of price (flash move).
-        if (atr > 1.5 * atrSMA20 || todayShockVsAtr > 2 || todayRangePct > 0.04) {
-          regime = "WILD SWINGS";
-        } else if (isAlignedTrend) {
-          regime = "STRONG TREND";
-        }
-      } else if (isAlignedTrend) {
-        regime = "STRONG TREND";
-      }
-      if (regime === "STRONG TREND") {
-        trendDirection = isBullishAligned ? "BULL" : "BEAR";
-      }
-
-      let divergence = null;
-      if (closes.length >= 20 && rsi14Arr.length >= 20) {
-        const priceWindow = closes.slice(-20);
-        const rsiWindow = rsi14Arr.slice(-20);
-        const p1 = priceWindow[0], p2 = priceWindow[19];
-        const r1 = rsiWindow[0], r2 = rsiWindow[19];
-
-        // Simplified rolling point-to-point divergence identification
-        if (p2 < p1 && r2 > r1 && r2 < 45) divergence = "BUY SETUP";
-        if (p2 > p1 && r2 < r1 && r2 > 55) divergence = "SELL SETUP";
-      }
-
-      // Calculate confidence score (0-100) — starts at 30 for wider dynamic range
-      let confidence = 30;
-      const confBreakdown = [{ label: 'Base', value: 30 }];
-      const addConf = (label, value) => { confidence += value; confBreakdown.push({ label, value }); };
-      // === POSITIVE SIGNALS ===
-      if (rsi14 !== null) {
-        if (rsi14 > 40 && rsi14 < 70) addConf('RSI in healthy zone', 10);
-        if (rsi14 <= 30) addConf('RSI oversold (rebound setup)', 15);
-      }
-      if (sma5 && sma20 && sma5 > sma20) addConf('SMA5 > SMA20 (short-term momentum)', 15);
-      if (sma50 && sma200 && sma50 > sma200) addConf('SMA50 > SMA200 (golden state)', 10);
-      if (vwapDeviation !== null && vwapDeviation > 0) addConf('Price above 20d VWAP', 10);
-      if (aggressorDelta > 0.3) addConf('Strong accumulation (money flow)', 10);
-      if (regime === 'STRONG TREND') {
-        if (trendDirection === 'BULL') addConf('Strong bullish trend', 5);
-        else if (trendDirection === 'BEAR') addConf('Strong bearish trend', -5);
-      }
-      if (sma50 && sma200 && currentPrice > sma50 && currentPrice > sma200) addConf('Price leads both MAs', 10);
-      // === PENALTY SIGNALS ===
-      if (rsi14 !== null && rsi14 >= 75) addConf('RSI severely overbought', -10);
-      if (sma50 && sma200 && sma50 < sma200) {
-        if (currentPrice > sma50 && currentPrice > sma200) addConf('Death cross (softened: price leads)', -5);
-        else addConf('Death cross', -10);
-      }
-      if (sma5 && sma20 && sma5 < sma20) addConf('SMA5 < SMA20 (short-term bearish)', -5);
-      if (vwapDeviation !== null && vwapDeviation < -2) addConf('Deep below 20d VWAP', -10);
-      if (aggressorDelta < -0.2) addConf('Distribution (money flow)', -10);
-      if (regime === 'WILD SWINGS') addConf('Volatile regime', -10);
-      confidence = Math.min(100, Math.max(0, Math.round(confidence)));
-
-      const stockAlerts = [];
-
-      // RSI Alerts
-      if (rsi14 !== null) {
-        if (rsi14 <= 30) {
-          stockAlerts.push({ type: 'rsi', severity: 'bullish', message: `RSI is ${rsi14.toFixed(1)} — Stock is oversold/undervalued. Potential buying opportunity.` });
-        } else if (rsi14 >= 70) {
-          stockAlerts.push({ type: 'rsi', severity: 'bearish', message: `RSI is ${rsi14.toFixed(1)} — Stock is overbought/overvalued. Consider booking profits.` });
-        } else if (rsi14 <= 40) {
-          stockAlerts.push({ type: 'rsi', severity: 'warning', message: `RSI is ${rsi14.toFixed(1)} — Approaching oversold zone. Watch for reversal.` });
-        } else if (rsi14 >= 60) {
-          stockAlerts.push({ type: 'rsi', severity: 'info', message: `RSI is ${rsi14.toFixed(1)} — Strong bullish momentum zone.` });
-        }
-      }
-
-      // Short-term Momentum (SMA 5 & SMA 20)
-      if (sma5 !== null && sma20 !== null) {
-        if (currentPrice > sma5 && currentPrice > sma20) {
-          stockAlerts.push({ type: 'sma_short', severity: 'bullish', message: `Trading above SMA 5 (₹${sma5.toFixed(1)}) and SMA 20 (₹${sma20.toFixed(1)}) — Short-term momentum is bullish.` });
-        } else if (currentPrice < sma5 && currentPrice < sma20) {
-          stockAlerts.push({ type: 'sma_short', severity: 'bearish', message: `Trading below SMA 5 (₹${sma5.toFixed(1)}) and SMA 20 (₹${sma20.toFixed(1)}) — Short-term momentum is bearish.` });
-        } else if (currentPrice > sma5 && currentPrice < sma20) {
-          stockAlerts.push({ type: 'sma_short', severity: 'warning', message: `Trading above SMA 5 but below SMA 20 — Short-term recovery attempt; trend not yet confirmed.` });
-        }
-      }
-
-      // Long-term Momentum (SMA 50 & SMA 200)
-      if (sma50 !== null && sma200 !== null) {
-        if (currentPrice > sma50 && currentPrice > sma200) {
-          stockAlerts.push({ type: 'sma_long', severity: 'bullish', message: `Trading above SMA 50 (₹${sma50.toFixed(1)}) and SMA 200 (₹${sma200.toFixed(1)}) — Long-term trend is strongly bullish.` });
-        } else if (currentPrice < sma50 && currentPrice < sma200) {
-          stockAlerts.push({ type: 'sma_long', severity: 'bearish', message: `Trading below SMA 50 (₹${sma50.toFixed(1)}) and SMA 200 (₹${sma200.toFixed(1)}) — Long-term trend is bearish. Caution.` });
-        } else if (currentPrice > sma50 && currentPrice < sma200) {
-          stockAlerts.push({ type: 'sma_long', severity: 'warning', message: `Trading above SMA 50 but below SMA 200 — Mid-term recovery, but long-term trend still bearish.` });
-        }
-        // Golden Cross / Death Cross — alert only if the cross is confirmed (no whipsaw)
-        if (sma50Arr.length >= 6 && sma200Arr.length >= 6) {
-          const prevSma50 = sma50Arr[sma50Arr.length - 6];
-          const prevSma200 = sma200Arr[sma200Arr.length - 6];
-          const wasSma50Above = prevSma50 > prevSma200;
-          const isSma50Above = sma50 > sma200;
-
-          // Whipsaw filter: require the last 3 bars to consistently agree with the current side,
-          // AND require a non-trivial separation now (>= 0.25%) so near-flat crosses are suppressed.
-          const recentFive50 = sma50Arr.slice(-3);
-          const recentFive200 = sma200Arr.slice(-3);
-          const stable = recentFive50.every((v, i) => (v > recentFive200[i]) === isSma50Above);
-          const gapPct = Math.abs(sma50 - sma200) / sma200;
-          const confirmed = stable && gapPct >= 0.0025;
-
-          if (isSma50Above && !wasSma50Above && confirmed) {
-            stockAlerts.push({ type: 'cross', severity: 'bullish', message: `Golden Cross confirmed — SMA 50 (₹${sma50.toFixed(1)}) crossed above SMA 200 (₹${sma200.toFixed(1)}).` });
-          } else if (!isSma50Above && wasSma50Above && confirmed) {
-            stockAlerts.push({ type: 'cross', severity: 'bearish', message: `Death Cross confirmed — SMA 50 (₹${sma50.toFixed(1)}) crossed below SMA 200 (₹${sma200.toFixed(1)}).` });
-          }
-        }
-      }
-
-      if (stockAlerts.length > 0) {
-        // 20-day Donchian channels from the PRIOR 20 bars (excluding today) so an
-        // intraday/EOD bar pressing against the ceiling isn't self-confirming.
-        const prior20 = cached.length > 20 ? cached.slice(-21, -1) : cached.slice(0, -1);
-        const priorHighs = prior20.map(c => c.high).filter(v => v != null);
-        const priorLows = prior20.map(c => c.low).filter(v => v != null);
-        const priorVols = prior20.map(c => c.volume).filter(v => v != null && v > 0);
-        const supportLvl = priorLows.length > 0 ? Math.min(...priorLows) : (atr ? currentPrice - 1.5 * atr : null);
-        const resistanceLvl = priorHighs.length > 0 ? Math.max(...priorHighs) : (atr ? currentPrice + 1.5 * atr : null);
-
-        // Volume confirmation for breakouts
-        const avgVol20 = priorVols.length > 0 ? priorVols.reduce((a, b) => a + b, 0) / priorVols.length : 0;
-        const todayVol = cached[cached.length - 1]?.volume || 0;
-        const volSurge = avgVol20 > 0 ? todayVol / avgVol20 : 0;
-        const volumeConfirmed = volSurge >= 1.5;
-
-        // Direction of today's bar — used to color the volume-confirmation glyph.
-        // Green ✓ on up days (accumulation), red ✗ on down days (distribution).
-        const prevCloseBar = prevBarClose ?? todayBar?.open ?? null;
-        const barDir = (prevCloseBar != null && currentPrice != null)
-          ? (currentPrice > prevCloseBar ? 'up' : currentPrice < prevCloseBar ? 'down' : 'flat')
-          : 'flat';
-        const volumeConfirmedSide = volumeConfirmed ? barDir : null;
-        const dayChangePct = (prevCloseBar && currentPrice)
-          ? +(((currentPrice - prevCloseBar) / prevCloseBar) * 100).toFixed(2)
-          : null;
-
-        const isBreakout = !!(resistanceLvl && currentPrice >= resistanceLvl);
-        const distanceToRes = (resistanceLvl && currentPrice) ? (resistanceLvl - currentPrice) / currentPrice : 0;
-
-        // Pre-compute candidate SL and TGT so we can R:R-gate BUY actions.
-        const candidateSL = supportLvl ? +(supportLvl - (atr ? atr * 0.3 : 0)).toFixed(1) : null;
-        const candidateTgtBreakout = resistanceLvl
-          ? (currentPrice >= resistanceLvl
-              ? +(currentPrice + (atr ? atr * 1.5 : 0)).toFixed(1)
-              : +(resistanceLvl).toFixed(1))
-          : null;
-        const candidateTgtBuy = resistanceLvl ? +(resistanceLvl).toFixed(1) : null;
-        const rrFor = (tgt, sl) => (tgt !== null && sl !== null && currentPrice > sl)
-          ? +((tgt - currentPrice) / (currentPrice - sl)).toFixed(2)
-          : null;
-
-        // Trade Plan Logic
-        const tradePlan = { action: 'HOLD / WAIT', sl: null, tgt: null, reason: 'Market structure currently yields no asymmetric edge.' };
-
-        // --- Breakout scenarios (highest priority) ---
-        if (isBreakout && confidence >= 75 && volumeConfirmed) {
-          tradePlan.action = 'BUY SEEN';
-          tradePlan.reason = `Price broke above the 20-day high (₹${resistanceLvl.toFixed(1)}) on ${volSurge.toFixed(1)}× avg volume. Breakout confirmed.`;
-        } else if (isBreakout && confidence >= 75 && !volumeConfirmed) {
-          tradePlan.action = 'BREAKOUT (CAUTION)';
-          tradePlan.reason = `Price crossed the 20-day ceiling (₹${resistanceLvl.toFixed(1)}) with strong score ${confidence}%, but volume is only ${volSurge.toFixed(1)}× avg (<1.5×). Wait for volume confirmation.`;
-        } else if (isBreakout && confidence >= 50 && volumeConfirmed) {
-          tradePlan.action = 'BREAKOUT (CAUTION)';
-          tradePlan.reason = `Price crossed the 20-day ceiling (₹${resistanceLvl.toFixed(1)}) on ${volSurge.toFixed(1)}× volume, but conviction is moderate at ${confidence}%. Watch for follow-through.`;
-        } else if (isBreakout && confidence >= 50) {
-          tradePlan.action = 'BREAKOUT (WEAK)';
-          tradePlan.reason = `Breakout above ₹${resistanceLvl.toFixed(1)} lacks both strong score (${confidence}%) and volume (${volSurge.toFixed(1)}×). High risk of a false breakout.`;
-        } else if (isBreakout) {
-          tradePlan.action = 'BREAKOUT (WEAK)';
-          tradePlan.reason = `Price breached resistance (₹${resistanceLvl.toFixed(1)}) but underlying technicals are weak (score ${confidence}%). Likely bull trap.`;
-          // --- Non-breakout buy scenarios ---
-        } else if (confidence >= 80 && distanceToRes > 0.02) {
-          tradePlan.action = 'BUY SEEN';
-          tradePlan.reason = `Momentum is high with ${(distanceToRes * 100).toFixed(1)}% room to run before the 20-day resistance ceiling.`;
-        } else if (confidence >= 85 && regime !== 'RANGE-BOUND') {
-          tradePlan.action = 'BUY SEEN';
-          tradePlan.reason = 'Extreme conviction score in a trending regime. Strong breakout candidate.';
-        }
-
-        // --- RSI overbought override (applies to BUY SEEN and BREAKOUT CAUTION) ---
-        if (rsi14 !== null && rsi14 >= 70 && (tradePlan.action === 'BUY SEEN' || tradePlan.action === 'BREAKOUT (CAUTION)')) {
-          tradePlan.action = 'HOLD (OVERBOUGHT)';
-          tradePlan.reason = `Momentum is green, but RSI is stretched to ${rsi14.toFixed(0)} — buying now carries immediate pullback risk.`;
-        }
-
-        // --- Danger zones (only if NOT a breakout) ---
-        if (!isBreakout && (confidence <= 45 || regime === 'WILD SWINGS')) {
-          tradePlan.action = 'AVOID';
-          tradePlan.reason = regime === 'WILD SWINGS' ? 'Erratic price action (ATR expanded). High execution risk.' : 'Systemic technical levels are severely broken down.';
-        }
-
-        if (!isBreakout && regime === "RANGE-BOUND" && resistanceLvl && currentPrice >= resistanceLvl * 0.98 && confidence < 75) {
-          tradePlan.action = 'SELL (AT RANGE)';
-          tradePlan.reason = 'Price is compressing against a strict technical ceiling inside a sideways range.';
-        }
-
-        // Assign SL and TGT
-        tradePlan.sl = candidateSL;
-        tradePlan.tgt = (tradePlan.action === 'BUY SEEN' || tradePlan.action === 'ADD' || tradePlan.action.includes('BREAKOUT'))
-          ? candidateTgtBreakout
-          : candidateTgtBuy;
-
-        // --- R:R gate (suggestion #2): demote BUY SEEN if reward/risk < 1.5 ---
-        tradePlan.rrRatio = rrFor(tradePlan.tgt, tradePlan.sl);
-        if (tradePlan.action === 'BUY SEEN' && tradePlan.rrRatio !== null && tradePlan.rrRatio < 1.5) {
-          tradePlan.action = 'HOLD / WAIT';
-          tradePlan.reason = `Setup is bullish but reward/risk is only ${tradePlan.rrRatio}× (needs ≥1.5×). TG ₹${tradePlan.tgt} vs SL ₹${tradePlan.sl} — not enough upside.`;
-        }
-
-        // --- Holding-aware overrides: rename BUY SEEN→ADD when already owned,
-        // and HOLD (OVERBOUGHT)→TRIM when sitting on ≥25% unrealized profit.
-        // Runs AFTER R:R gate so a demoted BUY SEEN doesn't accidentally become ADD.
-        const isOwned = (h.quantity ?? 0) > 0;
-        const positionPnlPct = (h.average_price > 0 && h.last_price)
-          ? ((h.last_price - h.average_price) / h.average_price) * 100
-          : 0;
-        if (isOwned && tradePlan.action === 'BUY SEEN') {
-          tradePlan.action = 'ADD';
-          tradePlan.reason = `You own ${h.quantity} @ ₹${h.average_price.toFixed(1)}. ${tradePlan.reason}`;
-        }
-        if (isOwned && tradePlan.action === 'HOLD (OVERBOUGHT)' && positionPnlPct >= 25) {
-          tradePlan.action = 'TRIM';
-          tradePlan.reason = `Up ${positionPnlPct.toFixed(0)}% on this position and RSI is stretched to ${rsi14 !== null ? rsi14.toFixed(0) : 'high'}. Consider booking partial profits.`;
-        }
-
-        const sector = await getSectorCached(symbol);
-
-        alerts.push({
-          symbol,
-          token,
-          price: currentPrice,
-          rsi: rsi14 ? +rsi14.toFixed(2) : null,
-          sma5: sma5 ? +sma5.toFixed(2) : null,
-          sma20: sma20 ? +sma20.toFixed(2) : null,
-          sma50: sma50 ? +sma50.toFixed(2) : null,
-          sma200: sma200 ? +sma200.toFixed(2) : null,
-          vwap20: vwap20 ? +vwap20.toFixed(2) : null,
-          vwapDeviation: vwapDeviation !== null ? +vwapDeviation.toFixed(2) : null,
-          atr: atr ? +atr.toFixed(2) : null,
-          support: supportLvl ? +supportLvl.toFixed(2) : null,
-          resistance: resistanceLvl ? +resistanceLvl.toFixed(2) : null,
-          aggressorDelta: +(aggressorDelta).toFixed(3),
-          volSurge: +volSurge.toFixed(2),
-          volumeConfirmed,
-          volumeDirection: barDir,
-          volumeConfirmedSide,
-          dayChangePct,
-          prevClose: prevCloseBar ? +prevCloseBar.toFixed(2) : null,
-          divergence,
-          regime,
-          trendDirection,
-          isBreakout,
-          tradePlan,
-          rsiHistory,
-          confidence,
-          confBreakdown,
-          alerts: stockAlerts,
-          // Holding context — every row on this page IS a holding.
-          quantity: h.quantity ?? 0,
-          avgPrice: h.average_price ?? 0,
-          pnl: h.pnl ?? 0,
-          pnlPct: (h.average_price > 0 && (h.quantity ?? 0) > 0)
-            ? +(((h.last_price - h.average_price) / h.average_price) * 100).toFixed(2)
-            : null,
-          dayChangeRupee: +(((h.day_change ?? 0) * (h.quantity ?? 0))).toFixed(2),
-          sector
-        });
-      }
+      const candles = historyCache[token];
+      const alert = await computeStockAlert({ symbol, token, lastPrice, candles, holding: h });
+      if (alert) alerts.push(alert);
     }
 
     const totalInvested = alerts.reduce((s, a) => s + ((a.avgPrice || 0) * (a.quantity || 0)), 0);
@@ -1711,53 +1752,170 @@ app.post('/api/quotes', async (req, res) => {
 const sectorConstituentsCache = {}; // { sectorKey: { data, timestamp } }
 const SECTOR_CONSTITUENTS_TTL = 30 * 60 * 1000; // 30 min
 
+// Resolves a sector's constituent list with cached instrument tokens + live
+// last_price. Returns { sector, constituents: [{ symbol, name, isin, key,
+// token, lastPrice }] }. The `payload` returned by /api/sector-constituents
+// omits lastPrice for back-compat; that's stripped at the call site.
+async function resolveSectorConstituents(sectorKey) {
+  if (!supabase) throw new Error('Supabase not configured');
+
+  const cached = sectorConstituentsCache[sectorKey];
+  if (cached && Date.now() - cached.timestamp < SECTOR_CONSTITUENTS_TTL) {
+    return cached.data;
+  }
+
+  const { data: rows, error } = await supabase
+    .from('sector_constituents')
+    .select('*')
+    .eq('sector_key', sectorKey)
+    .order('sort_order');
+
+  if (error) throw new Error(error.message);
+  if (!rows || rows.length === 0) {
+    const e = new Error(`No constituents for ${sectorKey}`);
+    e.statusCode = 404;
+    throw e;
+  }
+
+  const instruments = rows.map(r => `NSE:${r.symbol}`);
+  const quoteResult = await callWithTimeout({ name: 'get_quotes', arguments: { instruments } });
+  const quotes = parseMcpText(quoteResult) || {};
+
+  // Populate rrgTokenCache as side-effect
+  for (const key of Object.keys(quotes)) {
+    if (quotes[key]?.instrument_token) rrgTokenCache[key] = String(quotes[key].instrument_token);
+  }
+
+  const constituents = rows.map(r => {
+    const key = `NSE:${r.symbol}`;
+    const q = quotes[key];
+    return {
+      symbol: r.symbol,
+      name: r.name,
+      isin: r.isin,
+      key,
+      token: q?.instrument_token ? String(q.instrument_token) : null,
+      lastPrice: q?.last_price ?? null,
+    };
+  });
+
+  const data = { sector: sectorKey, constituents };
+  sectorConstituentsCache[sectorKey] = { data, timestamp: Date.now() };
+  return data;
+}
+
 app.get('/api/sector-constituents/:sector', async (req, res) => {
-  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
   try {
     const sectorKey = decodeURIComponent(req.params.sector);
-    const cached = sectorConstituentsCache[sectorKey];
-    if (cached && Date.now() - cached.timestamp < SECTOR_CONSTITUENTS_TTL) {
-      return res.json(cached.data);
-    }
-
-    const { data: rows, error } = await supabase
-      .from('sector_constituents')
-      .select('*')
-      .eq('sector_key', sectorKey)
-      .order('sort_order');
-
-    if (error) return res.status(500).json({ error: error.message });
-    if (!rows || rows.length === 0) return res.status(404).json({ error: `No constituents for ${sectorKey}` });
-
-    // Batch-resolve instrument tokens
-    const instruments = rows.map(r => `NSE:${r.symbol}`);
-    const quoteResult = await callWithTimeout({ name: 'get_quotes', arguments: { instruments } });
-    const quotes = parseMcpText(quoteResult) || {};
-
-    // Populate rrgTokenCache as side-effect
-    for (const key of Object.keys(quotes)) {
-      if (quotes[key]?.instrument_token) rrgTokenCache[key] = String(quotes[key].instrument_token);
-    }
-
-    const constituents = rows.map(r => {
-      const key = `NSE:${r.symbol}`;
-      const q = quotes[key];
-      return {
-        symbol: r.symbol,
-        name: r.name,
-        isin: r.isin,
-        key,
-        token: q?.instrument_token ? String(q.instrument_token) : null,
-      };
-    });
-
-    const payload = { sector: sectorKey, constituents };
-    sectorConstituentsCache[sectorKey] = { data: payload, timestamp: Date.now() };
+    const { sector, constituents } = await resolveSectorConstituents(sectorKey);
+    // Strip lastPrice for back-compat with the existing FE consumer.
+    const payload = {
+      sector,
+      constituents: constituents.map(({ lastPrice, ...rest }) => rest),
+    };
     res.json(payload);
   } catch (err) {
+    if (err.statusCode === 404) return res.status(404).json({ error: err.message });
     console.error('sector-constituents error:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ─── Sector Technical Alerts ────────────────────────────────────
+// Per-sector cache so the 60s frontend refresh doesn't recompute everything.
+// TTL slightly longer than the FE refresh interval so concurrent navigations
+// (or window-focus refetches) hit the cache instead of recomputing.
+const sectorAlertsCache = {};        // { sectorKey: { data, timestamp } }
+const SECTOR_ALERTS_TTL = 60 * 1000; // 60s
+const sectorAlertsPromises = {};     // in-flight coalescing
+
+async function computeSectorAlertsPayload(sectorKey) {
+  const { constituents } = await resolveSectorConstituents(sectorKey);
+
+  const alerts = [];
+  const notReady = [];
+
+  for (const c of constituents) {
+    if (!c.token) {
+      notReady.push(c.symbol);
+      continue;
+    }
+    const candles = historicalFullCache[c.token]?.data;
+    if (!Array.isArray(candles) || candles.length < 15) {
+      notReady.push(c.symbol);
+      continue;
+    }
+    try { await refreshTodayCandle_FullHistory(c.token); } catch { /* ignore */ }
+    const candlesAfterRefresh = historicalFullCache[c.token]?.data || candles;
+
+    const alert = await computeStockAlert({
+      symbol: c.symbol,
+      token: c.token,
+      lastPrice: c.lastPrice,
+      candles: candlesAfterRefresh,
+      sector: sectorKey,
+    });
+    if (alert) alerts.push(alert);
+  }
+
+  const summary = {
+    sector: sectorKey,
+    totalConstituents: constituents.length,
+    readyCount: alerts.length,
+    notReady,
+    flagCounts: {
+      avoid: alerts.filter(a => a.tradePlan?.action === 'AVOID').length,
+      trim:  alerts.filter(a => a.tradePlan?.action === 'TRIM').length,
+      add:   alerts.filter(a => a.tradePlan?.action === 'ADD').length,
+    },
+  };
+
+  const data = { alerts, summary };
+  sectorAlertsCache[sectorKey] = { data, timestamp: Date.now() };
+  return data;
+}
+
+app.get('/api/sector-alerts/:sector', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
+  try {
+    const sectorKey = decodeURIComponent(req.params.sector);
+
+    const cached = sectorAlertsCache[sectorKey];
+    if (cached && Date.now() - cached.timestamp < SECTOR_ALERTS_TTL) {
+      return res.json(cached.data);
+    }
+
+    // Coalesce concurrent in-flight computations for the same sector.
+    if (!sectorAlertsPromises[sectorKey]) {
+      sectorAlertsPromises[sectorKey] = computeSectorAlertsPayload(sectorKey)
+        .finally(() => { delete sectorAlertsPromises[sectorKey]; });
+    }
+
+    const data = await sectorAlertsPromises[sectorKey];
+    res.json(data);
+  } catch (err) {
+    if (err.statusCode === 404) return res.status(404).json({ error: err.message });
+    if (err.statusCode === 429) return res.status(429).set('Retry-After', String(err.retryAfter || 5)).json({ error: 'rate_limited', retryAfter: err.retryAfter || 5 });
+    console.error('sector-alerts error:', err);
+    res.status(500).json({ error: 'Failed to compute sector alerts: ' + err.message });
+  }
+});
+
+// Express error middleware: when a route throws an Error with statusCode=429
+// (from `detectRateLimit` above), surface it as a proper 429 + Retry-After
+// header so the frontend's useFetchWithAbort can back off cleanly.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (err && err.statusCode === 429) {
+    const retryAfter = err.retryAfter || 5;
+    res.set('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'rate_limited', retryAfter });
+  }
+  if (err) {
+    console.error('Unhandled error:', err);
+    return res.status(500).json({ error: err.message || 'Internal Server Error' });
+  }
+  next();
 });
 
 // Serve frontend in production (Railway)

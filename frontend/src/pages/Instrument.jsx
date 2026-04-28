@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { format, parseISO } from 'date-fns'
+import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 
 function Instrument() {
   const { token } = useParams()
@@ -23,12 +24,14 @@ function Instrument() {
   // Fetch live quote
   useEffect(() => {
     if (!symbol) return;
-    const fetchQuote = async () => {
+    const controller = new AbortController();
+    (async () => {
       try {
-        const res = await fetch('/api/quotes', {
+        const res = await fetchWithAbort('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments: [`NSE:${symbol}`] })
+          body: JSON.stringify({ instruments: [`NSE:${symbol}`] }),
+          signal: controller.signal
         });
         const resData = await res.json();
         if (resData?.content?.[0]?.text) {
@@ -36,76 +39,90 @@ function Instrument() {
           const key = `NSE:${symbol}`;
           if (parsed[key]) setQuote(parsed[key]);
         }
-      } catch (e) { }
-    }
-    fetchQuote();
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+      }
+    })();
+    return () => controller.abort();
   }, [symbol])
 
   // Fetch indicators
   useEffect(() => {
+    const controller = new AbortController();
     let retries = 0;
     const maxRetries = 2;
+    let retryTimer = null;
     const fetchIndicators = async () => {
       try {
-        const res = await fetch(`/api/indicators/${token}`)
+        const res = await fetchWithAbort(`/api/indicators/${token}`, { signal: controller.signal })
         if (res.ok) {
           const data = await res.json()
           setIndicators(data)
         } else if (res.status === 404 && retries < maxRetries) {
           // If backend is still warming the cache, try again once more in 3 seconds
           retries++;
-          setTimeout(fetchIndicators, 3000);
+          retryTimer = setTimeout(fetchIndicators, 3000);
         }
       } catch (e) {
+        if (e.name === 'AbortError') return;
         if (retries < maxRetries) {
           retries++;
-          setTimeout(fetchIndicators, 3000);
+          retryTimer = setTimeout(fetchIndicators, 3000);
         }
       }
     }
     fetchIndicators()
+    return () => {
+      controller.abort();
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [token])
 
   // Fetch fundamentals
   useEffect(() => {
     if (!symbol) return;
-    const fetchFundamentals = async () => {
+    const controller = new AbortController();
+    (async () => {
       try {
-        const res = await fetch(`/api/fundamentals/${symbol}`);
+        const res = await fetchWithAbort(`/api/fundamentals/${symbol}`, { signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
           setFundamentals(data);
         }
       } catch (e) {
+        if (e.name === 'AbortError') return;
         console.error("Failed to fetch fundamentals", e);
       }
-    };
-    fetchFundamentals();
+    })();
+    return () => controller.abort();
   }, [symbol]);
 
   useEffect(() => {
     if (!symbol) return;
-    const fetchCashflow = async () => {
+    const controller = new AbortController();
+    (async () => {
       try {
-        const res = await fetch(`/api/cashflow/${symbol}?type=${cashflowType}`);
+        const res = await fetchWithAbort(`/api/cashflow/${symbol}?type=${cashflowType}`, { signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
           setCashflow(data);
         }
       } catch (e) {
+        if (e.name === 'AbortError') return;
         console.error("Failed to fetch cashflow", e);
       }
-    };
-    fetchCashflow();
+    })();
+    return () => controller.abort();
   }, [symbol, cashflowType]);
 
   // Fetch historical data
   useEffect(() => {
+    const controller = new AbortController();
     const fetchHistoricalData = async () => {
       try {
         setLoading(true)
         setError(null)
-        const res = await fetch(`/api/historical/${token}?tf=${timeframe}&t=${Date.now()}`)
+        const res = await fetchWithAbort(`/api/historical/${token}?tf=${timeframe}&t=${Date.now()}`, { signal: controller.signal })
         const resData = await res.json()
 
         if (resData.isError || resData.error) {
@@ -154,6 +171,7 @@ function Instrument() {
           }
         }
       } catch (err) {
+        if (err.name === 'AbortError') return;
         setError('Error connecting to backend API.')
       } finally {
         setLoading(false)
@@ -161,6 +179,7 @@ function Instrument() {
     }
 
     fetchHistoricalData()
+    return () => controller.abort();
   }, [token, timeframe])
 
   const tfOptions = ['1D', '1W', '1M', '3M', '6M', '1Y', '5Y'];

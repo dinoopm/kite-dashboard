@@ -2,6 +2,13 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Cell as RechartsCell, ResponsiveContainer } from 'recharts';
 import RRGChart from '../components/RRGChart';
+import AlertRow from '../components/alerts/AlertRow';
+import ConvictionModal from '../components/alerts/ConvictionModal';
+import TradePlanModal from '../components/alerts/TradePlanModal';
+import { biasClass } from '../components/alerts/biasClass';
+import { fetchWithAbort } from '../hooks/useFetchWithAbort';
+
+const ALERTS_REFRESH_MS = 60_000;
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -232,30 +239,50 @@ export default function SectorDetail() {
 
   // ── UI state ──
   const [activeTab, setActiveTab] = useState('overview');
+  // Tabs whose data has been fetched at least once. Technical Alerts is
+  // deferred until the user opens that tab so we don't pay for ~30 stocks of
+  // alert computation on every sector page load.
+  const [loadedTabs, setLoadedTabs] = useState(() => new Set(['overview']));
   const [sortConfig, setSortConfig] = useState({ key: 'momentumScore', direction: 'desc' });
   const [searchQuery, setSearchQuery] = useState('');
+
+  // ── Technical Alerts tab state ──
+  const [sectorAlerts, setSectorAlerts] = useState(null);
+  const [sectorAlertsSummary, setSectorAlertsSummary] = useState(null);
+  const [sectorAlertsLoading, setSectorAlertsLoading] = useState(false);
+  const [sectorAlertsError, setSectorAlertsError] = useState(null);
+  const [sectorAlertsLastUpdated, setSectorAlertsLastUpdated] = useState(null);
+  const [alertFilter, setAlertFilter] = useState('all'); // all | bullish | bearish
+  const [alertFilterBreakouts, setAlertFilterBreakouts] = useState(false);
+  const [alertSearch, setAlertSearch] = useState('');
+  const [alertSortDir, setAlertSortDir] = useState('desc'); // confidence sort direction
+  const [convictionStock, setConvictionStock] = useState(null);
+  const [tradePlanStock, setTradePlanStock] = useState(null);
 
   const mountedRef = useRef(true);
   useEffect(() => { return () => { mountedRef.current = false; }; }, []);
 
   // ─── Phase 1: load sector header + constituents ───────────────────
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
 
     async function load() {
       try {
         // Fetch sector + NIFTY 50 quotes
-        const qRes = await fetch(`${API}/api/quotes`, {
+        const qRes = await fetchWithAbort(`${API}/api/quotes`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments: [sectorKey, 'NSE:NIFTY 50'] })
+          body: JSON.stringify({ instruments: [sectorKey, 'NSE:NIFTY 50'] }),
+          signal
         });
         const qRaw = await qRes.json();
         const quotes = qRaw?.content?.[0]?.text ? JSON.parse(qRaw.content[0].text) : {};
         const sq = quotes[sectorKey];
         const nq = quotes['NSE:NIFTY 50'];
 
-        if (!cancelled && sq) {
+        if (signal.aborted) return;
+        if (sq) {
           const price = sq.last_price ?? sq.ohlc?.close ?? 0;
           const prevClose = sq.ohlc?.close ?? price;
           const change1D = prevClose ? ((price - prevClose) / prevClose) * 100 : 0;
@@ -268,13 +295,15 @@ export default function SectorDetail() {
         // Parallel: fetch sector history + NIFTY 50 history + constituents
         const [sectorHistRes, niftyHistRes, constRes] = await Promise.allSettled([
           sq?.instrument_token
-            ? fetch(`${API}/api/historical-full/${sq.instrument_token}`).then(r => r.json())
+            ? fetchWithAbort(`${API}/api/historical-full/${sq.instrument_token}`, { signal }).then(r => r.json())
             : Promise.resolve(null),
           niftyToken
-            ? fetch(`${API}/api/historical-full/${niftyToken}`).then(r => r.json())
+            ? fetchWithAbort(`${API}/api/historical-full/${niftyToken}`, { signal }).then(r => r.json())
             : Promise.resolve(null),
-          fetch(`${API}/api/sector-constituents/${encodeURIComponent(sectorKey)}`).then(r => r.json()),
+          fetchWithAbort(`${API}/api/sector-constituents/${encodeURIComponent(sectorKey)}`, { signal }).then(r => r.json()),
         ]);
+
+        if (signal.aborted) return;
 
         const parseHistPayload = (val) => {
           const txt = val?.content?.[0]?.text;
@@ -282,60 +311,69 @@ export default function SectorDetail() {
           try { const arr = JSON.parse(txt); return Array.isArray(arr) ? arr : null; } catch { return null; }
         };
 
-        if (!cancelled) {
-          // Sector history
-          const sectorArr = sectorHistRes.status === 'fulfilled' ? parseHistPayload(sectorHistRes.value) : null;
-          if (sectorArr?.length) {
-            const sorted = [...sectorArr].sort((a, b) => a.date.localeCompare(b.date));
-            const price = sq?.last_price ?? sq?.ohlc?.close ?? sorted[sorted.length - 1]?.close ?? 0;
-            setSectorHistory(sorted);
-            setSectorReturns(calculateHistoricalReturns(sorted, price));
-            setSectorRsi14(computeRsi14(sorted));
-          }
-
-          // NIFTY 50 history → returns only
-          const niftyArr = niftyHistRes.status === 'fulfilled' ? parseHistPayload(niftyHistRes.value) : null;
-          if (niftyArr?.length) {
-            const sorted = [...niftyArr].sort((a, b) => a.date.localeCompare(b.date));
-            const price = nq?.last_price ?? sorted[sorted.length - 1]?.close ?? 0;
-            setNifty50Returns(calculateHistoricalReturns(sorted, price));
-          }
-
-          // Constituents
-          if (constRes.status === 'fulfilled' && constRes.value?.constituents) {
-            setConstituents(constRes.value.constituents);
-          } else if (constRes.status === 'fulfilled' && constRes.value?.error) {
-            console.warn('sector-constituents:', constRes.value.error);
-          }
-
-          setLoading(false);
+        // Sector history
+        const sectorArr = sectorHistRes.status === 'fulfilled' ? parseHistPayload(sectorHistRes.value) : null;
+        if (sectorArr?.length) {
+          const sorted = [...sectorArr].sort((a, b) => a.date.localeCompare(b.date));
+          const price = sq?.last_price ?? sq?.ohlc?.close ?? sorted[sorted.length - 1]?.close ?? 0;
+          setSectorHistory(sorted);
+          setSectorReturns(calculateHistoricalReturns(sorted, price));
+          setSectorRsi14(computeRsi14(sorted));
         }
+
+        // NIFTY 50 history → returns only
+        const niftyArr = niftyHistRes.status === 'fulfilled' ? parseHistPayload(niftyHistRes.value) : null;
+        if (niftyArr?.length) {
+          const sorted = [...niftyArr].sort((a, b) => a.date.localeCompare(b.date));
+          const price = nq?.last_price ?? sorted[sorted.length - 1]?.close ?? 0;
+          setNifty50Returns(calculateHistoricalReturns(sorted, price));
+        }
+
+        // Constituents
+        if (constRes.status === 'fulfilled' && constRes.value?.constituents) {
+          setConstituents(constRes.value.constituents);
+        } else if (constRes.status === 'fulfilled' && constRes.value?.error) {
+          console.warn('sector-constituents:', constRes.value.error);
+        }
+
+        setLoading(false);
       } catch (err) {
-        if (!cancelled) { setError(err.message); setLoading(false); }
+        if (err.name === 'AbortError' || signal.aborted) return;
+        setError(err.message); setLoading(false);
       }
     }
 
     load();
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, [sectorKey]);
 
   // ─── Phase 2: progressive stock history ──────────────────────────
   useEffect(() => {
     if (constituents.length === 0) return;
-    let cancelled = false;
+    const controller = new AbortController();
+    const { signal } = controller;
 
     async function loadStocks() {
       // Get live prices first
       const instruments = constituents.filter(c => c.token).map(c => c.key);
       if (instruments.length === 0) return;
 
-      const qRes = await fetch(`${API}/api/quotes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instruments })
-      });
-      const qRaw = await qRes.json();
+      let qRaw;
+      try {
+        const qRes = await fetchWithAbort(`${API}/api/quotes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instruments }),
+          signal
+        });
+        qRaw = await qRes.json();
+      } catch (e) {
+        if (e.name === 'AbortError' || signal.aborted) return;
+        throw e;
+      }
       const quotes = qRaw?.content?.[0]?.text ? JSON.parse(qRaw.content[0].text) : {};
+
+      if (signal.aborted) return;
 
       // Initialise stockData with live quotes
       const initial = constituents.map(c => {
@@ -351,16 +389,16 @@ export default function SectorDetail() {
           weeklyHighs: null, histLoaded: false,
         };
       });
-      if (!cancelled) setStockData(initial);
+      setStockData(initial);
 
       // Progressively load history
       for (const c of constituents) {
-        if (cancelled) break;
+        if (signal.aborted) break;
         if (!c.token) continue;
 
         let hitCache = true;
         try {
-          const hRes = await fetch(`${API}/api/historical-full/${c.token}`);
+          const hRes = await fetchWithAbort(`${API}/api/historical-full/${c.token}`, { signal });
           const hData = await hRes.json();
           hitCache = !!hData?.cached;
 
@@ -369,7 +407,7 @@ export default function SectorDetail() {
             try { const p = JSON.parse(hData.content[0].text); if (Array.isArray(p)) arr = p; } catch {}
           }
 
-          if (arr?.length && !cancelled) {
+          if (arr?.length && !signal.aborted) {
             const sorted = [...arr].sort((a, b) => a.date.localeCompare(b.date));
             const price = sorted[sorted.length - 1]?.close ?? 0;
             const returns = calculateHistoricalReturns(sorted, price);
@@ -380,36 +418,34 @@ export default function SectorDetail() {
             const lastClose = closes[closes.length - 1];
             const weeklyHighs = resampleToWeeklyHighs(sorted);
 
-            if (!cancelled) {
-              setStockData(prev => prev.map(s =>
-                s.key === c.key
-                  ? { ...s, ...returns, rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, weeklyHighs, histLoaded: true }
-                  : s
-              ));
-              setHistLoadedCount(n => n + 1);
-            }
+            setStockData(prev => prev.map(s =>
+              s.key === c.key
+                ? { ...s, ...returns, rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, weeklyHighs, histLoaded: true }
+                : s
+            ));
+            setHistLoadedCount(n => n + 1);
           }
         } catch (e) {
+          if (e.name === 'AbortError' || signal.aborted) break;
           console.warn('history failed for', c.symbol, e.message);
         }
 
-        if (!cancelled && mountedRef.current) {
-          await new Promise(r => setTimeout(r, hitCache ? HIST_CACHE_DELAY_MS : HIST_FETCH_DELAY_MS));
-        }
+        if (signal.aborted) break;
+        await new Promise(r => setTimeout(r, hitCache ? HIST_CACHE_DELAY_MS : HIST_FETCH_DELAY_MS));
       }
     }
 
     loadStocks();
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, [constituents]);
 
   // ─── Phase 3: RRG polling ─────────────────────────────────────────
-  const fetchRRG = useCallback(async () => {
+  const fetchRRG = useCallback(async (signal) => {
     if (constituents.length === 0) return false;
     try {
       const securities = constituents.filter(c => c.key).map(c => c.key).join(',');
       const url = `${API}/api/rrg?benchmark=${encodeURIComponent(sectorKey)}&securities=${encodeURIComponent(securities)}`;
-      const res = await fetch(url);
+      const res = await fetchWithAbort(url, { signal });
       const data = await res.json();
       if (data?.sectors?.length > 0) {
         setRrg(data);
@@ -417,6 +453,7 @@ export default function SectorDetail() {
         return true;
       }
     } catch (e) {
+      if (e.name === 'AbortError' || (signal && signal.aborted)) return false;
       console.warn('RRG fetch failed:', e.message);
     }
     return false;
@@ -425,18 +462,23 @@ export default function SectorDetail() {
   useEffect(() => {
     if (constituents.length === 0) return;
     rrgPollCount.current = 0;
-    let stopped = false;
+    const controller = new AbortController();
+    const { signal } = controller;
 
     const poll = async () => {
-      if (stopped) return;
-      const gotData = await fetchRRG();
-      rrgPollCount.current++;
-      if (gotData) {
-        // Data received — stop polling
+      if (signal.aborted) return;
+      // Pause polling when tab is hidden — resume via visibilitychange below.
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        rrgPollTimer.current = setTimeout(poll, RRG_POLL_MS);
         return;
       }
-      if (rrgPollCount.current < RRG_MAX_WARMUP_POLLS && mountedRef.current) {
-        // Faster early polls (3s for first 3 attempts), then back off to RRG_POLL_MS
+      const gotData = await fetchRRG(signal);
+      if (signal.aborted) return;
+      rrgPollCount.current++;
+      if (gotData) {
+        return;
+      }
+      if (rrgPollCount.current < RRG_MAX_WARMUP_POLLS) {
         const delay = rrgPollCount.current < 3 ? 3000 : RRG_POLL_MS;
         rrgPollTimer.current = setTimeout(poll, delay);
       } else {
@@ -445,7 +487,7 @@ export default function SectorDetail() {
     };
     poll();
     return () => {
-      stopped = true;
+      controller.abort();
       if (rrgPollTimer.current) clearTimeout(rrgPollTimer.current);
     };
   }, [constituents, fetchRRG]);
@@ -629,9 +671,13 @@ export default function SectorDetail() {
     </div>
   );
 
-  const renderStocks = () => (
+  const renderStocks = () => {
+    const totalStocks = constituents.length;
+    const pct = totalStocks > 0 ? Math.round((histLoadedCount / totalStocks) * 100) : 0;
+    const stillLoading = histLoadedCount < totalStocks;
+    return (
     <div className="glass-panel" style={{ padding: '1rem' }}>
-      <div style={{ marginBottom: '1rem' }}>
+      <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
         <input
           type="text"
           placeholder="Search stocks…"
@@ -639,9 +685,22 @@ export default function SectorDetail() {
           onChange={e => setSearchQuery(e.target.value)}
           style={{ padding: '0.5rem 1rem', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg-dark)', color: 'var(--text-primary)', width: '240px', fontSize: '0.9rem', outline: 'none' }}
         />
-        <span style={{ marginLeft: '0.75rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-          {histLoadedCount}/{constituents.length} stocks loaded
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: '200px' }}>
+          {stillLoading && (
+            <div style={{ width: '14px', height: '14px', border: '2px solid rgba(255,255,255,0.1)', borderTop: '2px solid var(--accent)', borderRadius: '50%', animation: 'spin 0.9s linear infinite' }} />
+          )}
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+            {histLoadedCount}/{totalStocks} stocks loaded
+          </span>
+          <div style={{ flex: 1, height: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden', maxWidth: '240px' }}>
+            <div style={{ width: `${pct}%`, height: '100%', background: stillLoading ? 'var(--accent)' : '#22c55e', transition: 'width 0.3s ease' }} />
+          </div>
+          {stillLoading && (
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+              Fetching 5Y history (rate-limited, ~1.5s per stock)
+            </span>
+          )}
+        </div>
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
@@ -695,14 +754,234 @@ export default function SectorDetail() {
         </table>
       </div>
     </div>
-  );
+    );
+  };
 
-  const renderHiddenLeaders = () => {
-    if (!hiddenLeaders) return (
-      <div className="glass-panel" style={{ padding: '1.5rem' }}>
-        <p style={{ color: 'var(--text-secondary)' }}>Loading weekly candle data…</p>
+  // ── Technical Alerts: fetch when tab is opened, then refresh every 60 s ──
+  useEffect(() => {
+    if (!loadedTabs.has('alerts')) return;
+
+    const controller = new AbortController();
+    const { signal } = controller;
+    let timer = null;
+
+    const fireIfVisible = (fn) => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') fn();
+    };
+
+    const pull = async () => {
+      try {
+        if (!signal.aborted && !sectorAlerts) setSectorAlertsLoading(true);
+        // Sector-alerts can take 30–60s on cold cache because the backend
+        // refreshes today's candle for each constituent sequentially. Bump
+        // the timeout to 2 minutes for this endpoint specifically.
+        const res = await fetchWithAbort(`${API}/api/sector-alerts/${encodeURIComponent(sectorKey)}`, { signal, timeoutMs: 120_000 });
+        const body = await res.json();
+        if (signal.aborted) return;
+        if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+        setSectorAlerts(body.alerts || []);
+        setSectorAlertsSummary(body.summary || null);
+        setSectorAlertsError(null);
+        setSectorAlertsLastUpdated(new Date());
+      } catch (err) {
+        if (err.name === 'AbortError' || signal.aborted) return;
+        if (err.name === 'RateLimitedError') return;
+        setSectorAlertsError(err.message);
+      } finally {
+        if (!signal.aborted) setSectorAlertsLoading(false);
+      }
+    };
+
+    pull();
+    timer = setInterval(() => fireIfVisible(pull), ALERTS_REFRESH_MS);
+    return () => {
+      controller.abort();
+      if (timer) clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedTabs, sectorKey]);
+
+  const renderAlerts = () => {
+    if (sectorAlertsLoading && !sectorAlerts) return (
+      <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center' }}>
+        <div className="loader" style={{ margin: '0 auto 1rem', width: '32px', height: '32px', borderWidth: '4px' }} />
+        <p style={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: '0.25rem' }}>
+          Computing technical alerts…
+        </p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+          Indicators (RSI, SMA, VWAP, money flow) are being calculated for each constituent. This can take up to 60 s on a cold cache.
+        </p>
       </div>
     );
+    if (sectorAlertsError) return (
+      <div className="glass-panel" style={{ padding: '1.5rem' }}>
+        <p style={{ color: 'var(--danger, #ef4444)' }}>Failed to load alerts: {sectorAlertsError}</p>
+      </div>
+    );
+    if (!sectorAlerts || sectorAlerts.length === 0) {
+      const total = sectorAlertsSummary?.totalConstituents ?? constituents.length;
+      const notReady = sectorAlertsSummary?.notReady?.length ?? 0;
+      return (
+        <div className="glass-panel" style={{ padding: '1.5rem' }}>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+            No alerts available yet for this sector.
+          </p>
+          {notReady > 0 && (
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+              {notReady} of {total} stocks haven't been warmed in the historical cache yet.
+              Open the <strong>Stocks</strong> tab — it loads 5-year history per name — then return here.
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    const bullishCount = sectorAlerts.filter(s => biasClass(s) === 'bullish').length;
+    const bearishCount = sectorAlerts.filter(s => biasClass(s) === 'bearish').length;
+    const breakoutCount = sectorAlerts.filter(s => s.isBreakout).length;
+
+    const filtered = sectorAlerts
+      .filter(s => s.symbol.toLowerCase().includes(alertSearch.toLowerCase()))
+      .filter(s => alertFilter === 'all' ? true : biasClass(s) === alertFilter)
+      .filter(s => alertFilterBreakouts ? s.isBreakout : true)
+      .slice()
+      .sort((a, b) => {
+        const dir = alertSortDir === 'desc' ? -1 : 1;
+        return ((a.confidence ?? 0) - (b.confidence ?? 0)) * dir;
+      });
+
+    const summary = sectorAlertsSummary;
+    const filterPill = (key, label, count) => (
+      <button
+        key={key}
+        onClick={() => setAlertFilter(key)}
+        style={{
+          padding: '0.4rem 0.9rem',
+          borderRadius: '6px',
+          border: alertFilter === key ? '1px solid var(--accent)' : '1px solid var(--border)',
+          background: alertFilter === key ? 'rgba(0, 188, 212, 0.12)' : 'transparent',
+          color: alertFilter === key ? 'var(--accent)' : 'var(--text-secondary)',
+          cursor: 'pointer',
+          fontWeight: alertFilter === key ? 600 : 400,
+          fontSize: '0.8rem'
+        }}
+      >
+        {label}{count !== undefined ? ` (${count})` : ''}
+      </button>
+    );
+
+    return (
+      <div className="glass-panel" style={{ padding: '1rem' }}>
+        {/* Banner with cache status */}
+        {summary && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              <strong style={{ color: 'var(--text-primary)' }}>{summary.readyCount}</strong> / {summary.totalConstituents} stocks loaded
+              {summary.notReady?.length > 0 && (
+                <span style={{ marginLeft: '0.6rem', color: '#f59e0b' }}>
+                  • {summary.notReady.length} pending — open the Stocks tab to warm the cache
+                </span>
+              )}
+            </div>
+            {sectorAlertsLastUpdated && (
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                ● Live · {sectorAlertsLastUpdated.toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Filter row */}
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          {filterPill('all', 'All', sectorAlerts.length)}
+          {filterPill('bullish', 'Bullish', bullishCount)}
+          {filterPill('bearish', 'Bearish', bearishCount)}
+          <button
+            onClick={() => setAlertFilterBreakouts(v => !v)}
+            style={{
+              padding: '0.4rem 0.9rem',
+              borderRadius: '6px',
+              border: alertFilterBreakouts ? '1px solid #fcd34d' : '1px solid var(--border)',
+              background: alertFilterBreakouts ? 'rgba(252,211,77,0.12)' : 'transparent',
+              color: alertFilterBreakouts ? '#fcd34d' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: alertFilterBreakouts ? 600 : 400,
+              fontSize: '0.8rem'
+            }}
+            title="Show only stocks that have crossed their 20-day resistance ceiling"
+          >
+            🚀 Breakouts{breakoutCount > 0 ? ` (${breakoutCount})` : ''}
+          </button>
+          <input
+            type="text"
+            placeholder="Search symbol…"
+            value={alertSearch}
+            onChange={e => setAlertSearch(e.target.value)}
+            style={{ padding: '0.4rem 0.8rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-dark)', color: 'var(--text-primary)', width: '180px', fontSize: '0.85rem', outline: 'none', marginLeft: 'auto' }}
+          />
+        </div>
+
+        {/* Column Headers */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(200px, 1.2fr) minmax(240px, 1.5fr) minmax(140px, 1fr) minmax(120px, 0.6fr)', gap: '1rem', padding: '0 1rem 0.5rem 1rem', fontSize: '0.65rem', color: 'var(--text-secondary)', letterSpacing: '1px', fontWeight: 700 }}>
+          <div>SYMBOL / PRICE</div>
+          <div>CORE TECHNICALS <span className="info-icon">ⓘ</span></div>
+          <div style={{ textAlign: 'center' }}>MONEY FLOW <span className="info-icon">ⓘ</span></div>
+          <div style={{ textAlign: 'center' }}>TRADE PLAN <span className="info-icon">ⓘ</span></div>
+          <div
+            onClick={() => setAlertSortDir(d => d === 'desc' ? 'asc' : 'desc')}
+            style={{ textAlign: 'right', cursor: 'pointer' }}
+            title="Click to flip sort direction"
+          >
+            MOMENTUM {alertSortDir === 'desc' ? '↓' : '↑'}
+          </div>
+        </div>
+
+        {filtered.length === 0 ? (
+          <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)', fontFamily: "'JetBrains Mono', monospace" }}>
+            NO SIGNALS MATCH QUERY
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {filtered.map(stock => (
+              <AlertRow
+                key={stock.symbol}
+                stock={stock}
+                showHoldingsFields={false}
+                onOpenConviction={() => setConvictionStock(stock)}
+                onOpenTradePlan={() => setTradePlanStock(stock)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderHiddenLeaders = () => {
+    if (!hiddenLeaders) {
+      const total = constituents.length;
+      const pct = total > 0 ? Math.round((histLoadedCount / total) * 100) : 0;
+      return (
+        <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center' }}>
+          <div className="loader" style={{ margin: '0 auto 1rem', width: '32px', height: '32px', borderWidth: '4px' }} />
+          <p style={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: '0.25rem' }}>
+            Detecting Hidden Leaders…
+          </p>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+            Resampling weekly candles to find stocks making Higher Highs while the sector makes Lower Highs.
+          </p>
+          <div style={{ maxWidth: '280px', margin: '0 auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+              <span>{histLoadedCount}/{total} stocks loaded</span>
+              <span>{pct}%</span>
+            </div>
+            <div style={{ height: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+              <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent)', transition: 'width 0.3s ease' }} />
+            </div>
+          </div>
+        </div>
+      );
+    }
 
     if (!hiddenLeaders.active) return (
       <div className="glass-panel" style={{ padding: '1.5rem', textAlign: 'center' }}>
@@ -772,9 +1051,14 @@ export default function SectorDetail() {
   // ─── Loading / error ──────────────────────────────────────────────
   if (loading) {
     return (
-      <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <div className="loader" style={{ margin: '0 auto 1rem', width: '32px', height: '32px', borderWidth: '4px' }}></div>
-        <p style={{ color: 'var(--text-secondary)' }}>Loading {sectorName}…</p>
+      <div style={{ padding: '3rem 2rem', textAlign: 'center' }}>
+        <div className="loader" style={{ margin: '0 auto 1.5rem', width: '40px', height: '40px', borderWidth: '4px' }}></div>
+        <p style={{ color: 'var(--text-primary)', fontWeight: 600, marginBottom: '0.4rem' }}>
+          Loading {sectorName}…
+        </p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', maxWidth: '480px', margin: '0 auto' }}>
+          Fetching sector index quote, 5-year price history, and constituent list. Once the basics land we'll progressively load each stock's history (5-year candles, ~1.5 s per stock to respect the API rate limit).
+        </p>
       </div>
     );
   }
@@ -880,8 +1164,24 @@ export default function SectorDetail() {
           { id: 'rrg', label: 'RRG' },
           { id: 'stocks', label: `Stocks (${constituents.length})` },
           { id: 'leaders', label: hiddenLeaders?.active ? `Hidden Leaders (${hiddenLeaders.leaders.length})` : 'Hidden Leaders' },
+          { id: 'alerts', label: 'Technical Alerts' },
         ].map(t => (
-          <button key={t.id} onClick={() => setActiveTab(t.id)} style={tabStyle(t.id)}>{t.label}</button>
+          <button
+            key={t.id}
+            onClick={() => {
+              setActiveTab(t.id);
+              if (!loadedTabs.has(t.id)) {
+                setLoadedTabs(prev => {
+                  const next = new Set(prev);
+                  next.add(t.id);
+                  return next;
+                });
+              }
+            }}
+            style={tabStyle(t.id)}
+          >
+            {t.label}
+          </button>
         ))}
       </div>
 
@@ -915,7 +1215,11 @@ export default function SectorDetail() {
         )}
         {activeTab === 'stocks' && renderStocks()}
         {activeTab === 'leaders' && renderHiddenLeaders()}
+        {activeTab === 'alerts' && renderAlerts()}
       </div>
+
+      <ConvictionModal stock={convictionStock} onClose={() => setConvictionStock(null)} />
+      <TradePlanModal stock={tradePlanStock} onClose={() => setTradePlanStock(null)} />
     </div>
   );
 }
