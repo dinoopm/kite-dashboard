@@ -256,7 +256,7 @@ async function warmCache(retries = 3) {
 
     const toDate = new Date();
     const fromDate = new Date();
-    fromDate.setDate(toDate.getDate() - (365 * 5)); // 5 years of daily data to satisfy 5Y MAX requests
+    fromDate.setDate(toDate.getDate() - (365 * 3)); // 3 years of daily data to satisfy 3Y MAX requests
 
     let cached = 0;
     for (const h of holdings) {
@@ -552,7 +552,7 @@ async function getOrFetchFullHistory(token) {
   if (historicalFullPromises[token]) {
     return { data: await historicalFullPromises[token], cached: false };
   }
-  historicalFullPromises[token] = fetchHistoricalMultiYear(token, 5)
+  historicalFullPromises[token] = fetchHistoricalMultiYear(token, 3)
     .then(data => {
       if (Array.isArray(data) && data.length > 0) {
         historicalFullCache[token] = { data, timestamp: Date.now() };
@@ -1381,9 +1381,9 @@ app.get('/api/historical-full/:token', async (req, res) => {
     const { token } = req.params;
     const isCacheHit = !!(historicalFullCache[token] && (Date.now() - historicalFullCache[token].timestamp < HISTORICAL_FULL_TTL));
     if (isCacheHit) {
-      console.log(`📊 Serving cached 5Y history for token ${token} (${historicalFullCache[token].data.length} candles)`);
+      console.log(`📊 Serving cached 3Y history for token ${token} (${historicalFullCache[token].data.length} candles)`);
     } else if (!historicalFullPromises[token]) {
-      console.log(`📊 Fetching full 5Y history for token ${token}...`);
+      console.log(`📊 Fetching full 3Y history for token ${token}...`);
     } else {
       console.log(`⏳ Coalescing /api/historical-full call for token ${token} into in-flight fetch...`);
     }
