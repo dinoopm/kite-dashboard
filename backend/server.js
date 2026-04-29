@@ -230,7 +230,7 @@ async function warmCache(retries = 3) {
     for (let attempt = 1; attempt <= retries; attempt++) {
       const holdResult = await mcpClient.callTool({
         name: "get_holdings",
-        arguments: { limit: 50 }
+        arguments: {}
       });
 
       if (holdResult.isError) {
@@ -600,7 +600,7 @@ app.get('/api/profile', async (req, res) => {
 app.get('/api/holdings', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
   try {
-    const result = await fetchWithCache("get_holdings", "holdings", { limit: 50 });
+    const result = await fetchWithCache("get_holdings", "holdings", {});
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1284,7 +1284,7 @@ app.get('/api/alerts', async (req, res) => {
 
   try {
     // Get holdings list
-    const holdingsResult = await fetchWithCache("get_holdings", "holdings", { limit: 50 });
+    const holdingsResult = await fetchWithCache("get_holdings", "holdings", {});
     let holdings = [];
     if (holdingsResult?.content?.[0]?.text) {
       const parsed = JSON.parse(holdingsResult.content[0].text);
