@@ -916,8 +916,34 @@ app.get('/api/indicators/:token', async (req, res) => {
 async function computeStockAlert({ symbol, token, lastPrice, previousClose, candles, holding, sector }) {
   if (!candles || candles.length < 15) return null;
 
-  const closes = candles.map(c => c.close);
-  const currentPrice = lastPrice || closes[closes.length - 1];
+  const currentPrice = lastPrice || candles[candles.length - 1].close;
+  const workingCandles = [...candles];
+
+  if (lastPrice) {
+    const lastCandle = workingCandles[workingCandles.length - 1];
+    const lastDate = new Date(lastCandle.date).toISOString().slice(0, 10);
+    const todayStr = new Date().toISOString().slice(0, 10);
+    
+    if (lastDate === todayStr) {
+      const updatedCandle = { ...lastCandle, close: currentPrice };
+      if (currentPrice > updatedCandle.high) updatedCandle.high = currentPrice;
+      if (currentPrice < updatedCandle.low) updatedCandle.low = currentPrice;
+      workingCandles[workingCandles.length - 1] = updatedCandle;
+    } else {
+      workingCandles.push({
+        date: todayStr + 'T00:00:00+0530',
+        open: lastPrice,
+        high: lastPrice,
+        low: lastPrice,
+        close: lastPrice,
+        volume: 0
+      });
+    }
+  }
+
+  const closes = workingCandles.map(c => c.close);
+  const highs = workingCandles.map(c => c.high);
+  const lows = workingCandles.map(c => c.low);
 
   const sma5Arr = SMA.calculate({ period: 5, values: closes });
   const sma20Arr = SMA.calculate({ period: 20, values: closes });
@@ -925,13 +951,10 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   const sma200Arr = SMA.calculate({ period: 200, values: closes });
   const rsi14Arr = RSI.calculate({ period: 14, values: closes });
 
-  const highs = candles.map(c => c.high);
-  const lows = candles.map(c => c.low);
-
   const atr14Arr = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
 
   // Calculate 20-period Anchored VWAP
-  const recent20 = candles.slice(-20);
+  const recent20 = workingCandles.slice(-20);
   let vwap20 = null;
   let vwapDeviation = null;
   if (recent20.length === 20) {
@@ -949,8 +972,8 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
 
   // Institutional Net Aggressor Proxy via Money Flow Multiplier (MFM)
   let aggressorDelta = 0;
-  if (candles.length >= 14) {
-    const window = candles.slice(-14);
+  if (workingCandles.length >= 14) {
+    const window = workingCandles.slice(-14);
     let totalMoneyFlowVolume = 0;
     let totalVolume = 0;
     window.forEach(c => {
@@ -983,8 +1006,8 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   );
   const isAlignedTrend = isBullishAligned || isBearishAligned;
 
-  const todayBar = candles[candles.length - 1];
-  const prevBarClose = candles[candles.length - 2]?.close ?? null;
+  const todayBar = workingCandles[workingCandles.length - 1];
+  const prevBarClose = workingCandles[workingCandles.length - 2]?.close ?? null;
   const todayTR = todayBar
     ? Math.max(
         (todayBar.high ?? 0) - (todayBar.low ?? 0),
@@ -1103,7 +1126,7 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
 
   // 20-day Donchian channels from the PRIOR 20 bars (excluding today) so an
   // intraday/EOD bar pressing against the ceiling isn't self-confirming.
-  const prior20 = candles.length > 20 ? candles.slice(-21, -1) : candles.slice(0, -1);
+  const prior20 = workingCandles.length > 20 ? workingCandles.slice(-21, -1) : workingCandles.slice(0, -1);
   const priorHighs = prior20.map(c => c.high).filter(v => v != null);
   const priorLows = prior20.map(c => c.low).filter(v => v != null);
   const priorVols = prior20.map(c => c.volume).filter(v => v != null && v > 0);
@@ -1111,7 +1134,7 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   const resistanceLvl = priorHighs.length > 0 ? Math.max(...priorHighs) : (atr ? currentPrice + 1.5 * atr : null);
 
   const avgVol20 = priorVols.length > 0 ? priorVols.reduce((a, b) => a + b, 0) / priorVols.length : 0;
-  const todayVol = candles[candles.length - 1]?.volume || 0;
+  const todayVol = workingCandles[workingCandles.length - 1]?.volume || 0;
   const volSurge = avgVol20 > 0 ? todayVol / avgVol20 : 0;
   const volumeConfirmed = volSurge >= 1.5;
 
