@@ -913,7 +913,7 @@ app.get('/api/indicators/:token', async (req, res) => {
 // `holding` is the raw Kite holdings row when called from /api/alerts; pass
 // undefined for the sector path to skip qty/PnL fields and the holdings-aware
 // trade-plan overrides (BUY SEEN→ADD if owned, HOLD OVERBOUGHT→TRIM if +25%).
-async function computeStockAlert({ symbol, token, lastPrice, candles, holding, sector }) {
+async function computeStockAlert({ symbol, token, lastPrice, previousClose, candles, holding, sector }) {
   if (!candles || candles.length < 15) return null;
 
   const closes = candles.map(c => c.close);
@@ -1120,9 +1120,11 @@ async function computeStockAlert({ symbol, token, lastPrice, candles, holding, s
     ? (currentPrice > prevCloseBar ? 'up' : currentPrice < prevCloseBar ? 'down' : 'flat')
     : 'flat';
   const volumeConfirmedSide = volumeConfirmed ? barDir : null;
-  const dayChangePct = (prevCloseBar && currentPrice)
-    ? +(((currentPrice - prevCloseBar) / prevCloseBar) * 100).toFixed(2)
-    : null;
+  const dayChangePct = (previousClose && currentPrice)
+    ? +(((currentPrice - previousClose) / previousClose) * 100).toFixed(2)
+    : (prevCloseBar && currentPrice)
+      ? +(((currentPrice - prevCloseBar) / prevCloseBar) * 100).toFixed(2)
+      : null;
 
   const isBreakout = !!(resistanceLvl && currentPrice >= resistanceLvl);
   const distanceToRes = (resistanceLvl && currentPrice) ? (resistanceLvl - currentPrice) / currentPrice : 0;
@@ -1288,7 +1290,7 @@ app.get('/api/alerts', async (req, res) => {
       await refreshTodayCandle(token);
 
       const candles = historyCache[token];
-      const alert = await computeStockAlert({ symbol, token, lastPrice, candles, holding: h });
+      const alert = await computeStockAlert({ symbol, token, lastPrice, previousClose: h.close_price, candles, holding: h });
       if (alert) alerts.push(alert);
     }
 
@@ -1759,22 +1761,25 @@ const SECTOR_CONSTITUENTS_TTL = 30 * 60 * 1000; // 30 min
 async function resolveSectorConstituents(sectorKey) {
   if (!supabase) throw new Error('Supabase not configured');
 
+  let rows;
   const cached = sectorConstituentsCache[sectorKey];
   if (cached && Date.now() - cached.timestamp < SECTOR_CONSTITUENTS_TTL) {
-    return cached.data;
-  }
+    rows = cached.data;
+  } else {
+    const { data, error } = await supabase
+      .from('sector_constituents')
+      .select('*')
+      .eq('sector_key', sectorKey)
+      .order('sort_order');
 
-  const { data: rows, error } = await supabase
-    .from('sector_constituents')
-    .select('*')
-    .eq('sector_key', sectorKey)
-    .order('sort_order');
-
-  if (error) throw new Error(error.message);
-  if (!rows || rows.length === 0) {
-    const e = new Error(`No constituents for ${sectorKey}`);
-    e.statusCode = 404;
-    throw e;
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) {
+      const e = new Error(`No constituents for ${sectorKey}`);
+      e.statusCode = 404;
+      throw e;
+    }
+    rows = data;
+    sectorConstituentsCache[sectorKey] = { data: rows, timestamp: Date.now() };
   }
 
   const instruments = rows.map(r => `NSE:${r.symbol}`);
@@ -1796,12 +1801,11 @@ async function resolveSectorConstituents(sectorKey) {
       key,
       token: q?.instrument_token ? String(q.instrument_token) : null,
       lastPrice: q?.last_price ?? null,
+      previousClose: q?.ohlc?.close ?? null,
     };
   });
 
-  const data = { sector: sectorKey, constituents };
-  sectorConstituentsCache[sectorKey] = { data, timestamp: Date.now() };
-  return data;
+  return { sector: sectorKey, constituents };
 }
 
 app.get('/api/sector-constituents/:sector', async (req, res) => {
@@ -1852,6 +1856,7 @@ async function computeSectorAlertsPayload(sectorKey) {
       symbol: c.symbol,
       token: c.token,
       lastPrice: c.lastPrice,
+      previousClose: c.previousClose,
       candles: candlesAfterRefresh,
       sector: sectorKey,
     });
