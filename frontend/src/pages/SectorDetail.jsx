@@ -697,7 +697,7 @@ export default function SectorDetail() {
           </div>
           {stillLoading && (
             <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-              Fetching 5Y history (rate-limited, ~1.5s per stock)
+              Fetching 3Y history (rate-limited, ~1.5s per stock)
             </span>
           )}
         </div>
@@ -1057,7 +1057,7 @@ export default function SectorDetail() {
           Loading {sectorName}…
         </p>
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', maxWidth: '480px', margin: '0 auto' }}>
-          Fetching sector index quote, 5-year price history, and constituent list. Once the basics land we'll progressively load each stock's history (5-year candles, ~1.5 s per stock to respect the API rate limit).
+          Fetching sector index quote, 3-year price history, and constituent list. Once the basics land we'll progressively load each stock's history (3-year candles, ~1.5 s per stock to respect the API rate limit).
         </p>
       </div>
     );
