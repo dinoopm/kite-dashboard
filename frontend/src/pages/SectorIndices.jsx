@@ -100,7 +100,7 @@ function SectorIndices() {
   const searchInputRef = useRef(null);
 
   // Sorting state
-  const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'asc' });
+  const [sortConfig, setSortConfig] = useState({ key: 'momentumScore', direction: 'desc' });
 
   // ─── RRG State ─────────────────────────────────────────────
   const [rrg, setRrg] = useState(null);
@@ -1039,10 +1039,10 @@ function SectorIndices() {
                   3Y {renderSortIndicator('3Y')}
                 </th>
               )}
-              <th onClick={() => requestSort('rsi14')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center', background: '#0f0f1e' }}>
+              <th onClick={() => requestSort('rsi14')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
                 RSI {renderSortIndicator('rsi14')}
               </th>
-              <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. Hover the score for a breakdown." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center', background: '#0f0f1e' }}>
+              <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. Hover the score for a breakdown." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
                 Momentum {renderSortIndicator('momentumScore')}
               </th>
               {activeTab !== 'broad' && (
@@ -1103,7 +1103,7 @@ function SectorIndices() {
                 <Cell value={row['1Y']} />
                 <Cell value={row.dist52WHigh} isHeatmapCell={false} />
                 {!hiddenColumns['3Y'] && <Cell value={row['3Y']} />}
-                <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
+                <td style={{ padding: '0.5rem', textAlign: 'right' }}>
                   {row.rsi14 === null ? (
                     <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
                   ) : (
@@ -1125,13 +1125,19 @@ function SectorIndices() {
                     </span>
                   )}
                 </td>
-                <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center', position: 'relative' }}
+                <td style={{ padding: '0.5rem', textAlign: 'right', position: 'relative' }}
                     onMouseEnter={() => row.momentumBreakdown && setMomentumPopover(row.id)}
                     onMouseLeave={() => setMomentumPopover(null)}>
                   {row.momentumScore == null ? (
                     <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
                   ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', cursor: 'help' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.3rem', cursor: 'help' }}>
+                      {delta != null && delta > 0 && (
+                        <span title="RS-Momentum improving week-over-week" style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: 'bold' }}>▲</span>
+                      )}
+                      {delta != null && delta < 0 && (
+                        <span title="RS-Momentum declining week-over-week" style={{ color: '#ef4444', fontSize: '0.8rem', fontWeight: 'bold' }}>▼</span>
+                      )}
                       <span style={{
                         display: 'inline-block',
                         padding: '0.2rem 0.6rem',
@@ -1153,12 +1159,6 @@ function SectorIndices() {
                       }}>
                         {row.momentumScore}
                       </span>
-                      {delta != null && delta > 0 && (
-                        <span title="RS-Momentum improving week-over-week" style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: 'bold' }}>▲</span>
-                      )}
-                      {delta != null && delta < 0 && (
-                        <span title="RS-Momentum declining week-over-week" style={{ color: '#ef4444', fontSize: '0.8rem', fontWeight: 'bold' }}>▼</span>
-                      )}
                     </div>
                   )}
                   {momentumPopover === row.id && row.momentumBreakdown && (
