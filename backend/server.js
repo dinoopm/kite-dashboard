@@ -347,6 +347,29 @@ async function reconnectMcp() {
 
 // ─── API Routes ────────────────────────────────────────────────
 
+app.get('/api/large-deals/:symbol?', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
+  try {
+    const symbol = req.params.symbol;
+    let query = supabase
+      .from('large_deals')
+      .select('*')
+      .order('trade_date', { ascending: false });
+    
+    if (symbol) {
+      query = query.eq('symbol', symbol);
+    } else {
+      query = query.limit(100); // Limit to 100 recent deals if no symbol specified
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/fiidii', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
   try {
