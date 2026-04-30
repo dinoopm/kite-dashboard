@@ -347,7 +347,7 @@ async function reconnectMcp() {
 
 // ─── API Routes ────────────────────────────────────────────────
 
-app.get('/api/large-deals/:symbol?', async (req, res) => {
+async function largeDealsHandler(req, res) {
   if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
   try {
     const symbol = req.params.symbol;
@@ -355,11 +355,11 @@ app.get('/api/large-deals/:symbol?', async (req, res) => {
       .from('large_deals')
       .select('*')
       .order('trade_date', { ascending: false });
-    
+
     if (symbol) {
-      query = query.eq('symbol', symbol);
+      query = query.eq('symbol', symbol.toUpperCase());
     } else {
-      query = query.limit(100); // Limit to 100 recent deals if no symbol specified
+      query = query.limit(100);
     }
 
     const { data, error } = await query;
@@ -368,7 +368,10 @@ app.get('/api/large-deals/:symbol?', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+}
+
+app.get('/api/large-deals', largeDealsHandler);
+app.get('/api/large-deals/:symbol', largeDealsHandler);
 
 app.get('/api/fiidii', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
