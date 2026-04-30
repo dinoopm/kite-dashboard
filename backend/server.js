@@ -373,6 +373,29 @@ async function largeDealsHandler(req, res) {
 app.get('/api/large-deals', largeDealsHandler);
 app.get('/api/large-deals/:symbol', largeDealsHandler);
 
+app.get('/api/top-gainers-losers', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
+  try {
+    const { category, index_name } = req.query;
+    let query = supabase
+      .from('top_gainers_losers')
+      .select('*')
+      .order('pct_change', { ascending: category === 'LOSER' });
+
+    if (category) query = query.eq('category', category.toUpperCase());
+    if (index_name) query = query.eq('index_name', index_name);
+
+    // Default to today's data for allSec if no filters
+    if (!index_name) query = query.eq('index_name', 'allSec');
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/fiidii', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
   try {
