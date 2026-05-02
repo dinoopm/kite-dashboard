@@ -1171,8 +1171,7 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     }
   }
 
-  // 52-week high/low — prior 252 bars, today excluded (same convention as 20-day Donchian).
-  // Uses the full 3-year cache so the level is real even for younger holdings.
+  // 52-week high/low — prior 252 bars, today excluded.
   const prior252Candles = workingCandles.length > 252 ? workingCandles.slice(-253, -1) : workingCandles.slice(0, -1);
   const high52wArr = prior252Candles.map(c => c.high).filter(v => v != null);
   const low52wArr  = prior252Candles.map(c => c.low).filter(v => v != null);
@@ -1181,10 +1180,24 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   const is52wBreakout = !!(high52w && currentPrice >= high52w);
   const distanceTo52wHighPct = high52w ? ((high52w - currentPrice) / high52w) * 100 : null;
 
-  if (is52wBreakout) {
-    stockAlerts.push({ type: '52w_breakout', severity: 'bullish', message: `52-week high breakout at ₹${high52w.toFixed(1)} — price is trading in uncharted territory.` });
+  // 3-year high/low — all prior bars, today excluded (full cache depth).
+  const prior3yCandles = workingCandles.slice(0, -1);
+  const high3yArr = prior3yCandles.map(c => c.high).filter(v => v != null);
+  const low3yArr  = prior3yCandles.map(c => c.low).filter(v => v != null);
+  const high3y = high3yArr.length > 0 ? Math.max(...high3yArr) : null;
+  const low3y  = low3yArr.length  > 0 ? Math.min(...low3yArr)  : null;
+  const is3yBreakout = !!(high3y && currentPrice >= high3y);
+  const distanceTo3yHighPct = high3y ? ((high3y - currentPrice) / high3y) * 100 : null;
+
+  // Fire alerts for the highest level broken first; skip lower levels to avoid duplication.
+  if (is3yBreakout) {
+    stockAlerts.push({ type: '3y_breakout', severity: 'bullish', message: `3-year high breakout at ₹${high3y.toFixed(1)} — highest level in 3 years.` });
+  } else if (is52wBreakout) {
+    stockAlerts.push({ type: '52w_breakout', severity: 'bullish', message: `52-week high breakout at ₹${high52w.toFixed(1)}.${high3y ? ` Next resistance: 3-year high at ₹${high3y.toFixed(1)} (${Math.abs(distanceTo3yHighPct).toFixed(1)}% away).` : ''}` });
   } else if (distanceTo52wHighPct !== null && distanceTo52wHighPct <= 3) {
     stockAlerts.push({ type: '52w_approaching', severity: 'info', message: `Within ${distanceTo52wHighPct.toFixed(1)}% of the 52-week high (₹${high52w.toFixed(1)}).` });
+  } else if (distanceTo3yHighPct !== null && distanceTo3yHighPct <= 3) {
+    stockAlerts.push({ type: '3y_approaching', severity: 'info', message: `Within ${distanceTo3yHighPct.toFixed(1)}% of the 3-year high (₹${high3y.toFixed(1)}).` });
   }
 
   if (stockAlerts.length === 0) return null;
@@ -1230,30 +1243,36 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
 
   const tradePlan = { action: 'HOLD / WAIT', sl: null, tgt: null, reason: 'Market structure currently yields no asymmetric edge.' };
 
-  const breakoutLabel = is52wBreakout
-    ? `52-week high (₹${high52w.toFixed(1)})`
-    : `20-day high (₹${resistanceLvl.toFixed(1)})`;
+  const breakoutLabel = is3yBreakout
+    ? `3-year high (₹${high3y.toFixed(1)})`
+    : is52wBreakout
+      ? `52-week high (₹${high52w.toFixed(1)})`
+      : `20-day high (₹${resistanceLvl.toFixed(1)})`;
 
-  // When the 20-day breakout is real but the 52w high is still overhead, append it as the next wall.
-  const next52wNote = (!is52wBreakout && high52w && distanceTo52wHighPct !== null && distanceTo52wHighPct > 0)
-    ? ` Next major resistance: 52-week high at ₹${high52w.toFixed(1)} (${distanceTo52wHighPct.toFixed(1)}% away).`
-    : '';
+  // Append the next overhead wall when the current breakout hasn't cleared the highest level yet.
+  const nextResistanceNote = is3yBreakout
+    ? ''
+    : is52wBreakout && high3y && distanceTo3yHighPct !== null && distanceTo3yHighPct > 0
+      ? ` Next major resistance: 3-year high at ₹${high3y.toFixed(1)} (${Math.abs(distanceTo3yHighPct).toFixed(1)}% away).`
+      : !is52wBreakout && high52w && distanceTo52wHighPct !== null && distanceTo52wHighPct > 0
+        ? ` Next major resistance: 52-week high at ₹${high52w.toFixed(1)} (${Math.abs(distanceTo52wHighPct).toFixed(1)}% away).`
+        : '';
 
   if (isBreakout && confidence >= 75 && volumeConfirmed) {
     tradePlan.action = 'BUY SEEN';
-    tradePlan.reason = `Price broke above the ${breakoutLabel} on ${volSurge.toFixed(1)}× avg volume. Breakout confirmed.${next52wNote}`;
+    tradePlan.reason = `Price broke above the ${breakoutLabel} on ${volSurge.toFixed(1)}× avg volume. Breakout confirmed.${nextResistanceNote}`;
   } else if (isBreakout && confidence >= 75 && !volumeConfirmed) {
     tradePlan.action = 'BREAKOUT (CAUTION)';
-    tradePlan.reason = `Price crossed the ${breakoutLabel} with strong score ${confidence}%, but volume is only ${volSurge.toFixed(1)}× avg (<1.5×). Wait for volume confirmation.${next52wNote}`;
+    tradePlan.reason = `Price crossed the ${breakoutLabel} with strong score ${confidence}%, but volume is only ${volSurge.toFixed(1)}× avg (<1.5×). Wait for volume confirmation.${nextResistanceNote}`;
   } else if (isBreakout && confidence >= 50 && volumeConfirmed) {
     tradePlan.action = 'BREAKOUT (CAUTION)';
-    tradePlan.reason = `Price crossed the ${breakoutLabel} on ${volSurge.toFixed(1)}× volume, but conviction is moderate at ${confidence}%. Watch for follow-through.${next52wNote}`;
+    tradePlan.reason = `Price crossed the ${breakoutLabel} on ${volSurge.toFixed(1)}× volume, but conviction is moderate at ${confidence}%. Watch for follow-through.${nextResistanceNote}`;
   } else if (isBreakout && confidence >= 50) {
     tradePlan.action = 'BREAKOUT (WEAK)';
-    tradePlan.reason = `Breakout above ${breakoutLabel} lacks both strong score (${confidence}%) and volume (${volSurge.toFixed(1)}×). High risk of a false breakout.${next52wNote}`;
+    tradePlan.reason = `Breakout above ${breakoutLabel} lacks both strong score (${confidence}%) and volume (${volSurge.toFixed(1)}×). High risk of a false breakout.${nextResistanceNote}`;
   } else if (isBreakout) {
     tradePlan.action = 'BREAKOUT (WEAK)';
-    tradePlan.reason = `Price breached ${breakoutLabel} but underlying technicals are weak (score ${confidence}%). Likely bull trap.${next52wNote}`;
+    tradePlan.reason = `Price breached ${breakoutLabel} but underlying technicals are weak (score ${confidence}%). Likely bull trap.${nextResistanceNote}`;
   } else if (confidence >= 80 && distanceToRes > 0.02) {
     tradePlan.action = 'BUY SEEN';
     tradePlan.reason = `Momentum is high with ${(distanceToRes * 100).toFixed(1)}% room to run before the 20-day resistance ceiling.`;
@@ -1333,6 +1352,9 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     high52w: high52w ? +high52w.toFixed(2) : null,
     low52w: low52w ? +low52w.toFixed(2) : null,
     is52wBreakout,
+    high3y: high3y ? +high3y.toFixed(2) : null,
+    low3y: low3y ? +low3y.toFixed(2) : null,
+    is3yBreakout,
     isBreakout,
     tradePlan,
     rsiHistory,
