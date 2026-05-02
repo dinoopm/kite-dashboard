@@ -1234,21 +1234,26 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     ? `52-week high (₹${high52w.toFixed(1)})`
     : `20-day high (₹${resistanceLvl.toFixed(1)})`;
 
+  // When the 20-day breakout is real but the 52w high is still overhead, append it as the next wall.
+  const next52wNote = (!is52wBreakout && high52w && distanceTo52wHighPct !== null && distanceTo52wHighPct > 0)
+    ? ` Next major resistance: 52-week high at ₹${high52w.toFixed(1)} (${distanceTo52wHighPct.toFixed(1)}% away).`
+    : '';
+
   if (isBreakout && confidence >= 75 && volumeConfirmed) {
     tradePlan.action = 'BUY SEEN';
-    tradePlan.reason = `Price broke above the ${breakoutLabel} on ${volSurge.toFixed(1)}× avg volume. Breakout confirmed.`;
+    tradePlan.reason = `Price broke above the ${breakoutLabel} on ${volSurge.toFixed(1)}× avg volume. Breakout confirmed.${next52wNote}`;
   } else if (isBreakout && confidence >= 75 && !volumeConfirmed) {
     tradePlan.action = 'BREAKOUT (CAUTION)';
-    tradePlan.reason = `Price crossed the ${breakoutLabel} with strong score ${confidence}%, but volume is only ${volSurge.toFixed(1)}× avg (<1.5×). Wait for volume confirmation.`;
+    tradePlan.reason = `Price crossed the ${breakoutLabel} with strong score ${confidence}%, but volume is only ${volSurge.toFixed(1)}× avg (<1.5×). Wait for volume confirmation.${next52wNote}`;
   } else if (isBreakout && confidence >= 50 && volumeConfirmed) {
     tradePlan.action = 'BREAKOUT (CAUTION)';
-    tradePlan.reason = `Price crossed the ${breakoutLabel} on ${volSurge.toFixed(1)}× volume, but conviction is moderate at ${confidence}%. Watch for follow-through.`;
+    tradePlan.reason = `Price crossed the ${breakoutLabel} on ${volSurge.toFixed(1)}× volume, but conviction is moderate at ${confidence}%. Watch for follow-through.${next52wNote}`;
   } else if (isBreakout && confidence >= 50) {
     tradePlan.action = 'BREAKOUT (WEAK)';
-    tradePlan.reason = `Breakout above ${breakoutLabel} lacks both strong score (${confidence}%) and volume (${volSurge.toFixed(1)}×). High risk of a false breakout.`;
+    tradePlan.reason = `Breakout above ${breakoutLabel} lacks both strong score (${confidence}%) and volume (${volSurge.toFixed(1)}×). High risk of a false breakout.${next52wNote}`;
   } else if (isBreakout) {
     tradePlan.action = 'BREAKOUT (WEAK)';
-    tradePlan.reason = `Price breached ${breakoutLabel} but underlying technicals are weak (score ${confidence}%). Likely bull trap.`;
+    tradePlan.reason = `Price breached ${breakoutLabel} but underlying technicals are weak (score ${confidence}%). Likely bull trap.${next52wNote}`;
   } else if (confidence >= 80 && distanceToRes > 0.02) {
     tradePlan.action = 'BUY SEEN';
     tradePlan.reason = `Momentum is high with ${(distanceToRes * 100).toFixed(1)}% room to run before the 20-day resistance ceiling.`;
