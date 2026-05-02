@@ -1171,6 +1171,22 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     }
   }
 
+  // 52-week high/low — prior 252 bars, today excluded (same convention as 20-day Donchian).
+  // Uses the full 3-year cache so the level is real even for younger holdings.
+  const prior252Candles = workingCandles.length > 252 ? workingCandles.slice(-253, -1) : workingCandles.slice(0, -1);
+  const high52wArr = prior252Candles.map(c => c.high).filter(v => v != null);
+  const low52wArr  = prior252Candles.map(c => c.low).filter(v => v != null);
+  const high52w = high52wArr.length > 0 ? Math.max(...high52wArr) : null;
+  const low52w  = low52wArr.length  > 0 ? Math.min(...low52wArr)  : null;
+  const is52wBreakout = !!(high52w && currentPrice >= high52w);
+  const distanceTo52wHighPct = high52w ? ((high52w - currentPrice) / high52w) * 100 : null;
+
+  if (is52wBreakout) {
+    stockAlerts.push({ type: '52w_breakout', severity: 'bullish', message: `52-week high breakout at ₹${high52w.toFixed(1)} — price is trading in uncharted territory.` });
+  } else if (distanceTo52wHighPct !== null && distanceTo52wHighPct <= 3) {
+    stockAlerts.push({ type: '52w_approaching', severity: 'info', message: `Within ${distanceTo52wHighPct.toFixed(1)}% of the 52-week high (₹${high52w.toFixed(1)}).` });
+  }
+
   if (stockAlerts.length === 0) return null;
 
   // 20-day Donchian channels from the PRIOR 20 bars (excluding today) so an
@@ -1214,21 +1230,25 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
 
   const tradePlan = { action: 'HOLD / WAIT', sl: null, tgt: null, reason: 'Market structure currently yields no asymmetric edge.' };
 
+  const breakoutLabel = is52wBreakout
+    ? `52-week high (₹${high52w.toFixed(1)})`
+    : `20-day high (₹${resistanceLvl.toFixed(1)})`;
+
   if (isBreakout && confidence >= 75 && volumeConfirmed) {
     tradePlan.action = 'BUY SEEN';
-    tradePlan.reason = `Price broke above the 20-day high (₹${resistanceLvl.toFixed(1)}) on ${volSurge.toFixed(1)}× avg volume. Breakout confirmed.`;
+    tradePlan.reason = `Price broke above the ${breakoutLabel} on ${volSurge.toFixed(1)}× avg volume. Breakout confirmed.`;
   } else if (isBreakout && confidence >= 75 && !volumeConfirmed) {
     tradePlan.action = 'BREAKOUT (CAUTION)';
-    tradePlan.reason = `Price crossed the 20-day ceiling (₹${resistanceLvl.toFixed(1)}) with strong score ${confidence}%, but volume is only ${volSurge.toFixed(1)}× avg (<1.5×). Wait for volume confirmation.`;
+    tradePlan.reason = `Price crossed the ${breakoutLabel} with strong score ${confidence}%, but volume is only ${volSurge.toFixed(1)}× avg (<1.5×). Wait for volume confirmation.`;
   } else if (isBreakout && confidence >= 50 && volumeConfirmed) {
     tradePlan.action = 'BREAKOUT (CAUTION)';
-    tradePlan.reason = `Price crossed the 20-day ceiling (₹${resistanceLvl.toFixed(1)}) on ${volSurge.toFixed(1)}× volume, but conviction is moderate at ${confidence}%. Watch for follow-through.`;
+    tradePlan.reason = `Price crossed the ${breakoutLabel} on ${volSurge.toFixed(1)}× volume, but conviction is moderate at ${confidence}%. Watch for follow-through.`;
   } else if (isBreakout && confidence >= 50) {
     tradePlan.action = 'BREAKOUT (WEAK)';
-    tradePlan.reason = `Breakout above ₹${resistanceLvl.toFixed(1)} lacks both strong score (${confidence}%) and volume (${volSurge.toFixed(1)}×). High risk of a false breakout.`;
+    tradePlan.reason = `Breakout above ${breakoutLabel} lacks both strong score (${confidence}%) and volume (${volSurge.toFixed(1)}×). High risk of a false breakout.`;
   } else if (isBreakout) {
     tradePlan.action = 'BREAKOUT (WEAK)';
-    tradePlan.reason = `Price breached resistance (₹${resistanceLvl.toFixed(1)}) but underlying technicals are weak (score ${confidence}%). Likely bull trap.`;
+    tradePlan.reason = `Price breached ${breakoutLabel} but underlying technicals are weak (score ${confidence}%). Likely bull trap.`;
   } else if (confidence >= 80 && distanceToRes > 0.02) {
     tradePlan.action = 'BUY SEEN';
     tradePlan.reason = `Momentum is high with ${(distanceToRes * 100).toFixed(1)}% room to run before the 20-day resistance ceiling.`;
@@ -1305,6 +1325,9 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     divergence,
     regime,
     trendDirection,
+    high52w: high52w ? +high52w.toFixed(2) : null,
+    low52w: low52w ? +low52w.toFixed(2) : null,
+    is52wBreakout,
     isBreakout,
     tradePlan,
     rsiHistory,
