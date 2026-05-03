@@ -65,14 +65,12 @@ function Portfolio() {
 
   const getTotalInvestment = () => {
     if (!holdings || !Array.isArray(holdings)) return 0;
-    // Use h.quantity — Kite's canonical held qty. t1_quantity + realised_quantity can both be 0
-    // for stocks in certain settlement states, silently excluding them from totals.
-    return holdings.reduce((sum, h) => sum + (h.average_price * (h.quantity || 0)), 0);
+    return holdings.reduce((sum, h) => sum + (h.average_price * ((h.quantity || 0) + (h.t1_quantity || 0))), 0);
   };
 
   const getCurrentValue = () => {
     if (!holdings || !Array.isArray(holdings)) return 0;
-    return holdings.reduce((sum, h) => sum + (h.last_price * (h.quantity || 0)), 0);
+    return holdings.reduce((sum, h) => sum + (h.last_price * ((h.quantity || 0) + (h.t1_quantity || 0))), 0);
   };
 
   const totalInv = getTotalInvestment();
@@ -83,14 +81,15 @@ function Portfolio() {
   const filteredAndSortedHoldings = (holdings || [])
     .filter(item => item.tradingsymbol.toLowerCase().includes(searchTerm.toLowerCase()))
     .map(item => {
-      const q = item.quantity || 0;
+      const q = (item.quantity || 0) + (item.t1_quantity || 0);
       const currentValue = q * item.last_price;
       const investment = q * item.average_price;
       const itemPL = item.pnl !== undefined ? item.pnl : (currentValue - investment);
       const itemPLPercent = investment ? (itemPL / investment) * 100 : 0;
       const dayChange = item.day_change !== undefined ? item.day_change : (item.last_price - (item.close_price || item.last_price));
       const dayChangePct = item.day_change_percentage !== undefined ? item.day_change_percentage : (item.close_price ? (dayChange / item.close_price) * 100 : 0);
-      return { ...item, displayQuantity: q, currentValue, investment, itemPL, itemPLPercent, dayChange, dayChangePct };
+      const allocation = currentVal ? (currentValue / currentVal) * 100 : 0;
+      return { ...item, displayQuantity: q, currentValue, investment, itemPL, itemPLPercent, dayChange, dayChangePct, allocation };
     })
     .sort((a, b) => {
       let valA = a[sortField];
@@ -123,7 +122,7 @@ function Portfolio() {
         return searchStr.includes(searchTerm.toLowerCase());
       })
       .map(item => {
-        const q = item.quantity || 0;
+        const q = (item.quantity || 0) + (item.t1_quantity || 0);
         const currentValue = q * item.last_price;
         const investment = q * item.average_price;
         const itemPL = currentValue - investment;
@@ -219,6 +218,14 @@ function Portfolio() {
                   </span>
                 </div>
 
+                <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: '3px solid var(--accent)' }}>
+                  <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Holdings</span>
+                  <span className="value" style={{ fontSize: '1.5rem', fontWeight: '700' }}>
+                    {(holdings || []).length}
+                  </span>
+                  <span className="label" style={{ fontSize: '0.8rem', marginTop: '0.25rem', opacity: 0.7 }}>stocks</span>
+                </div>
+
                 {/* Total Current Value */}
                 <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: '3px solid var(--text-primary)' }}>
                   <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Current Value</span>
@@ -265,6 +272,7 @@ function Portfolio() {
                     <th onClick={() => handleSort('currentValue')} style={{cursor: 'pointer'}}>Cur. Value <SortIcon field="currentValue"/></th>
                     <th onClick={() => handleSort('itemPL')} style={{cursor: 'pointer'}}>P&L <SortIcon field="itemPL"/></th>
                     <th onClick={() => handleSort('itemPLPercent')} style={{cursor: 'pointer'}}>Net Chg. <SortIcon field="itemPLPercent"/></th>
+                    <th onClick={() => handleSort('allocation')} style={{cursor: 'pointer'}}>Allocation <SortIcon field="allocation"/></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -283,6 +291,7 @@ function Portfolio() {
                         {item.itemPL > 0 ? '+' : ''}{item.itemPL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                       </td>
                       <td className={item.itemPL >= 0 ? 'positive' : 'negative'}>{item.itemPLPercent.toFixed(2)}%</td>
+                      <td>{item.allocation.toFixed(2)}%</td>
                     </tr>
                   ))}
                 </tbody>

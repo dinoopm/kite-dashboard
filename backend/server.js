@@ -1364,7 +1364,9 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
       isBreakingOut: w.isBreakingOut,
       distancePct: w.distancePct !== null ? +w.distancePct.toFixed(2) : null
     })),
-    activeBreakoutWindow: activeBreakout?.label ?? null,
+    activeBreakoutWindow: activeBreakout
+      ? { key: activeBreakout.key, label: activeBreakout.label, high: +activeBreakout.high.toFixed(2) }
+      : null,
     isBreakout,
     tradePlan,
     rsiHistory,

@@ -77,7 +77,7 @@ const INDICES = [
 const emptyRowFor = (entry) => ({
   id: entry.key, name: entry.name, category: entry.category, token: null,
   price: 0, '1D': null,
-  '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '3Y': null,
+  '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null,
   sparkline: null, aboveSma50: null, rsi14: null, dist52WHigh: null, rs1M: null,
 });
 
@@ -94,7 +94,7 @@ function SectorIndices() {
   const historyLoadedRef = useRef(new Set());
   const [isHeatmap, setIsHeatmap] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [hiddenColumns, setHiddenColumns] = useState({ '1W': false, '6M': false, '3Y': false });
+  const [hiddenColumns, setHiddenColumns] = useState({ '1W': false, '6M': false, '2Y': false, '3Y': false });
   const [showColumnMenu, setShowColumnMenu] = useState(false);
   const [momentumPopover, setMomentumPopover] = useState(null); // { rowId, x, y }
   const searchInputRef = useRef(null);
@@ -361,7 +361,7 @@ function SectorIndices() {
           } else {
              setData(prevData => prevData.map(item => 
               item.id === index.id 
-                ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '3Y': 0, sparkline: null, aboveSma50: null, rsi14: null }
+                ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '2Y': 0, '3Y': 0, sparkline: null, aboveSma50: null, rsi14: null }
                 : item
             ));
           }
@@ -421,6 +421,7 @@ function SectorIndices() {
     const d3M = new Date(nowIST); d3M.setMonth(nowIST.getMonth() - 3);
     const d6M = new Date(nowIST); d6M.setMonth(nowIST.getMonth() - 6);
     const d1Y = new Date(nowIST); d1Y.setFullYear(nowIST.getFullYear() - 1);
+    const d2Y = new Date(nowIST); d2Y.setFullYear(nowIST.getFullYear() - 2);
     const d3Y = new Date(nowIST); d3Y.setFullYear(nowIST.getFullYear() - 3);
 
     const calcPct = (oldPrice) => {
@@ -443,6 +444,7 @@ function SectorIndices() {
       '3M': calcPct(getPriceAtDate(d3M)),
       '6M': calcPct(getPriceAtDate(d6M)),
       '1Y': calcPct(getPriceAtDate(d1Y)),
+      '2Y': calcPct(getPriceAtDate(d2Y)),
       '3Y': calcPct(getPriceAtDate(d3Y)),
       dist52WHigh
     };
@@ -643,7 +645,7 @@ function SectorIndices() {
     const rows = filteredData;
     if (!rows.length) return;
     const headers = [
-      'Name', 'Category', 'Price', '1D%', '1W%', '1M%', '3M%', '6M%', '1Y%', '3Y%',
+      'Name', 'Category', 'Price', '1D%', '1W%', '1M%', '3M%', '6M%', '1Y%', '2Y%', '3Y%',
       'RS-Ratio', 'RS-Momentum', 'Quadrant', 'RSI14', 'MomentumScore', '1M-RS',
       '%52W-High', 'Signal'
     ];
@@ -656,7 +658,7 @@ function SectorIndices() {
     for (const r of rows) {
       lines.push([
         r.name, r.category, r.price,
-        r['1D'], r['1W'], r['1M'], r['3M'], r['6M'], r['1Y'], r['3Y'],
+        r['1D'], r['1W'], r['1M'], r['3M'], r['6M'], r['1Y'], r['2Y'], r['3Y'],
         r.rrgRatio, r.rrgMomentum, r.rrgQuadrant, r.rsi14, r.momentumScore, r.rs1M,
         r.dist52WHigh, r.marketSignal?.label || ''
       ].map(esc).join(','));
@@ -1031,6 +1033,11 @@ function SectorIndices() {
               <th onClick={() => requestSort('1Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                 1Y {renderSortIndicator('1Y')}
               </th>
+              {!hiddenColumns['2Y'] && (
+                <th onClick={() => requestSort('2Y')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
+                  2Y {renderSortIndicator('2Y')}
+                </th>
+              )}
               <th onClick={() => requestSort('dist52WHigh')} title="% Distance from 52-Week High" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                 % 52W H {renderSortIndicator('dist52WHigh')}
               </th>
@@ -1101,6 +1108,7 @@ function SectorIndices() {
                 <Cell value={row['3M']} />
                 {!hiddenColumns['6M'] && <Cell value={row['6M']} />}
                 <Cell value={row['1Y']} />
+                {!hiddenColumns['2Y'] && <Cell value={row['2Y']} />}
                 <Cell value={row.dist52WHigh} isHeatmapCell={false} />
                 {!hiddenColumns['3Y'] && <Cell value={row['3Y']} />}
                 <td style={{ padding: '0.5rem', textAlign: 'right' }}>

@@ -55,6 +55,7 @@ function calculateHistoricalReturns(series, currentPrice) {
   const d3M = new Date(nowIST); d3M.setMonth(nowIST.getMonth() - 3);
   const d6M = new Date(nowIST); d6M.setMonth(nowIST.getMonth() - 6);
   const d1Y = new Date(nowIST); d1Y.setFullYear(nowIST.getFullYear() - 1);
+  const d2Y = new Date(nowIST); d2Y.setFullYear(nowIST.getFullYear() - 2);
   const d3Y = new Date(nowIST); d3Y.setFullYear(nowIST.getFullYear() - 3);
 
   const calcPct = (oldPrice) => {
@@ -68,6 +69,7 @@ function calculateHistoricalReturns(series, currentPrice) {
     '3M': calcPct(getPriceAtDate(d3M)),
     '6M': calcPct(getPriceAtDate(d6M)),
     '1Y': calcPct(getPriceAtDate(d1Y)),
+    '2Y': calcPct(getPriceAtDate(d2Y)),
     '3Y': calcPct(getPriceAtDate(d3Y)),
   };
 }
@@ -384,7 +386,7 @@ export default function SectorDetail() {
         return {
           symbol: c.symbol, name: c.name, key: c.key, token: c.token,
           price, '1D': change1D,
-          '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '3Y': null,
+          '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null,
           rsi14: null, sma20: null, sma200: null, aboveSma20: null, aboveSma200: null,
           weeklyHighs: null, histLoaded: false,
         };
@@ -708,7 +710,7 @@ export default function SectorDetail() {
             <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
               <th style={{ textAlign: 'left', padding: '0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Name</th>
               <th style={{ textAlign: 'right', padding: '0.5rem', color: 'var(--text-secondary)' }}>Price</th>
-              {['1D','1W','1M','3M','6M','1Y','3Y'].map(k => (
+              {['1D','1W','1M','3M','6M','1Y','2Y','3Y'].map(k => (
                 <SortTh key={k} label={k} sortKey={k} sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'right' }} />
               ))}
               <SortTh label="RSI" sortKey="rsi14" sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'right' }} />
@@ -739,6 +741,7 @@ export default function SectorDetail() {
                 <Cell value={s['3M']} />
                 <Cell value={s['6M']} />
                 <Cell value={s['1Y']} />
+                <Cell value={s['2Y']} />
                 <Cell value={s['3Y']} />
                 <td style={{ padding: '0.4rem', textAlign: 'right', color: s.rsi14 >= 70 ? '#ef4444' : s.rsi14 <= 30 ? '#22c55e' : 'var(--text-primary)' }}>
                   {s.rsi14 != null ? s.rsi14 : '–'}

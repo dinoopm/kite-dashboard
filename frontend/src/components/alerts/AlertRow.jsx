@@ -184,11 +184,16 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
             {actGlyph}{tp.action}
           </span>
 
-          {stock.isBreakout && (
-            <div style={{ fontSize: '0.55rem', fontWeight: 800, color: '#fcd34d', background: 'rgba(252,211,77,0.15)', padding: '0.1rem 0.4rem', borderRadius: '3px', marginTop: '0.2rem', letterSpacing: '0.5px' }} title="Price has crossed the 20-day resistance ceiling.">
-              🚀 BREAKOUT
-            </div>
-          )}
+          {stock.isBreakout && (() => {
+            const SHORT = { '3y': '3Y', '2y': '2Y', '1y': '1Y', '6m': '6M', '3m': '3M', '1m': '1M' }
+            const winKey = stock.activeBreakoutWindow?.key
+            const winShort = SHORT[winKey] || ''
+            return (
+              <div style={{ fontSize: '0.55rem', fontWeight: 800, color: '#fcd34d', background: 'rgba(252,211,77,0.15)', padding: '0.1rem 0.4rem', borderRadius: '3px', marginTop: '0.2rem', letterSpacing: '0.5px' }} title={`Price broke through the ${stock.activeBreakoutWindow?.label || '20-day'} resistance ceiling.`}>
+                🚀 {winShort ? `${winShort} ` : ''}BREAKOUT
+              </div>
+            )
+          })()}
 
           {(tp.tgt || tp.sl) && (
             <div style={{ display: 'flex', gap: '0.6rem', fontSize: '0.55rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
@@ -237,43 +242,155 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
         </div>
       </div>
 
-      {/* 20-Day Range Tracker */}
-      <div style={{ width: '100%', padding: '0.4rem 1.25rem', background: 'rgba(0,0,0,0.15)', borderTop: '1px solid rgba(255,255,255,0.02)', display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.65rem', color: 'var(--text-secondary)', boxSizing: 'border-box' }} title="20-day Donchian price range (prior 20 days, excluding today)">
+      {/* Multi-Window Breakout Ladder */}
+      <div style={{ width: '100%', padding: '0.35rem 1.25rem 0.45rem', background: 'rgba(0,0,0,0.15)', borderTop: '1px solid rgba(255,255,255,0.02)', boxSizing: 'border-box' }}>
         {(() => {
-          if (!stock.support || !stock.resistance) return <span style={{ paddingLeft: '1rem' }}>AWAITING MAP DATA</span>
-          const span = stock.resistance - stock.support
-          if (span <= 0) return null
-          const pPos = Math.max(0, Math.min(100, ((stock.price - stock.support) / span) * 100))
-          const distToSupport    = ((stock.support    - stock.price) / stock.price) * 100
-          const distToResistance = ((stock.resistance - stock.price) / stock.price) * 100
+          const windows = stock.windowLevels
+          const SHORT = { '3y': '3Y', '2y': '2Y', '1y': '1Y', '6m': '6M', '3m': '3M', '1m': '1M' }
+
+          // Fallback: no windowLevels — show old 20-day bar
+          if (!windows || windows.length === 0) {
+            if (!stock.support || !stock.resistance) return <span style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', paddingLeft: '1rem' }}>AWAITING MAP DATA</span>
+            const span = stock.resistance - stock.support
+            if (span <= 0) return null
+            const pPos = Math.max(0, Math.min(100, ((stock.price - stock.support) / span) * 100))
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
+                <span className="mono" style={{ color: '#f59e0b', fontWeight: 600, whiteSpace: 'nowrap' }}>S: ₹{stock.support.toFixed(1)}</span>
+                <div style={{ flex: 1, height: '4px', background: '#1e293b', borderRadius: '2px', position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: 0, width: `${pPos}%`, height: '100%', background: 'rgba(255,255,255,0.1)', borderRadius: '2px 0 0 2px' }} />
+                  <div style={{ position: 'absolute', left: `${pPos}%`, top: '-4px', bottom: '-4px', width: '3px', background: '#f8fafc', borderRadius: '1px', transform: 'translateX(-50%)', boxShadow: '0 0 4px rgba(255,255,255,0.5)', zIndex: 5 }} />
+                </div>
+                <span className="mono" style={{ color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap' }}>R: ₹{stock.resistance.toFixed(1)}</span>
+              </div>
+            )
+          }
+
+          // Find overall bounds: 3Y high (windows[0]) down to lowest low
+          const overallHigh = windows[0]?.high
+          const rawLow = Math.min(...windows.map(w => w.low).filter(v => v != null && v > 0))
+          const overallLow = isFinite(rawLow) ? rawLow : stock.support
+          if (!overallHigh || !overallLow || overallHigh <= overallLow) return null
+
+          const span = overallHigh - overallLow
+          const toPos = (val) => Math.max(0, Math.min(100, ((val - overallLow) / span) * 100))
+          const pricePos = toPos(stock.price)
+
+          const broken = windows.filter(w => w.isBreakingOut).map(w => SHORT[w.key]).join(' ')
+
+          // Longest broken window (windows are ordered 3y → 1m).
+          const longestBroken = windows.find(w => w.isBreakingOut) ?? null
+          // Shortest unbroken window above price = nearest overhead resistance.
+          const nextOverhead = [...windows].reverse().find(w => !w.isBreakingOut && w.high) ?? null
+
+          // Group ticks into position-clusters so labels never overlap.
+          // Within a cluster the LONGEST tenor wins the label slot — by definition
+          // the longest cleared/approached implies the shorter ones too.
+          const TENOR_ORDER = ['3y', '2y', '1y', '6m', '3m', '1m'] // longest → shortest
+          const CLUSTER_GAP = 7 // % of bar width — labels closer than this collapse
+          const sortedTicks = windows
+            .filter(w => w.high != null)
+            .map(w => ({ ...w, _pos: toPos(w.high) }))
+            .sort((a, b) => a._pos - b._pos)
+          const clusters = []
+          for (const t of sortedTicks) {
+            const last = clusters[clusters.length - 1]
+            if (last && t._pos - last.maxPos <= CLUSTER_GAP) {
+              last.windows.push(t)
+              last.maxPos = t._pos
+            } else {
+              clusters.push({ windows: [t], minPos: t._pos, maxPos: t._pos })
+            }
+          }
+          const longestInCluster = (c) => c.windows
+            .slice()
+            .sort((a, b) => TENOR_ORDER.indexOf(a.key) - TENOR_ORDER.indexOf(b.key))[0]
 
           return (
-            <>
-              <span
-                className="mono"
-                style={{ color: '#f59e0b', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}
-                title={`${distToSupport.toFixed(2)}% below current price — support floor`}
-              >
-                S: ₹{stock.support.toFixed(1)}
-                <span style={{ color: '#94a3b8', fontWeight: 500, fontSize: '0.6rem' }}>
-                  ({distToSupport.toFixed(2)}%)
-                </span>
-              </span>
-              <div style={{ flex: 1, height: '4px', background: '#1e293b', borderRadius: '2px', position: 'relative' }}>
-                <div style={{ position: 'absolute', left: 0, width: `${pPos}%`, height: '100%', background: 'rgba(255,255,255,0.1)', borderRadius: '2px 0 0 2px' }}></div>
-                <div style={{ position: 'absolute', left: `${pPos}%`, top: '-4px', bottom: '-4px', width: '3px', background: '#f8fafc', borderRadius: '1px', transform: 'translateX(-50%)', boxShadow: '0 0 4px rgba(255,255,255,0.5)', zIndex: 5 }}></div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              {/* Bar row */}
+              <div style={{ position: 'relative', height: '16px' }}>
+                {/* Track */}
+                <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: '5px', background: '#1e293b', borderRadius: '3px', transform: 'translateY(-50%)' }} />
+                {/* Filled region behind price */}
+                <div style={{ position: 'absolute', top: '50%', left: 0, width: `${pricePos}%`, height: '5px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px 0 0 3px', transform: 'translateY(-50%)' }} />
+                {/* Window high ticks */}
+                {windows.map(w => {
+                  if (!w.high) return null
+                  const pos = toPos(w.high)
+                  const isApproaching = !w.isBreakingOut && w.distancePct !== null && w.distancePct > 0 && w.distancePct <= 3
+                  const tickColor = w.isBreakingOut ? '#10b981' : isApproaching ? '#fcd34d' : '#64748b'
+                  const glow = w.isBreakingOut ? '0 0 4px rgba(16,185,129,0.6)' : isApproaching ? '0 0 4px rgba(252,211,77,0.5)' : 'none'
+                  return (
+                    <div
+                      key={w.key}
+                      title={`${SHORT[w.key]} high: ₹${w.high.toFixed(1)} — ${w.isBreakingOut ? 'broken ✓' : w.distancePct !== null ? `+${w.distancePct.toFixed(1)}% away` : ''}`}
+                      style={{ position: 'absolute', left: `${pos}%`, top: 0, bottom: 0, width: '3px', background: tickColor, transform: 'translateX(-50%)', zIndex: 3, boxShadow: glow, borderRadius: '1px' }}
+                    />
+                  )
+                })}
+                {/* Price marker */}
+                <div style={{ position: 'absolute', left: `${pricePos}%`, top: '-2px', bottom: '-2px', width: '3px', background: '#f8fafc', transform: 'translateX(-50%)', boxShadow: '0 0 6px rgba(255,255,255,0.7)', zIndex: 5, borderRadius: '1px' }} />
               </div>
-              <span
-                className="mono"
-                style={{ color: '#ef4444', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0, display: 'flex', alignItems: 'baseline', gap: '0.35rem' }}
-                title={`${distToResistance.toFixed(2)}% above current price — resistance ceiling`}
-              >
-                R: ₹{stock.resistance.toFixed(1)}
-                <span style={{ color: '#94a3b8', fontWeight: 500, fontSize: '0.6rem' }}>
-                  (+{distToResistance.toFixed(2)}%)
+
+              {/* Cluster labels — one label per cluster at its centroid */}
+              <div style={{ position: 'relative', height: '12px' }}>
+                {clusters.map((c, i) => {
+                  const head = longestInCluster(c)
+                  const centroid = (c.minPos + c.maxPos) / 2
+                  const isApproaching = !head.isBreakingOut && head.distancePct !== null && head.distancePct > 0 && head.distancePct <= 3
+                  const labelColor = head.isBreakingOut ? '#10b981' : isApproaching ? '#fcd34d' : '#94a3b8'
+                  // If a cluster covers >1 tenor, show the longest with a "+" suffix to hint at more
+                  const suffix = c.windows.length > 1 ? '·' : ''
+                  return (
+                    <span
+                      key={`cluster-${i}-${head.key}`}
+                      title={c.windows.map(w => `${SHORT[w.key]} ₹${w.high.toFixed(1)}${w.isBreakingOut ? ' ✓' : w.distancePct !== null ? ` (+${w.distancePct.toFixed(1)}%)` : ''}`).join('  ·  ')}
+                      style={{
+                        position: 'absolute',
+                        left: `${centroid}%`,
+                        top: 0,
+                        transform: 'translateX(-50%)',
+                        fontSize: '0.62rem',
+                        color: labelColor,
+                        fontWeight: head.isBreakingOut ? 800 : isApproaching ? 700 : 600,
+                        whiteSpace: 'nowrap',
+                        lineHeight: 1,
+                        textShadow: '0 0 3px rgba(0,0,0,0.9)',
+                        letterSpacing: '0.3px'
+                      }}
+                    >
+                      {SHORT[head.key]}{suffix}
+                    </span>
+                  )
+                })}
+              </div>
+
+              {/* Floor · status · ceiling */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '0.62rem', gap: '0.6rem' }}>
+                <span className="mono" style={{ color: '#94a3b8' }} title="3-year low (range floor)">₹{overallLow.toFixed(0)}</span>
+
+                <span style={{ display: 'flex', gap: '0.7rem', alignItems: 'baseline' }}>
+                  {longestBroken && (
+                    <span className="mono" style={{ color: '#10b981', fontWeight: 700, letterSpacing: '0.3px' }} title={`Price has cleared the ${longestBroken.label} high at ₹${longestBroken.high.toFixed(1)}. All shorter windows are also broken.`}>
+                      ✓ {SHORT[longestBroken.key]} cleared
+                    </span>
+                  )}
+                  {nextOverhead && (
+                    <span className="mono" style={{ color: '#fcd34d', fontWeight: 600, letterSpacing: '0.3px' }} title={`Next overhead: ${nextOverhead.label} high at ₹${nextOverhead.high.toFixed(1)}, ${nextOverhead.distancePct.toFixed(1)}% away`}>
+                      ↑ {SHORT[nextOverhead.key]} +{nextOverhead.distancePct.toFixed(1)}%
+                    </span>
+                  )}
+                  {!longestBroken && !nextOverhead && (
+                    <span style={{ color: '#94a3b8' }}>—</span>
+                  )}
                 </span>
-              </span>
-            </>
+
+                <span className="mono" title={`3-year high — ₹${overallHigh.toFixed(1)}`} style={{ color: windows[0].isBreakingOut ? '#10b981' : '#cbd5e1', fontWeight: 600 }}>
+                  3Y ₹{overallHigh.toFixed(0)}
+                </span>
+              </div>
+            </div>
           )
         })()}
       </div>
