@@ -172,8 +172,6 @@ function Alerts() {
     { key: 'all', label: 'ALL', color: '#cbd5e1' },
     { key: 'bullish', label: '▲ BULL', color: '#10b981' },
     { key: 'bearish', label: '▼ BEAR', color: '#ef4444' },
-    { key: 'hurting', label: '🔥 HURTING', color: '#ef4444' },
-    { key: 'runners', label: '🏆 RUNNERS', color: '#10b981' },
   ]
 
   return (
@@ -297,19 +295,6 @@ function Alerts() {
               title="Holdings up ≥25% with stretched RSI — book partial profits"
             >
               ✂ TRIM {summary.flagCounts.trim}
-            </button>
-          )}
-          {summary.flagCounts?.avoid > 0 && (
-            <button
-              onClick={() => setFilter('bearish')}
-              style={{
-                padding: '0.2rem 0.5rem', border: '1px solid #ef4444',
-                color: '#ef4444', background: 'rgba(239,68,68,0.1)',
-                borderRadius: '4px', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.65rem', fontWeight: 700
-              }}
-              title="Holdings flagged AVOID — broken technicals or wild swings"
-            >
-              ▼ AVOID {summary.flagCounts.avoid}
             </button>
           )}
           {summary.sectorConcentration?.length > 0 && summary.sectorConcentration.map(sc => (
