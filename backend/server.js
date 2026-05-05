@@ -2057,6 +2057,18 @@ app.use((err, req, res, next) => {
   next();
 });
 
+// ─── AI Chat (Text-to-SQL) ────────────────────────────────────
+const { runSqlAgent } = require('./ai/sqlAgent');
+
+app.post('/api/chat', async (req, res) => {
+  const { question } = req.body;
+  if (!question || typeof question !== 'string' || !question.trim()) {
+    return res.status(400).json({ error: 'question is required' });
+  }
+  const result = await runSqlAgent(question.trim());
+  res.json(result);
+});
+
 // Serve frontend in production (Railway)
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
 

@@ -50,16 +50,32 @@ function Navbar({ onDisconnect }) {
       >
         Indices Performance
       </Link>
-      <Link 
-        to="/vix" 
-        style={{ 
-          textDecoration: 'none', 
+      <Link
+        to="/vix"
+        style={{
+          textDecoration: 'none',
           color: location.pathname === '/vix' ? 'white' : 'var(--text-secondary)',
           fontWeight: location.pathname === '/vix' ? 'bold' : 'normal',
           transition: 'color 0.2s'
         }}
       >
         VIX Index
+      </Link>
+      <Link
+        to="/chat"
+        style={{
+          textDecoration: 'none',
+          color: location.pathname === '/chat' ? 'white' : 'var(--accent)',
+          fontWeight: location.pathname === '/chat' ? 'bold' : '600',
+          transition: 'color 0.2s',
+          background: location.pathname === '/chat' ? 'rgba(56, 189, 248, 0.2)' : 'rgba(56, 189, 248, 0.08)',
+          border: '1px solid rgba(56, 189, 248, 0.2)',
+          borderRadius: '8px',
+          padding: '0.3rem 0.8rem',
+          fontSize: '0.85rem',
+        }}
+      >
+        Ask AI
       </Link>
 
       <div style={{ flex: 1 }}></div>
