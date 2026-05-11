@@ -1430,12 +1430,16 @@ app.get('/api/alerts', async (req, res) => {
 
     const totalInvested = alerts.reduce((s, a) => s + ((a.avgPrice || 0) * (a.quantity || 0)), 0);
     const totalPnl      = alerts.reduce((s, a) => s + (a.pnl || 0), 0);
+    // todayPnlRupee and totalHoldings must cover ALL holdings, not just alerted ones.
+    // computeStockAlert returns null for stocks with no signals, so using alerts.length
+    // or summing over alerts silently drops those holdings.
+    const todayPnlRupee = +holdings.reduce((s, h) => s + ((h.day_change ?? 0) * (h.quantity ?? 0)), 0).toFixed(2);
     const summary = {
-      todayPnlRupee: +alerts.reduce((s, a) => s + (a.dayChangeRupee || 0), 0).toFixed(2),
+      todayPnlRupee,
       totalPnlRupee: +totalPnl.toFixed(2),
       totalPnlPct:   totalInvested > 0 ? +((totalPnl / totalInvested) * 100).toFixed(2) : null,
       totalInvested: +totalInvested.toFixed(2),
-      totalHoldings: alerts.length,
+      totalHoldings: holdings.length,
       flagCounts: {
         avoid: alerts.filter(a => a.tradePlan?.action === 'AVOID').length,
         trim:  alerts.filter(a => a.tradePlan?.action === 'TRIM').length,
