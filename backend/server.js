@@ -1443,10 +1443,15 @@ app.get('/api/alerts', async (req, res) => {
     }
     const alerts = alertsBatched.filter(Boolean);
 
+    // todayPnlRupee must cover ALL holdings, not just those that triggered a signal.
+    // computeStockAlert returns null when a stock has no technical flags, so summing
+    // only over `alerts` silently drops those holdings and diverges from Portfolio's total.
+    const todayPnlRupee = +holdings.reduce((s, h) => s + ((h.day_change ?? 0) * (h.quantity ?? 0)), 0).toFixed(2);
+
     const totalInvested = alerts.reduce((s, a) => s + ((a.avgPrice || 0) * (a.quantity || 0)), 0);
     const totalPnl      = alerts.reduce((s, a) => s + (a.pnl || 0), 0);
     const summary = {
-      todayPnlRupee: +alerts.reduce((s, a) => s + (a.dayChangeRupee || 0), 0).toFixed(2),
+      todayPnlRupee,
       totalPnlRupee: +totalPnl.toFixed(2),
       totalPnlPct:   totalInvested > 0 ? +((totalPnl / totalInvested) * 100).toFixed(2) : null,
       totalInvested: +totalInvested.toFixed(2),
