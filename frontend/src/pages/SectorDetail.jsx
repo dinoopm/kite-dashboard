@@ -227,7 +227,19 @@ export default function SectorDetail() {
   const [rrg, setRrg] = useState(null);
   const [rrgLoading, setRrgLoading] = useState(true);
   const [rrgBenchmark] = useState(sectorKey);
-  const [rrgTailLength, setRrgTailLength] = useState(6);
+  const [rrgPeriod, setRrgPeriodRaw] = useState(() => {
+    try { return localStorage.getItem('rrgPeriod') === 'daily' ? 'daily' : 'weekly'; }
+    catch { return 'weekly'; }
+  });
+  const [rrgTailLength, setRrgTailLength] = useState(() => {
+    try { return localStorage.getItem('rrgPeriod') === 'daily' ? 10 : 6; }
+    catch { return 6; }
+  });
+  const setRrgPeriod = useCallback((next) => {
+    setRrgPeriodRaw(next);
+    try { localStorage.setItem('rrgPeriod', next); } catch { /* ignore */ }
+    setRrgTailLength(next === 'daily' ? 10 : 6);
+  }, []);
   const [rrgHidden, setRrgHidden] = useState({});
   const [rrgAnimating, setRrgAnimating] = useState(false);
   const [rrgAnimFrame, setRrgAnimFrame] = useState(0);
@@ -446,7 +458,7 @@ export default function SectorDetail() {
     if (constituents.length === 0) return false;
     try {
       const securities = constituents.filter(c => c.key).map(c => c.key).join(',');
-      const url = `${API}/api/rrg?benchmark=${encodeURIComponent(sectorKey)}&securities=${encodeURIComponent(securities)}`;
+      const url = `${API}/api/rrg?benchmark=${encodeURIComponent(sectorKey)}&securities=${encodeURIComponent(securities)}&period=${rrgPeriod}`;
       const res = await fetchWithAbort(url, { signal });
       const data = await res.json();
       if (data?.sectors?.length > 0) {
@@ -459,7 +471,7 @@ export default function SectorDetail() {
       console.warn('RRG fetch failed:', e.message);
     }
     return false;
-  }, [sectorKey, constituents]);
+  }, [sectorKey, constituents, rrgPeriod]);
 
   useEffect(() => {
     if (constituents.length === 0) return;
@@ -1197,6 +1209,8 @@ export default function SectorDetail() {
             rrgLoading={rrgLoading}
             rrgBenchmark={rrgBenchmark}
             setRrgBenchmark={() => {}}
+            rrgPeriod={rrgPeriod}
+            setRrgPeriod={setRrgPeriod}
             rrgTailLength={rrgTailLength}
             setRrgTailLength={setRrgTailLength}
             rrgHidden={rrgHidden}

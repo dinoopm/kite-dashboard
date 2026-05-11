@@ -43,7 +43,7 @@ function Alerts() {
     const fetchAlerts = async () => {
       try {
         setError(null)
-        const res = await fetchWithAbort('/api/alerts', { signal: controller.signal })
+        const res = await fetchWithAbort('/api/alerts', { signal: controller.signal, timeoutMs: 120_000 })
         if (!res.ok) throw new Error('Failed to fetch alerts')
         const data = await res.json()
         // Backend now returns { alerts, summary }; tolerate the legacy array shape

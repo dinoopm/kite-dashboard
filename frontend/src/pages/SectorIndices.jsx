@@ -27,7 +27,7 @@ const RSI_MULT_SEVERE_OVERSOLD = 1.15;
 
 // Refresh intervals (ms)
 const QUOTES_REFRESH_MS = 60_000;   // Live prices / 1D change
-const RRG_REFRESH_MS = 5 * 60_000;  // RRG is weekly data, 5 min is ample
+const RRG_REFRESH_MS = 5 * 60_000;  // 5 min is ample for both weekly and daily mode
 const RRG_POLL_MS = 10_000;         // Warm-up poll while cache hydrates
 const RRG_MAX_WARMUP_POLLS = 18;    // Give up after ~3 minutes
 
@@ -106,7 +106,19 @@ function SectorIndices() {
   const [rrg, setRrg] = useState(null);
   const [rrgBenchmark, setRrgBenchmark] = useState("NSE:NIFTY 50");
   const [rrgLoading, setRrgLoading] = useState(false);
-  const [rrgTailLength, setRrgTailLength] = useState(7);
+  const [rrgPeriod, setRrgPeriodRaw] = useState(() => {
+    try { return localStorage.getItem('rrgPeriod') === 'daily' ? 'daily' : 'weekly'; }
+    catch { return 'weekly'; }
+  });
+  const [rrgTailLength, setRrgTailLength] = useState(() => {
+    try { return localStorage.getItem('rrgPeriod') === 'daily' ? 10 : 7; }
+    catch { return 7; }
+  });
+  const setRrgPeriod = useCallback((next) => {
+    setRrgPeriodRaw(next);
+    try { localStorage.setItem('rrgPeriod', next); } catch { /* ignore */ }
+    setRrgTailLength(next === 'daily' ? 10 : 7);
+  }, []);
   const [activeSignalModal, setActiveSignalModal] = useState(null);
   const [rrgHidden, setRrgHidden] = useState({});
   const [rrgAnimating, setRrgAnimating] = useState(false);
@@ -236,7 +248,7 @@ function SectorIndices() {
   const fetchRRGData = useCallback(async (signal) => {
     if (!mountedRef.current) return 0;
     try {
-      const res = await fetchWithAbort(`/api/rrg?benchmark=${encodeURIComponent(rrgBenchmark)}`, { signal });
+      const res = await fetchWithAbort(`/api/rrg?benchmark=${encodeURIComponent(rrgBenchmark)}&period=${rrgPeriod}`, { signal });
       const data = await res.json();
       if (mountedRef.current && data.sectors && data.sectors.length > 0) {
         setRrg(data);
@@ -249,7 +261,7 @@ function SectorIndices() {
       console.error('RRG fetch error:', err);
     }
     return 0;
-  }, [rrgBenchmark]);
+  }, [rrgBenchmark, rrgPeriod]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -292,16 +304,16 @@ function SectorIndices() {
     };
   }, [fetchRRGData]); // Re-armed when benchmark changes (fetchRRGData identity flips).
 
-  // Re-fetch RRG and reset scrubber when the user changes the benchmark directly.
+  // Re-fetch RRG and reset scrubber when the user changes the benchmark or period.
   useEffect(() => {
     if (rrg) {
       setRrgLoading(true);
-      setRrgScrubEnd(null);  // Series length may differ between benchmarks — reset to latest.
+      setRrgScrubEnd(null);  // Series length may differ — reset to latest.
       setRrgAnimFrame(0);
       fetchRRGData(pageAbortRef.current?.signal);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rrgBenchmark]);
+  }, [rrgBenchmark, rrgPeriod]);
 
   const loadHistoricalDataProgressively = async (indicesList) => {
     const signal = pageAbortRef.current?.signal;
@@ -929,6 +941,8 @@ function SectorIndices() {
         rrgLoading={rrgLoading}
         rrgBenchmark={rrgBenchmark}
         setRrgBenchmark={setRrgBenchmark}
+        rrgPeriod={rrgPeriod}
+        setRrgPeriod={setRrgPeriod}
         rrgTailLength={rrgTailLength}
         setRrgTailLength={setRrgTailLength}
         rrgHidden={rrgHidden}

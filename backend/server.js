@@ -1398,8 +1398,14 @@ app.get('/api/alerts', async (req, res) => {
     const holdingsResult = await fetchWithCache("get_holdings", "holdings", {});
     let holdings = [];
     if (holdingsResult?.content?.[0]?.text) {
-      const parsed = JSON.parse(holdingsResult.content[0].text);
-      holdings = parsed.data || parsed;
+      try {
+        const parsed = JSON.parse(holdingsResult.content[0].text);
+        holdings = parsed.data || parsed;
+      } catch {
+        // MCP returned an error string (e.g. "Please log in first") — treat as empty
+        console.warn("⚠️ get_holdings returned non-JSON:", holdingsResult.content[0].text.slice(0, 80));
+        return res.status(503).json({ error: "Kite session expired — please log in again.", needsLogin: true });
+      }
     }
 
     // Trigger cache warmup safely if needed
@@ -1412,21 +1418,30 @@ app.get('/api/alerts', async (req, res) => {
       return res.json([]);
     }
 
-    const alerts = [];
-
-    for (const h of holdings) {
-      const token = h.instrument_token;
-      const symbol = h.tradingsymbol;
-      const lastPrice = h.last_price;
-
-      // Best-effort refresh of today's daily candle so volSurge / dayChange
-      // reflect live intraday state rather than yesterday's EOD bar.
-      await refreshTodayCandle(token);
-
-      const candles = historyCache[token];
-      const alert = await computeStockAlert({ symbol, token, lastPrice, previousClose: h.close_price, candles, holding: h });
-      if (alert) alerts.push(alert);
+    // Process holdings in bounded-concurrency batches. Each holding triggers
+    // a refreshTodayCandle (Kite MCP round-trip) plus a computeStockAlert
+    // (Yahoo sector lookup on first call). Serial loops scaled at ~3-4s per
+    // holding and tripped the 60s frontend timeout on accounts with 15+ holdings.
+    const CONCURRENCY = 5;
+    const alertsBatched = [];
+    for (let i = 0; i < holdings.length; i += CONCURRENCY) {
+      const batch = holdings.slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.all(batch.map(async (h) => {
+        const token = h.instrument_token;
+        await refreshTodayCandle(token);
+        const candles = historyCache[token];
+        return computeStockAlert({
+          symbol: h.tradingsymbol,
+          token,
+          lastPrice: h.last_price,
+          previousClose: h.close_price,
+          candles,
+          holding: h,
+        });
+      }));
+      alertsBatched.push(...batchResults);
     }
+    const alerts = alertsBatched.filter(Boolean);
 
     const totalInvested = alerts.reduce((s, a) => s + ((a.avgPrice || 0) * (a.quantity || 0)), 0);
     const totalPnl      = alerts.reduce((s, a) => s + (a.pnl || 0), 0);
@@ -1596,6 +1611,21 @@ function resampleToWeekly(dailyCandles) {
   return weeks;
 }
 
+// Project candles into the shape the RRG math expects ({key, close, date}).
+// Weekly mode resamples to Friday closes; daily mode passes candles through
+// keyed by their YYYY-MM-DD date so sector and benchmark align day-by-day.
+function prepareRrgSeries(candles, period) {
+  if (period === 'daily') {
+    return candles.map(c => {
+      const key = typeof c.date === 'string'
+        ? c.date.split('T')[0]
+        : new Date(c.date).toISOString().split('T')[0];
+      return { key, close: c.close, date: c.date };
+    });
+  }
+  return resampleToWeekly(candles);
+}
+
 // Helper: compute EMA
 function computeEMA(values, period) {
   if (values.length === 0) return [];
@@ -1671,6 +1701,7 @@ async function prewarmRrgHistoricalCache() {
 app.get('/api/rrg', async (req, res) => {
   try {
     const benchmarkKey = req.query.benchmark || "NSE:NIFTY 50";
+    const period = req.query.period === 'daily' ? 'daily' : 'weekly';
 
     // Optional: compute RRG for a custom set of securities instead of RRG_SECTOR_KEYS
     let keysToCompute = RRG_SECTOR_KEYS;
@@ -1679,7 +1710,7 @@ app.get('/api/rrg', async (req, res) => {
       keysToCompute = raw.startsWith('[') ? JSON.parse(raw) : raw.split(',').map(s => s.trim());
     }
 
-    console.log(`📊 RRG requested. Benchmark: ${benchmarkKey}. Securities: ${keysToCompute.length}. Token cache size: ${Object.keys(rrgTokenCache).length}, HistFull cache size: ${Object.keys(historicalFullCache).length}`);
+    console.log(`📊 RRG requested. Benchmark: ${benchmarkKey}. Period: ${period}. Securities: ${keysToCompute.length}. Token cache size: ${Object.keys(rrgTokenCache).length}, HistFull cache size: ${Object.keys(historicalFullCache).length}`);
     const progress = {
       loaded: historicalFullWarming.loaded,
       total: historicalFullWarming.total || (keysToCompute.length + 1),
@@ -1741,12 +1772,12 @@ app.get('/api/rrg', async (req, res) => {
     }
 
     console.log(`  ✅ Benchmark data: ${benchmarkCached.data.length} daily candles`);
-    const benchmarkWeekly = resampleToWeekly(benchmarkCached.data);
-    console.log(`  ✅ Benchmark weekly: ${benchmarkWeekly.length} weeks`);
+    const benchmarkPoints = prepareRrgSeries(benchmarkCached.data, period);
+    console.log(`  ✅ Benchmark ${period}: ${benchmarkPoints.length} points`);
 
     // Build a date→close map for the benchmark
     const benchmarkMap = {};
-    for (const w of benchmarkWeekly) {
+    for (const w of benchmarkPoints) {
       benchmarkMap[w.key] = w.close;
     }
 
@@ -1764,27 +1795,39 @@ app.get('/api/rrg', async (req, res) => {
         continue;
       }
 
-      const sectorWeekly = resampleToWeekly(sectorCached.data);
+      const sectorPoints = prepareRrgSeries(sectorCached.data, period);
 
-      // Align sector and benchmark by week key
+      // Align sector and benchmark by date key (week-Friday for weekly, day for daily)
       const aligned = [];
-      for (const sw of sectorWeekly) {
+      for (const sw of sectorPoints) {
         const bClose = benchmarkMap[sw.key];
         if (bClose && bClose > 0) {
           aligned.push({ weekKey: sw.key, sectorClose: sw.close, benchClose: bClose });
         }
       }
 
-      if (aligned.length < 26) {
-        skipped.push(`${sectorKey}: only ${aligned.length} aligned weeks (need 26 for stable RS math; newly-listed indices are deferred until enough history accrues)`);
-        continue;
+      // Daily mode uses tighter windows (5/20/10) to cut signal lag at the cost
+      // of more whip in choppy markets. Weekly mode keeps the classic JdK 10/52/26
+      // (with 10/26/13 fallback when <52 weeks of history exist).
+      let emaWindow, ratioSmaWindow, momSmaWindow, minHistory, outputCap;
+      if (period === 'daily') {
+        emaWindow = 5;
+        ratioSmaWindow = 20;
+        momSmaWindow = 10;
+        minHistory = 20;
+        outputCap = 90;
+      } else {
+        emaWindow = 10;
+        ratioSmaWindow = aligned.length >= 52 ? 52 : 26;
+        momSmaWindow = aligned.length >= 52 ? 26 : 13;
+        minHistory = 26;
+        outputCap = 52;
       }
 
-      // Fixed smoothing windows so every sector is plotted on a comparable scale.
-      // Full JdK uses 10/52/26 but we shorten the ratio window to 26 when <52 weeks exist.
-      const emaWindow = 10;
-      const ratioSmaWindow = aligned.length >= 52 ? 52 : 26;
-      const momSmaWindow = aligned.length >= 52 ? 26 : 13;
+      if (aligned.length < minHistory) {
+        skipped.push(`${sectorKey}: only ${aligned.length} aligned ${period === 'daily' ? 'days' : 'weeks'} (need ${minHistory}; newly-listed indices are deferred until enough history accrues)`);
+        continue;
+      }
 
       // Raw RS = (sector / benchmark) * 100
       const rawRS = aligned.map(a => (a.sectorClose / a.benchClose) * 100);
@@ -1807,9 +1850,9 @@ app.get('/api/rrg', async (req, res) => {
         return (v / rsRatioSMA[i]) * 100;
       });
 
-      // Build the output series — last 52 valid weekly data points
+      // Build the output series — last `outputCap` valid points
       const series = [];
-      for (let i = aligned.length - 1; i >= 0 && series.length < 52; i--) {
+      for (let i = aligned.length - 1; i >= 0 && series.length < outputCap; i--) {
         if (rsRatio[i] !== null && rsRatio[i] !== 0 && rsMomentum[i] !== null) {
           series.unshift({
             date: aligned[i].weekKey,
@@ -1838,13 +1881,14 @@ app.get('/api/rrg', async (req, res) => {
       }
     }
 
-    console.log(`  ✅ RRG computed against ${benchmarkKey}: ${sectors.length} sectors, ${skipped.length} skipped`);
+    console.log(`  ✅ RRG computed against ${benchmarkKey} (${period}): ${sectors.length} sectors, ${skipped.length} skipped`);
     if (skipped.length > 0) console.log(`  ⚠️ Skipped: ${skipped.join(' | ')}`);
 
     const ready = sectors.length >= Math.min(keysToCompute.length, Math.ceil(keysToCompute.length * 0.7));
     res.json({
       ready,
       benchmark: benchmarkKey,
+      period,
       generatedAt: new Date().toISOString(),
       sectors,
       progress,

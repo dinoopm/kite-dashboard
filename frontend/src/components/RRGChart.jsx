@@ -42,11 +42,15 @@ const generateSmoothPath = (points) => {
 export default function RRGChart({
   rrg, rrgLoading, rrgTailLength, setRrgTailLength,
   rrgBenchmark, setRrgBenchmark,
+  rrgPeriod = 'weekly', setRrgPeriod,
   rrgHidden, setRrgHidden, rrgAnimating, setRrgAnimating,
   rrgAnimFrame, setRrgAnimFrame, rrgScrubEnd, setRrgScrubEnd,
   rrgAnimRef, rrgTooltip, setRrgTooltip, rrgSvgRef, rrgContainerRef, navigate,
   benchmarkReadOnly = false,
 }) {
+  const isDaily = rrgPeriod === 'daily';
+  const periodLabel = isDaily ? 'days' : 'weeks';
+  const periodLabelShort = isDaily ? 'D' : 'W';
   const CHART_W = 1000, CHART_H = 650;
   const PAD = { top: 40, right: 60, bottom: 65, left: 75 };
   const plotW = CHART_W - PAD.left - PAD.right;
@@ -113,7 +117,7 @@ export default function RRGChart({
   const scaleX = (v) => PAD.left + ((v - axisBounds.minX) / (axisBounds.maxX - axisBounds.minX)) * plotW;
   const scaleY = (v) => PAD.top + plotH - ((v - axisBounds.minY) / (axisBounds.maxY - axisBounds.minY)) * plotH;
 
-  const totalWeeks = rrg ? Math.max(...rrg.sectors.map(s => s.series.length), 0) : 0;
+  const totalPoints = rrg ? Math.max(...rrg.sectors.map(s => s.series.length), 0) : 0;
 
   const startAnimation = useCallback(() => { setRrgAnimFrame(0); setRrgAnimating(true); }, [setRrgAnimFrame, setRrgAnimating]);
   const stopAnimation = useCallback(() => { setRrgAnimating(false); if (rrgAnimRef.current) clearInterval(rrgAnimRef.current); rrgAnimRef.current = null; }, [setRrgAnimating, rrgAnimRef]);
@@ -131,7 +135,7 @@ export default function RRGChart({
     }
   }, [rrgAnimating, rrgTailLength, setRrgAnimFrame, setRrgAnimating, rrgAnimRef]);
 
-  const scrubEndIdx = rrgScrubEnd !== null ? rrgScrubEnd : totalWeeks - 1;
+  const scrubEndIdx = rrgScrubEnd !== null ? rrgScrubEnd : totalPoints - 1;
 
   const getDateRange = () => {
     if (!rrg || !rrg.sectors) return null;
@@ -140,7 +144,7 @@ export default function RRGChart({
         const visible = getVisibleSeries(s);
         if (visible.length > 0) {
           const endDate = visible[visible.length - 1].date;
-          return `${visible.length} weeks ending ${new Date(endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+          return `${visible.length} ${periodLabel} ending ${new Date(endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
         }
       }
     }
@@ -184,7 +188,7 @@ export default function RRGChart({
               Computing relative rotation…
             </div>
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: '1.5' }}>
-              Fetching weekly historical data for {rrgBenchmark.split(':')[1] || rrgBenchmark} and its constituents, then calculating RS-Ratio &amp; RS-Momentum. This usually takes 5–30 seconds on first visit.
+              Fetching {isDaily ? 'daily' : 'weekly'} historical data for {rrgBenchmark.split(':')[1] || rrgBenchmark} and its constituents, then calculating RS-Ratio &amp; RS-Momentum. This usually takes 5–30 seconds on first visit.
             </div>
           </div>
         </div>
@@ -312,12 +316,50 @@ export default function RRGChart({
             )}
           </div>
 
+          {setRrgPeriod && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Period:</span>
+              <div style={{ display: 'flex', borderRadius: '6px', overflow: 'hidden', border: '1px solid var(--border)' }}>
+                <button
+                  onClick={() => { if (isDaily) { setRrgPeriod('weekly'); resetAnimation(); } }}
+                  style={{
+                    padding: '0.3rem 0.6rem',
+                    background: !isDaily ? 'var(--accent)' : 'rgba(255,255,255,0.03)',
+                    color: !isDaily ? '#fff' : 'var(--text-secondary)',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                  }}
+                  title="Weekly candles, 10/52/26 smoothing — classic JdK RRG"
+                >Weekly</button>
+                <button
+                  onClick={() => { if (!isDaily) { setRrgPeriod('daily'); resetAnimation(); } }}
+                  style={{
+                    padding: '0.3rem 0.6rem',
+                    background: isDaily ? 'var(--accent)' : 'rgba(255,255,255,0.03)',
+                    color: isDaily ? '#fff' : 'var(--text-secondary)',
+                    border: 'none',
+                    borderLeft: '1px solid var(--border)',
+                    cursor: 'pointer',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                  }}
+                  title="Daily candles, 5/20/10 smoothing — faster signals, more noise"
+                >Daily</button>
+              </div>
+            </div>
+          )}
+
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Tail: {rrgTailLength}W</span>
-            <input type="range" min="2" max="12" value={rrgTailLength}
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: '600' }}>Tail: {rrgTailLength}{periodLabelShort}</span>
+            <input type="range"
+              min={isDaily ? 5 : 2}
+              max={isDaily ? 30 : 12}
+              value={rrgTailLength}
               onChange={e => { setRrgTailLength(+e.target.value); resetAnimation(); }}
               style={{ width: '80px', cursor: 'pointer', accentColor: 'var(--accent)' }} />
-            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)', minWidth: '52px' }}>{rrgTailLength} wks</span>
+            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)', minWidth: '52px' }}>{rrgTailLength} {periodLabel}</span>
           </div>
           {!rrgAnimating && rrgAnimFrame === 0 && <button onClick={startAnimation} style={btnStyle(false)}>▶ Animate</button>}
           {rrgAnimating && <button onClick={stopAnimation} style={btnStyle(true)}>⏸ Pause</button>}
@@ -458,7 +500,7 @@ export default function RRGChart({
               {rrgTooltip.name}
             </div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-              Week of {new Date(rrgTooltip.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+              {isDaily ? '' : 'Week of '}{new Date(rrgTooltip.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.2rem 1rem', fontSize: '0.85rem' }}>
               <span style={{ color: 'var(--text-secondary)' }}>RS-Ratio:</span>
@@ -474,13 +516,13 @@ export default function RRGChart({
       </div>
 
       {/* Timeline Scrubber */}
-      {totalWeeks > rrgTailLength && (
+      {totalPoints > rrgTailLength && (
         <div style={{ marginTop: '0.75rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
             <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Showing {getDateRange()}</span>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>Drag to see historic data</span>
           </div>
-          <input type="range" min={rrgTailLength - 1} max={totalWeeks - 1} value={scrubEndIdx}
+          <input type="range" min={rrgTailLength - 1} max={totalPoints - 1} value={scrubEndIdx}
             onChange={e => { setRrgScrubEnd(+e.target.value); resetAnimation(); }}
             style={{ width: '100%', cursor: 'pointer', accentColor: 'var(--accent)' }}
           />
