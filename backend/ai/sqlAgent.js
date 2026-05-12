@@ -1,8 +1,8 @@
 const { ChatOpenAI } = require('@langchain/openai');
 const { Pool } = require('pg');
 
-if (!process.env.NVIDIA_API_KEY) {
-  console.warn('[sqlAgent] NVIDIA_API_KEY is not set — /api/chat will fail');
+if (!process.env.GROQ_API_KEY) {
+  console.warn('[sqlAgent] GROQ_API_KEY is not set — /api/chat will fail');
 }
 if (!process.env.READONLY_DB_URL) {
   console.warn('[sqlAgent] READONLY_DB_URL is not set — /api/chat will fail');
@@ -94,9 +94,9 @@ RULES:
 `;
 
 const llm = new ChatOpenAI({
-  modelName: 'meta/llama-3.3-70b-instruct',
-  apiKey: process.env.NVIDIA_API_KEY,
-  configuration: { baseURL: 'https://integrate.api.nvidia.com/v1' },
+  modelName: 'llama-3.3-70b-versatile',
+  apiKey: process.env.GROQ_API_KEY,
+  configuration: { baseURL: 'https://api.groq.com/openai/v1' },
   temperature: 0,
   maxTokens: 2048,
   timeout: 30000,
