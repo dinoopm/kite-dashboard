@@ -94,7 +94,7 @@ RULES:
 `;
 
 const llm = new ChatOpenAI({
-  modelName: 'deepseek-ai/deepseek-r1',
+  modelName: 'meta/llama-3.3-70b-instruct',
   apiKey: process.env.NVIDIA_API_KEY,
   configuration: { baseURL: 'https://integrate.api.nvidia.com/v1' },
   temperature: 0,
