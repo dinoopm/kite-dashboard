@@ -1208,7 +1208,7 @@ function SectorIndices() {
               <th onClick={() => requestSort('rs1M')} title={`1-Month Relative Strength vs ${rrgBenchmark.split(':')[1]}`} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                 RS vs {(rrgBenchmark.split(':')[1] || '').replace('NIFTY ', '') || 'BM'} {renderSortIndicator('rs1M')}
               </th>
-              {activeTab !== 'broad' && (
+              {activeTab === 'sector' && (
                 <>
                   <th onClick={() => requestSort('rrgRatio')} title={`JdK RS-Ratio against ${rrgBenchmark.split(':')[1]}`} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                     RS-Ratio {renderSortIndicator('rrgRatio')}
@@ -1248,7 +1248,7 @@ function SectorIndices() {
               <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. Hover the score for a breakdown." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
                 Momentum {renderSortIndicator('momentumScore')}
               </th>
-              {activeTab !== 'broad' && (
+              {activeTab === 'sector' && (
                 <th onClick={() => requestSort('signalRank')} title="Automated intelligence analyzing trend, strength and momentum" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center', background: '#0f0f1e' }}>
                   Signal {renderSortIndicator('signalRank')}
                 </th>
@@ -1291,7 +1291,7 @@ function SectorIndices() {
                 {!hiddenColumns['1W'] && <Cell value={row['1W']} />}
                 <Cell value={row['1M']} />
                 <Cell value={row.rs1M} isHeatmapCell={false} />
-                {activeTab !== 'broad' && (
+                {activeTab === 'sector' && (
                   <>
                     <td style={{ padding: '0.5rem', color: row.rrgRatio >= 100 ? '#10b981' : '#ef4444', fontWeight: '600' }}>
                       {row.rrgRatio != null ? row.rrgRatio.toFixed(2) : '-'}
@@ -1409,7 +1409,7 @@ function SectorIndices() {
                     </div>
                   )}
                 </td>
-                {activeTab !== 'broad' && (
+                {activeTab === 'sector' && (
                   <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
                     {row.marketSignal && (
                       <span
