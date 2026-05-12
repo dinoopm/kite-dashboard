@@ -73,6 +73,8 @@ const INDICES = [
   { key: "NSE:NIFTY IND DEFENCE", name: "NIFTY INDIA DEFENCE", category: "sector" },
   { key: "NSE:GOLDBEES", name: "GOLDBEES", category: "commodity" },
   { key: "NSE:SILVERBEES", name: "SILVERBEES", category: "commodity" },
+  { key: "NSE:HINDZINC", name: "HINDUSTAN ZINC", category: "commodity" },
+  { key: "NSE:HINDCOPPER", name: "HINDUSTAN COPPER", category: "commodity" },
 ];
 
 // Empty placeholder row so unloaded-tab indices still render in the table.
@@ -894,8 +896,10 @@ function SectorIndices() {
         // ₹65 ETF and an ₹85 ETF can be compared on the same y-axis.
         if (activeTab === 'commodity') {
           const COMMODITY_COLORS = {
-            'NSE:GOLDBEES':   '#f59e0b',
-            'NSE:SILVERBEES': '#cbd5e1',
+            'NSE:GOLDBEES':   '#f59e0b', // gold
+            'NSE:SILVERBEES': '#cbd5e1', // silver
+            'NSE:HINDZINC':   '#a78bfa', // zinc — violet (distinct from grey silver)
+            'NSE:HINDCOPPER': '#b45309', // copper — burnt amber
             'NSE:NIFTY 50':   '#3b82f6', // benchmark line
           };
           const commodityRows = filteredData.filter(r => Array.isArray(r.history) && r.history.length > 0);
