@@ -123,6 +123,16 @@ function SectorIndices() {
 
   // Commodities-tab line chart range
   const [commodityRange, setCommodityRange] = useState('6M');
+  // Series hidden via legend toggle on the commodities chart (Set of row IDs)
+  const [hiddenCommodityLines, setHiddenCommodityLines] = useState(() => new Set());
+  const toggleCommodityLine = useCallback((id) => {
+    setHiddenCommodityLines(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   // Progressive loading queue refs
   const mountedRef = useRef(true);
@@ -1006,7 +1016,7 @@ function SectorIndices() {
                       }}
                       cursor={{ stroke: 'rgba(255,255,255,0.15)', strokeWidth: 1 }}
                     />
-                    {rows.map(row => (
+                    {rows.filter(row => !hiddenCommodityLines.has(row.id)).map(row => (
                       <Line
                         key={row.id}
                         type="monotone"
@@ -1022,13 +1032,40 @@ function SectorIndices() {
                   </LineChart>
                 </ResponsiveContainer>
               </div>
-              <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.5rem', justifyContent: 'center' }}>
-                {rows.map(row => (
-                  <div key={row.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}>
-                    <span style={{ width: '14px', height: '3px', background: COMMODITY_COLORS[row.id] || '#10b981', borderRadius: '2px' }} />
-                    <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{row.name}</span>
-                  </div>
-                ))}
+              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+                {rows.map(row => {
+                  const isHidden = hiddenCommodityLines.has(row.id);
+                  const color = COMMODITY_COLORS[row.id] || '#10b981';
+                  return (
+                    <button
+                      key={row.id}
+                      onClick={() => toggleCommodityLine(row.id)}
+                      title={isHidden ? 'Click to show' : 'Click to hide'}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        fontSize: '0.8rem',
+                        padding: '0.25rem 0.6rem',
+                        background: 'transparent',
+                        border: '1px solid var(--border)',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        opacity: isHidden ? 0.45 : 1,
+                        textDecoration: isHidden ? 'line-through' : 'none',
+                      }}
+                    >
+                      <span style={{
+                        width: '14px',
+                        height: '3px',
+                        background: isHidden ? 'transparent' : color,
+                        border: isHidden ? `1px dashed ${color}` : 'none',
+                        borderRadius: '2px',
+                      }} />
+                      <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{row.name}</span>
+                    </button>
+                  );
+                })}
               </div>
             </section>
           );
