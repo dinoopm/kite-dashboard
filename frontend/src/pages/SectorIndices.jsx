@@ -119,6 +119,9 @@ function SectorIndices() {
   const rrgSvgRef = useRef(null);
   const rrgContainerRef = useRef(null);
 
+  // Commodities-tab line chart range
+  const [commodityRange, setCommodityRange] = useState('6M');
+
   // Progressive loading queue refs
   const mountedRef = useRef(true);
   // Top-level abort controller used by long-running progressive loops
@@ -206,7 +209,7 @@ function SectorIndices() {
             .filter(u => u.token && !historyLoadedRef.current.has(u.id))
             .map(u => {
               const meta = INDICES.find(i => i.key === u.id);
-              return { id: u.id, name: meta?.name || u.id, token: u.token, price: u.price };
+              return { id: u.id, name: meta?.name || u.id, category: meta?.category, token: u.token, price: u.price };
             });
           for (const q of newHistoryQueue) historyLoadedRef.current.add(q.id);
           if (newHistoryQueue.length > 0) loadHistoricalDataProgressively(newHistoryQueue);
@@ -354,10 +357,18 @@ function SectorIndices() {
 
             // Last 30 candles for sparkline
             const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
-            
-            setData(prevData => prevData.map(item => 
-              item.id === index.id 
-                ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14 }
+
+            // Commodity rows retain the full daily series so the Commodities tab
+            // can plot a normalized performance line chart. Sectors/broad-market
+            // rows skip this — they have far more rows and only need the sparkline.
+            const isCommodity = index.category === 'commodity';
+            const fullHistory = isCommodity
+              ? sorted.map(c => ({ date: c.date, close: c.close }))
+              : undefined;
+
+            setData(prevData => prevData.map(item =>
+              item.id === index.id
+                ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14, ...(fullHistory ? { history: fullHistory } : {}) }
                 : item
             ));
           } else {
@@ -872,24 +883,156 @@ function SectorIndices() {
           return '#ef4444';
         };
 
-        const scored = filteredData.filter(r => r.momentumScore != null);
-        if (scored.length === 0) return null;
-
         const shortName = (r) => {
           const s = r.name.replace('NIFTY ', '');
           return /^\d+$/.test(s) ? r.name : s;
         };
 
-        // Full ranked distribution (replaces the old top-10 / bottom-10 split).
-        // Showing every index in one chart makes the full pecking order legible —
-        // mid-pack indices used to disappear between the two truncated charts.
+        // ── Commodities tab: normalized performance line chart ─────────────
+        // Rebase both series to 100 at the start of the selected range so a
+        // ₹65 ETF and an ₹85 ETF can be compared on the same y-axis.
+        if (activeTab === 'commodity') {
+          const COMMODITY_COLORS = {
+            'NSE:GOLDBEES':   '#f59e0b',
+            'NSE:SILVERBEES': '#cbd5e1',
+          };
+          const rows = filteredData.filter(r => Array.isArray(r.history) && r.history.length > 0);
+          if (rows.length === 0) {
+            return (
+              <section className="glass-panel" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
+                <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>Performance — Commodities</h3>
+                <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Loading historical data…</p>
+              </section>
+            );
+          }
+
+          const RANGE_DAYS = { '1M': 22, '3M': 66, '6M': 132, '1Y': 252, '3Y': 756, 'All': Infinity };
+          const cutoff = RANGE_DAYS[commodityRange] ?? 132;
+
+          // Build a date-indexed map of normalized values per series
+          const seriesMap = new Map(); // date -> { date, [GOLDBEES]: v, [SILVERBEES]: v }
+          rows.forEach(row => {
+            const sliced = row.history.slice(-cutoff);
+            if (sliced.length === 0) return;
+            const base = sliced[0].close;
+            if (!base) return;
+            sliced.forEach(c => {
+              const key = (c.date || '').slice(0, 10);
+              const norm = (c.close / base) * 100;
+              if (!seriesMap.has(key)) seriesMap.set(key, { date: key });
+              seriesMap.get(key)[row.id] = +norm.toFixed(2);
+            });
+          });
+          const chartData = [...seriesMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+
+          const fmtDate = (d) => {
+            const [y, m, day] = d.split('-');
+            return `${day}/${m}/${y.slice(2)}`;
+          };
+
+          return (
+            <section className="glass-panel" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem' }}>
+                <div>
+                  <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>Performance — Commodities</h3>
+                  <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+                    Normalized to 100 at the start of the selected range — apples-to-apples comparison
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '0.3rem' }}>
+                  {['1M', '3M', '6M', '1Y', '3Y', 'All'].map(r => (
+                    <button
+                      key={r}
+                      onClick={() => setCommodityRange(r)}
+                      style={{
+                        padding: '0.3rem 0.7rem',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        borderRadius: '6px',
+                        border: commodityRange === r ? '1px solid var(--accent)' : '1px solid var(--border)',
+                        background: commodityRange === r ? 'var(--accent)' : 'transparent',
+                        color: commodityRange === r ? '#fff' : 'var(--text-secondary)',
+                        cursor: 'pointer',
+                      }}
+                    >{r}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ width: '100%', height: 360, marginTop: '0.75rem' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
+                      tickFormatter={fmtDate}
+                      axisLine={{ stroke: 'var(--border)' }}
+                      tickLine={false}
+                      minTickGap={40}
+                    />
+                    <YAxis
+                      tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
+                      axisLine={{ stroke: 'var(--border)' }}
+                      tickLine={false}
+                      domain={['auto', 'auto']}
+                      tickFormatter={(v) => v.toFixed(0)}
+                    />
+                    <Tooltip
+                      content={({ active, payload, label }) => {
+                        if (!active || !payload || !payload.length) return null;
+                        return (
+                          <div style={{ background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', padding: '0.6rem 0.9rem', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
+                            <p style={{ margin: 0, color: '#fff', fontSize: '0.8rem', fontWeight: 600 }}>{fmtDate(label)}</p>
+                            {payload.map(p => {
+                              const meta = INDICES.find(i => i.key === p.dataKey);
+                              const change = +(p.value - 100).toFixed(2);
+                              return (
+                                <p key={p.dataKey} style={{ margin: '0.25rem 0 0', color: p.color, fontSize: '0.85rem', fontWeight: 600 }}>
+                                  {meta?.name || p.dataKey}: {p.value.toFixed(2)} ({change >= 0 ? '+' : ''}{change}%)
+                                </p>
+                              );
+                            })}
+                          </div>
+                        );
+                      }}
+                      cursor={{ stroke: 'rgba(255,255,255,0.15)', strokeWidth: 1 }}
+                    />
+                    {rows.map(row => (
+                      <Line
+                        key={row.id}
+                        type="monotone"
+                        dataKey={row.id}
+                        name={row.name}
+                        stroke={COMMODITY_COLORS[row.id] || '#10b981'}
+                        strokeWidth={2}
+                        dot={false}
+                        isAnimationActive={false}
+                        connectNulls
+                      />
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.5rem', justifyContent: 'center' }}>
+                {rows.map(row => (
+                  <div key={row.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}>
+                    <span style={{ width: '14px', height: '3px', background: COMMODITY_COLORS[row.id] || '#10b981', borderRadius: '2px' }} />
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{row.name}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        }
+
+        // ── Sectors / Broad-market tabs: full momentum ranking ─────────────
+        const scored = filteredData.filter(r => r.momentumScore != null);
+        if (scored.length === 0) return null;
+
         const rankedData = [...scored]
           .sort((a, b) => b.momentumScore - a.momentumScore)
           .map(r => ({ name: shortName(r), score: r.momentumScore }));
 
-        const tabLabel = activeTab === 'sector' ? 'Sectors'
-          : activeTab === 'commodity' ? 'Commodities'
-          : 'Indices';
+        const tabLabel = activeTab === 'sector' ? 'Sectors' : 'Indices';
 
         return (
           <section className="glass-panel" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
