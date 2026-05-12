@@ -71,6 +71,8 @@ const INDICES = [
   { key: "NSE:NIFTY CHEMICALS", name: "NIFTY CHEMICALS", category: "sector" },
   { key: "NSE:NIFTY OIL AND GAS", name: "NIFTY OIL AND GAS", category: "sector" },
   { key: "NSE:NIFTY IND DEFENCE", name: "NIFTY INDIA DEFENCE", category: "sector" },
+  { key: "NSE:GOLDBEES", name: "GOLDBEES", category: "commodity" },
+  { key: "NSE:SILVERBEES", name: "SILVERBEES", category: "commodity" },
 ];
 
 // Empty placeholder row so unloaded-tab indices still render in the table.
@@ -770,6 +772,7 @@ function SectorIndices() {
           {[
             { key: 'sector', label: 'Sectors' },
             { key: 'broad', label: 'Broad Market' },
+            { key: 'commodity', label: 'Commodities' },
           ].map(tab => (
             <button
               key={tab.key}
