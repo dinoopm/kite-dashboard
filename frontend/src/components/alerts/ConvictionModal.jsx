@@ -161,7 +161,17 @@ function ConvictionModal({ stock, onClose }) {
             {[
               { label: 'RSI (14)', value: stock.rsi?.toFixed(1) || '—', color: stock.rsi > 70 ? '#ef4444' : stock.rsi < 30 ? '#10b981' : '#cbd5e1' },
               { label: 'VWAP Dev', value: stock.vwapDeviation !== null ? `${stock.vwapDeviation > 0 ? '+' : ''}${stock.vwapDeviation.toFixed(2)}%` : '—', color: stock.vwapDeviation > 0 ? '#10b981' : '#ef4444' },
-              { label: 'Regime', value: stock.regime, color: stock.regime === 'STRONG TREND' ? '#10b981' : stock.regime === 'WILD SWINGS' ? '#ef4444' : '#f59e0b' },
+              {
+                label: 'Regime',
+                // STRONG TREND is direction-agnostic — append ▲/▼ and colour-code
+                // by trendDirection so a bearish trend doesn't read as a positive.
+                value: stock.regime === 'STRONG TREND' && stock.trendDirection
+                  ? `${stock.regime} ${stock.trendDirection === 'BULL' ? '▲' : '▼'}`
+                  : stock.regime,
+                color: stock.regime === 'STRONG TREND'
+                  ? (stock.trendDirection === 'BEAR' ? '#ef4444' : '#10b981')
+                  : stock.regime === 'WILD SWINGS' ? '#ef4444' : '#f59e0b'
+              },
             ].map((m, idx) => (
               <div key={idx} style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '6px', padding: '0.5rem 0.6rem', border: '1px solid rgba(255,255,255,0.04)' }}>
                 <div style={{ fontSize: '0.55rem', color: '#64748b', letterSpacing: '0.5px', marginBottom: '0.2rem' }}>{m.label}</div>

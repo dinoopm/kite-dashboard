@@ -178,7 +178,11 @@ function TradePlanModal({ stock, onClose }) {
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginBottom: '0.4rem' }}>
               <span className="mono" style={{
                 fontSize: '0.85rem', fontWeight: 800,
-                color: s.regime === 'STRONG TREND' ? '#10b981' : s.regime === 'WILD SWINGS' ? '#ef4444' : '#f59e0b'
+                // STRONG TREND with BEAR direction is a strong downtrend — colour
+                // red so it doesn't read as a positive signal alongside the ▼ arrow.
+                color: s.regime === 'STRONG TREND'
+                  ? (s.trendDirection === 'BEAR' ? '#ef4444' : '#10b981')
+                  : s.regime === 'WILD SWINGS' ? '#ef4444' : '#f59e0b'
               }}>
                 {s.regime}{s.regime === 'STRONG TREND' && s.trendDirection ? (s.trendDirection === 'BULL' ? ' ▲' : ' ▼') : ''}
               </span>
