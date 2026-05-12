@@ -1036,6 +1036,15 @@ function SectorIndices() {
                 {rows.map(row => {
                   const isHidden = hiddenCommodityLines.has(row.id);
                   const color = COMMODITY_COLORS[row.id] || '#10b981';
+                  // Today's % change from the live quote feed — gives a glanceable
+                  // intraday read without needing to hover the rightmost chart edge.
+                  const day = row['1D'];
+                  const dayLabel = (day == null)
+                    ? null
+                    : `${day >= 0 ? '+' : ''}${day.toFixed(2)}%`;
+                  const dayColor = day == null
+                    ? 'var(--text-secondary)'
+                    : day >= 0 ? '#10b981' : '#ef4444';
                   return (
                     <button
                       key={row.id}
@@ -1063,6 +1072,11 @@ function SectorIndices() {
                         borderRadius: '2px',
                       }} />
                       <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{row.name}</span>
+                      {dayLabel && (
+                        <span style={{ color: dayColor, fontWeight: 700, fontSize: '0.78rem' }}>
+                          {dayLabel}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
