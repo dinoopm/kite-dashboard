@@ -193,13 +193,24 @@ function SectorIndices() {
             const quote = quotes[entry.key] || {};
             const lastPrice = quote.last_price ?? null;
             const prevClose = quote.ohlc?.close;
-            const absChange = quote.net_change !== undefined
-              ? quote.net_change
-              : (prevClose !== undefined && lastPrice !== null ? lastPrice - prevClose : null);
 
-            const pct1D = (prevClose && absChange !== null && absChange !== undefined)
-              ? (absChange / prevClose) * 100
-              : null;
+            // 1D % is derived through several fallbacks: Kite sometimes ships
+            // net_change as a string, sometimes omits it on ETFs, and the most
+            // reliable computation is last_price vs ohlc.close.
+            let pct1D = null;
+            if (prevClose && prevClose > 0) {
+              if (lastPrice != null) {
+                pct1D = ((lastPrice - prevClose) / prevClose) * 100;
+              } else if (quote.net_change != null && !Number.isNaN(+quote.net_change)) {
+                pct1D = (+quote.net_change / prevClose) * 100;
+              }
+            }
+
+            // Surface missing-quote cases once per instrument so the cause is
+            // obvious in the browser console instead of a silent dash.
+            if (entry.category === 'commodity' && lastPrice == null) {
+              console.warn(`[quotes] no last_price for ${entry.key} — got:`, quote);
+            }
 
             return {
               id: entry.key,
@@ -1036,15 +1047,6 @@ function SectorIndices() {
                 {rows.map(row => {
                   const isHidden = hiddenCommodityLines.has(row.id);
                   const color = COMMODITY_COLORS[row.id] || '#10b981';
-                  // Today's % change from the live quote feed — gives a glanceable
-                  // intraday read without needing to hover the rightmost chart edge.
-                  const day = row['1D'];
-                  const dayLabel = (day == null)
-                    ? null
-                    : `${day >= 0 ? '+' : ''}${day.toFixed(2)}%`;
-                  const dayColor = day == null
-                    ? 'var(--text-secondary)'
-                    : day >= 0 ? '#10b981' : '#ef4444';
                   return (
                     <button
                       key={row.id}
@@ -1072,11 +1074,6 @@ function SectorIndices() {
                         borderRadius: '2px',
                       }} />
                       <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{row.name}</span>
-                      {dayLabel && (
-                        <span style={{ color: dayColor, fontWeight: 700, fontSize: '0.78rem' }}>
-                          {dayLabel}
-                        </span>
-                      )}
                     </button>
                   );
                 })}
