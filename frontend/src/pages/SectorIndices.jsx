@@ -358,11 +358,12 @@ function SectorIndices() {
             // Last 30 candles for sparkline
             const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
 
-            // Commodity rows retain the full daily series so the Commodities tab
-            // can plot a normalized performance line chart. Sectors/broad-market
-            // rows skip this — they have far more rows and only need the sparkline.
-            const isCommodity = index.category === 'commodity';
-            const fullHistory = isCommodity
+            // Commodity rows + NIFTY 50 (commodity-chart benchmark) retain the
+            // full daily series so the Commodities tab can plot a normalized
+            // performance line chart. Other broad/sector rows skip this — they
+            // have far more rows and only need the sparkline.
+            const keepFullHistory = index.category === 'commodity' || index.id === 'NSE:NIFTY 50';
+            const fullHistory = keepFullHistory
               ? sorted.map(c => ({ date: c.date, close: c.close }))
               : undefined;
 
@@ -895,9 +896,14 @@ function SectorIndices() {
           const COMMODITY_COLORS = {
             'NSE:GOLDBEES':   '#f59e0b',
             'NSE:SILVERBEES': '#cbd5e1',
+            'NSE:NIFTY 50':   '#3b82f6', // benchmark line
           };
-          const rows = filteredData.filter(r => Array.isArray(r.history) && r.history.length > 0);
-          if (rows.length === 0) {
+          const commodityRows = filteredData.filter(r => Array.isArray(r.history) && r.history.length > 0);
+          // NIFTY 50 lives in the broad-market category, so it's filtered out of
+          // filteredData on the Commodities tab. Pull it from the full data set.
+          const benchmarkRow = data.find(r => r.id === 'NSE:NIFTY 50' && Array.isArray(r.history) && r.history.length > 0);
+          const rows = benchmarkRow ? [...commodityRows, benchmarkRow] : commodityRows;
+          if (commodityRows.length === 0) {
             return (
               <section className="glass-panel" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
                 <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>Performance — Commodities</h3>
@@ -910,7 +916,7 @@ function SectorIndices() {
           const cutoff = RANGE_DAYS[commodityRange] ?? 132;
 
           // Build a date-indexed map of normalized values per series
-          const seriesMap = new Map(); // date -> { date, [GOLDBEES]: v, [SILVERBEES]: v }
+          const seriesMap = new Map(); // date -> { date, [GOLDBEES]: v, [SILVERBEES]: v, [NIFTY 50]: v }
           rows.forEach(row => {
             const sliced = row.history.slice(-cutoff);
             if (sliced.length === 0) return;
@@ -934,7 +940,7 @@ function SectorIndices() {
             <section className="glass-panel" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.75rem' }}>
                 <div>
-                  <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>Performance — Commodities</h3>
+                  <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>Performance — Commodities vs NIFTY 50</h3>
                   <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
                     Normalized to 100 at the start of the selected range — apples-to-apples comparison
                   </p>
