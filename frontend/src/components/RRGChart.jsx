@@ -113,7 +113,7 @@ export default function RRGChart({
   const scaleX = (v) => PAD.left + ((v - axisBounds.minX) / (axisBounds.maxX - axisBounds.minX)) * plotW;
   const scaleY = (v) => PAD.top + plotH - ((v - axisBounds.minY) / (axisBounds.maxY - axisBounds.minY)) * plotH;
 
-  const totalWeeks = rrg ? Math.max(...rrg.sectors.map(s => s.series.length), 0) : 0;
+  const totalWeeks = rrg ? Math.max(...rrg.sectors.map(s => s.series?.length ?? 0), 0) : 0;
 
   const startAnimation = useCallback(() => { setRrgAnimFrame(0); setRrgAnimating(true); }, [setRrgAnimFrame, setRrgAnimating]);
   const stopAnimation = useCallback(() => { setRrgAnimating(false); if (rrgAnimRef.current) clearInterval(rrgAnimRef.current); rrgAnimRef.current = null; }, [setRrgAnimating, rrgAnimRef]);
@@ -136,7 +136,7 @@ export default function RRGChart({
   const getDateRange = () => {
     if (!rrg || !rrg.sectors) return null;
     for (const s of rrg.sectors) {
-      if (s.series.length > 0) {
+      if (s.series?.length > 0) {
         const visible = getVisibleSeries(s);
         if (visible.length > 0) {
           const endDate = visible[visible.length - 1].date;

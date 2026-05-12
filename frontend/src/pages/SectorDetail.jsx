@@ -238,6 +238,7 @@ export default function SectorDetail() {
   const rrgContainerRef = useRef(null);
   const rrgPollCount = useRef(0);
   const rrgPollTimer = useRef(null);
+  const rrgRefreshedAfterLoad = useRef(false);
 
   // ── UI state ──
   const [activeTab, setActiveTab] = useState('overview');
@@ -493,6 +494,17 @@ export default function SectorDetail() {
       if (rrgPollTimer.current) clearTimeout(rrgPollTimer.current);
     };
   }, [constituents, fetchRRG]);
+
+  // One-shot: re-fetch RRG once ALL stock histories are warm so the chart
+  // reflects complete data, not just the partial snapshot from the first poll.
+  useEffect(() => {
+    if (constituents.length === 0 || histLoadedCount < constituents.length) return;
+    if (rrgRefreshedAfterLoad.current) return;
+    rrgRefreshedAfterLoad.current = true;
+    const controller = new AbortController();
+    fetchRRG(controller.signal);
+    return () => controller.abort();
+  }, [histLoadedCount, constituents.length, fetchRRG]);
 
   // ─── Derived / computed ───────────────────────────────────────────
   const enrichedStockData = useMemo(() => {
