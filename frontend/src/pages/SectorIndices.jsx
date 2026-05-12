@@ -880,20 +880,30 @@ function SectorIndices() {
           return /^\d+$/.test(s) ? r.name : s;
         };
 
-        const topData = [...scored].sort((a, b) => b.momentumScore - a.momentumScore).slice(0, 10)
-          .map(r => ({ name: shortName(r), score: r.momentumScore }));
-        const bottomData = [...scored].sort((a, b) => a.momentumScore - b.momentumScore).slice(0, 10)
+        // Full ranked distribution (replaces the old top-10 / bottom-10 split).
+        // Showing every index in one chart makes the full pecking order legible —
+        // mid-pack indices used to disappear between the two truncated charts.
+        const rankedData = [...scored]
+          .sort((a, b) => b.momentumScore - a.momentumScore)
           .map(r => ({ name: shortName(r), score: r.momentumScore }));
 
-        const renderBarChart = (chartData, title, subtitle) => (
-          <section className="glass-panel" style={{ padding: '1.25rem', flex: 1, minWidth: '320px' }}>
-            <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>{title}</h3>
-            <p style={{ margin: '0 0 0.75rem 0', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{subtitle}</p>
-            <div style={{ width: '100%', height: Math.max(200, chartData.length * 38) }}>
+        const tabLabel = activeTab === 'sector' ? 'Sectors'
+          : activeTab === 'commodity' ? 'Commodities'
+          : 'Indices';
+
+        return (
+          <section className="glass-panel" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
+            <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>
+              Momentum Ranking — {tabLabel}
+            </h3>
+            <p style={{ margin: '0 0 0.75rem 0', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+              Full pecking order (1W · 1M · 3M weighted, RSI-adjusted) — green = leaders, red = laggards
+            </p>
+            <div style={{ width: '100%', height: Math.max(240, rankedData.length * 32) }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 40, left: 10, bottom: 5 }}>
+                <BarChart data={rankedData} layout="vertical" margin={{ top: 5, right: 40, left: 10, bottom: 5 }}>
                   <XAxis type="number" domain={[0, 100]} tick={{ fill: 'var(--text-secondary)', fontSize: 12 }} axisLine={{ stroke: 'var(--border)' }} tickLine={false} />
-                  <YAxis type="category" dataKey="name" width={120} tick={{ fill: 'var(--text-primary)', fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="name" width={140} tick={{ fill: 'var(--text-primary)', fontSize: 12 }} axisLine={false} tickLine={false} />
                   <Tooltip
                     content={({ active, payload }) => {
                       if (!active || !payload || !payload.length) return null;
@@ -907,8 +917,8 @@ function SectorIndices() {
                     }}
                     cursor={{ fill: 'rgba(255,255,255,0.03)' }}
                   />
-                  <Bar dataKey="score" radius={[0, 6, 6, 0]} barSize={22} label={{ position: 'right', fill: 'var(--text-secondary)', fontSize: 12, fontWeight: 600 }}>
-                    {chartData.map((entry, index) => (
+                  <Bar dataKey="score" radius={[0, 6, 6, 0]} barSize={20} label={{ position: 'right', fill: 'var(--text-secondary)', fontSize: 12, fontWeight: 600 }}>
+                    {rankedData.map((entry, index) => (
                       <RechartsCell key={`cell-${index}`} fill={getBarColor(entry.score)} />
                     ))}
                   </Bar>
@@ -916,13 +926,6 @@ function SectorIndices() {
               </ResponsiveContainer>
             </div>
           </section>
-        );
-
-        return (
-          <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-            {renderBarChart(topData, `Top 10 — ${activeTab === 'sector' ? 'Sectors' : 'Indices'}`, 'Strongest momentum (1W · 1M · 3M weighted, RSI-adjusted)')}
-            {renderBarChart(bottomData, `Bottom 10 — ${activeTab === 'sector' ? 'Sectors' : 'Indices'}`, 'Weakest momentum — underperformers to avoid')}
-          </div>
         );
       })()}
 
