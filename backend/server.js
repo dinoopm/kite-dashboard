@@ -689,6 +689,69 @@ app.get('/api/instrument-info/:symbol', async (req, res) => {
   }
 });
 
+// ─── Search instruments (navbar autocomplete) ────────────────────
+// Kite's search_instruments returns F&O options first when filtering on name
+// (242 RELIANCE matches, most of them strikes). We over-fetch then filter to
+// cash equities (NSE/BSE, instrument_type=EQ) so the navbar dropdown only
+// shows stocks. Cached briefly per-query so a typing user doesn't hammer MCP.
+const instrumentSearchCache = {}; // queryKey -> { data, ts }
+const INSTRUMENT_SEARCH_TTL = 5 * 60 * 1000; // 5 min
+
+app.get('/api/search-instruments', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
+  const q = (req.query.q || '').trim();
+  if (q.length < 2) return res.json({ results: [] });
+
+  const cacheKey = q.toLowerCase();
+  const now = Date.now();
+  if (instrumentSearchCache[cacheKey] && now - instrumentSearchCache[cacheKey].ts < INSTRUMENT_SEARCH_TTL) {
+    return res.json(instrumentSearchCache[cacheKey].data);
+  }
+
+  // Heuristic: short uppercase token → search tradingsymbol; otherwise name.
+  // Empirically name-search works for both ("RELI" matches "RELIANCE INDUSTRIES"
+  // because Kite name-matches are substring-based), so default to name.
+  const filterOn = /^[A-Z0-9]{2,15}$/.test(q) ? 'tradingsymbol' : 'name';
+
+  try {
+    const result = await callWithTimeout({
+      name: "search_instruments",
+      arguments: { query: q, filter_on: filterOn, limit: 60 }
+    }, 8000);
+
+    let rows = [];
+    if (result?.content?.[0]?.text) {
+      const parsed = JSON.parse(result.content[0].text);
+      rows = parsed?.data || [];
+    }
+
+    // Cash equities only — drop F&O, currency, MCX, mutual funds.
+    const equities = rows
+      .filter(r => (r.exchange === 'NSE' || r.exchange === 'BSE')
+                && r.instrument_type === 'EQ'
+                && r.active !== false)
+      // NSE first (more liquid), then alphabetical
+      .sort((a, b) => {
+        if (a.exchange !== b.exchange) return a.exchange === 'NSE' ? -1 : 1;
+        return a.tradingsymbol.localeCompare(b.tradingsymbol);
+      })
+      .slice(0, 12)
+      .map(r => ({
+        symbol: r.tradingsymbol,
+        name: r.name,
+        exchange: r.exchange,
+        token: String(r.instrument_token),
+        isin: r.isin || null,
+      }));
+
+    const payload = { results: equities };
+    instrumentSearchCache[cacheKey] = { data: payload, ts: now };
+    res.json(payload);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/holdings', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
   try {

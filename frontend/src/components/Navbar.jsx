@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
+import InstrumentSearch from './InstrumentSearch';
 
 function Navbar({ onDisconnect }) {
   const location = useLocation();
@@ -79,6 +80,8 @@ function Navbar({ onDisconnect }) {
       </Link>
 
       <div style={{ flex: 1 }}></div>
+
+      <InstrumentSearch />
 
       <button
         onClick={onDisconnect}
