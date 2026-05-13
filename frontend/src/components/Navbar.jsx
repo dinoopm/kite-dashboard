@@ -5,7 +5,7 @@ function Navbar({ onDisconnect }) {
   const location = useLocation();
 
   return (
-    <nav className="glass-panel" style={{ display: 'flex', gap: '1.5rem', marginBottom: '2rem', padding: '1rem 2rem', alignItems: 'center' }}>
+    <nav className="glass-panel" style={{ display: 'flex', gap: '1.5rem', marginBottom: '2rem', padding: '1rem 2rem', alignItems: 'center', position: 'relative', zIndex: 9999 }}>
       <h2 style={{ margin: 0, marginRight: '1rem', color: 'var(--accent)' }}>Kite Analytics</h2>
       <Link 
         to="/" 

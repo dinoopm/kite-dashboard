@@ -102,7 +102,9 @@ function InstrumentSearch() {
           boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
           maxHeight: '380px',
           overflowY: 'auto',
-          zIndex: 1000,
+          // Beats sticky table headers, modal overlays (9999), and momentum
+          // popovers on SectorIndices. Any future modal MUST stay below this.
+          zIndex: 99999,
         }}>
           {loading && results.length === 0 && (
             <div style={{ padding: '0.6rem 0.8rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Searching…</div>
