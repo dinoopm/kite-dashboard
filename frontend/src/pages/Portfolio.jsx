@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 
 function Portfolio() {
   const [profile, setProfile] = useState(null)
@@ -199,7 +199,29 @@ function Portfolio() {
 
       {activeTab === 'equity' ? (
         <section className="glass-panel animate-in">
-          <h2 style={{ marginBottom: '1.5rem' }}>Equity Holdings</h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <h2 style={{ margin: 0 }}>Equity Holdings</h2>
+            <Link
+              to="/alerts"
+              style={{
+                textDecoration: 'none',
+                padding: '0.5rem 1rem',
+                borderRadius: '8px',
+                background: 'rgba(56,189,248,0.08)',
+                border: '1px solid rgba(56,189,248,0.25)',
+                color: 'var(--accent)',
+                fontWeight: 700,
+                fontSize: '0.85rem',
+                letterSpacing: '0.3px',
+                transition: 'background 0.15s',
+              }}
+              onMouseOver={(e) => e.currentTarget.style.background = 'rgba(56,189,248,0.16)'}
+              onMouseOut={(e) => e.currentTarget.style.background = 'rgba(56,189,248,0.08)'}
+              title="Per-holding technical signals, trade plans, sector concentration"
+            >
+              Technical Alerts →
+            </Link>
+          </div>
 
           {/* Portfolio Summary Stats */}
           {(() => {
