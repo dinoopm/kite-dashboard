@@ -256,7 +256,17 @@ function Instrument() {
           <button onClick={() => navigate(-1)} style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-primary)', padding: '0.5rem 1rem', borderRadius: '4px', cursor: 'pointer', marginBottom: '1rem' }}>
             &larr; Back to Dashboard
           </button>
-          <h1>{symbol || 'Instrument'}</h1>
+          <h1 style={{ margin: 0 }}>
+            {fundamentals?.price?.longName
+              || fundamentals?.price?.shortName
+              || symbol
+              || 'Instrument'}
+          </h1>
+          {(fundamentals?.price?.longName || fundamentals?.price?.shortName) && symbol && (
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px', marginTop: '0.25rem' }}>
+              {symbol}
+            </div>
+          )}
         </div>
       </header>
 
