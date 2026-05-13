@@ -646,6 +646,49 @@ app.get('/api/profile', async (req, res) => {
   }
 });
 
+// ─── Instrument metadata (company name from Kite, not Yahoo) ────
+// Kite's search_instruments(filter_on=id, query=NSE:SYMBOL) returns the cash
+// market row with the proper company name ("HINDUSTAN ZINC", "RELIANCE
+// INDUSTRIES", etc.). Yahoo's longName is slower and sometimes missing for
+// Indian tickers, so we prefer Kite as the canonical source.
+const instrumentInfoCache = {}; // symbol -> { data, ts }
+const INSTRUMENT_INFO_TTL = 24 * 60 * 60 * 1000; // 24h — company names don't change
+
+app.get('/api/instrument-info/:symbol', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
+  const symbol = req.params.symbol.toUpperCase();
+  const exchange = (req.query.exchange || 'NSE').toUpperCase();
+  const cacheKey = `${exchange}:${symbol}`;
+  const now = Date.now();
+  if (instrumentInfoCache[cacheKey] && now - instrumentInfoCache[cacheKey].ts < INSTRUMENT_INFO_TTL) {
+    return res.json(instrumentInfoCache[cacheKey].data);
+  }
+  try {
+    const result = await callWithTimeout({
+      name: "search_instruments",
+      arguments: { query: cacheKey, filter_on: "id", limit: 1 }
+    }, 8000);
+    let info = { symbol, exchange, name: null, isin: null };
+    if (result?.content?.[0]?.text) {
+      const parsed = JSON.parse(result.content[0].text);
+      const row = parsed?.data?.[0];
+      if (row) {
+        info = {
+          symbol,
+          exchange,
+          name: row.name || null,
+          isin: row.isin || null,
+          tradingsymbol: row.tradingsymbol || symbol,
+        };
+      }
+    }
+    instrumentInfoCache[cacheKey] = { data: info, ts: now };
+    res.json(info);
+  } catch (err) {
+    res.status(500).json({ error: err.message, symbol });
+  }
+});
+
 app.get('/api/holdings', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
   try {
@@ -1312,6 +1355,16 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   if (tradePlan.action === 'BUY SEEN' && tradePlan.rrRatio !== null && tradePlan.rrRatio < 1.5) {
     tradePlan.action = 'HOLD / WAIT';
     tradePlan.reason = `Setup is bullish but reward/risk is only ${tradePlan.rrRatio}× (needs ≥1.5×). TG ₹${tradePlan.tgt} vs SL ₹${tradePlan.sl} — not enough upside.`;
+  }
+
+  // Belt-and-braces: a stretched RSI on a high-conviction name still deserves
+  // the OVERBOUGHT label even when an earlier check downgraded us to HOLD/WAIT
+  // (e.g. price jammed against 20-day resistance so R:R failed). Without this,
+  // two stocks with identical RSI ~70 but different distance-to-resistance get
+  // mismatched labels — HINDZINC vs IDEAFORGE was exactly this case.
+  if (rsi14 !== null && rsi14 >= 70 && confidence >= 75 && tradePlan.action === 'HOLD / WAIT') {
+    tradePlan.action = 'HOLD (OVERBOUGHT)';
+    tradePlan.reason = `Bullish bias is ${confidence}%, but RSI is stretched to ${rsi14.toFixed(0)} — avoid fresh buys here.`;
   }
 
   // Holdings-aware overrides — only when called from /api/alerts (holding present).

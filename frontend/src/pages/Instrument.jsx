@@ -15,6 +15,9 @@ function Instrument() {
   const [indicators, setIndicators] = useState(null)
   const [fundamentals, setFundamentals] = useState(null)
   const [cashflow, setCashflow] = useState(null)
+  // Company name sourced from Kite (search_instruments) — populates faster than
+  // Yahoo fundamentals and is canonical for Indian tickers.
+  const [kiteName, setKiteName] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
@@ -39,6 +42,22 @@ function Instrument() {
           const key = `NSE:${symbol}`;
           if (parsed[key]) setQuote(parsed[key]);
         }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+      }
+    })();
+    return () => controller.abort();
+  }, [symbol])
+
+  // Fetch canonical company name from Kite (search_instruments)
+  useEffect(() => {
+    if (!symbol) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetchWithAbort(`/api/instrument-info/${symbol}`, { signal: controller.signal });
+        const info = await res.json();
+        if (info?.name) setKiteName(info.name);
       } catch (e) {
         if (e.name === 'AbortError') return;
       }
@@ -257,12 +276,13 @@ function Instrument() {
             &larr; Back to Dashboard
           </button>
           <h1 style={{ margin: 0 }}>
-            {fundamentals?.price?.longName
+            {kiteName
+              || fundamentals?.price?.longName
               || fundamentals?.price?.shortName
               || symbol
               || 'Instrument'}
           </h1>
-          {(fundamentals?.price?.longName || fundamentals?.price?.shortName) && symbol && (
+          {(kiteName || fundamentals?.price?.longName || fundamentals?.price?.shortName) && symbol && (
             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px', marginTop: '0.25rem' }}>
               {symbol}
             </div>
