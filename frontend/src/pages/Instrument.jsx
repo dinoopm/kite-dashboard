@@ -774,16 +774,20 @@ function Instrument() {
           };
         };
         // Expenses use inverted polarity — rising is bad, falling is good.
+        // Expense pill uses sign + colour (no arrow). Rising expenses are bad,
+        // and an upward arrow next to a red number reads as a contradiction
+        // because every other row treats ↑ as good. Sign carries direction,
+        // colour carries sentiment — no visual conflict.
         const expensePill = (curr, prev) => {
           const p = growthPill(curr, prev);
           if (!p) return null;
           const rising = p.label.startsWith('↑');
-          let color;
           const abs = parseFloat(p.label.slice(1));
+          let color;
           if (abs < 5)        color = rising ? '#fca5a5' : '#34d399';
           else if (abs < 15)  color = rising ? '#ef4444' : '#10b981';
           else                color = rising ? '#dc2626' : '#059669';
-          return { ...p, color };
+          return { ...p, label: `${rising ? '+' : '−'}${abs.toFixed(1)}%`, color };
         };
         // Margin uses a percentage-points pill instead of relative growth.
         const marginPill = (curr, prev) => {
