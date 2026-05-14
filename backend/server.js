@@ -1525,7 +1525,7 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   // than the heuristic stack that came before.
   if (supertrend) {
     if (supertrend.signal === 'BEAR') {
-      tradePlan.action = 'BEARISH / EXIT';
+      tradePlan.action = 'BEARISH';
       tradePlan.reason = supertrend.flippedToBear
         ? `SuperTrend(10,3) just flipped red — exit / avoid new entries.`
         : `SuperTrend(10,3) is red (line ₹${supertrend.line}) — stay out / exit existing.`;

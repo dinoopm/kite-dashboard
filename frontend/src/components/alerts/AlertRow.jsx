@@ -32,7 +32,7 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
   // New strategy verdicts take precedence in the colour map.
   const isStrongBuy = tp.action === 'STRONG BUY'
   const isTrendingWait = tp.action === 'TRENDING (WAIT)'
-  const isBearishExit = tp.action === 'BEARISH / EXIT'
+  const isBearishExit = tp.action === 'BEARISH'
   const isBuyAction = tp.action === 'BUY SEEN' || tp.action === 'ADD'
   const isBreakoutAction = tp.action.includes('BREAKOUT')
   const isBearishAction = isBearishExit || tp.action.includes('SELL') || tp.action === 'AVOID'
