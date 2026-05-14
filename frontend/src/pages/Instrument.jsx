@@ -780,6 +780,18 @@ function Instrument() {
             weight: abs >= 15 ? 800 : 700,
           };
         };
+        // Expenses use inverted polarity — rising is bad, falling is good.
+        const expensePill = (curr, prev) => {
+          const p = growthPill(curr, prev);
+          if (!p) return null;
+          const rising = p.label.startsWith('↑');
+          let color;
+          const abs = parseFloat(p.label.slice(1));
+          if (abs < 5)        color = rising ? '#fca5a5' : '#34d399';
+          else if (abs < 15)  color = rising ? '#ef4444' : '#10b981';
+          else                color = rising ? '#dc2626' : '#059669';
+          return { ...p, color };
+        };
         // Margin uses a percentage-points pill instead of relative growth.
         const marginPill = (curr, prev) => {
           if (curr == null || prev == null) return null;
@@ -799,7 +811,8 @@ function Instrument() {
 
         // Row spec mapped to screener.in field names.
         const rows = [
-          { key: 'totalIncome',     label: 'Total Income',     fmt: fmtCr,  get: r => r?.totalIncome,     pill: growthPill },
+          { key: 'totalIncome',     label: 'Sales',            fmt: fmtCr,  get: r => r?.totalIncome,     pill: growthPill },
+          { key: 'expenses',        label: 'Expenses',         fmt: fmtCr,  get: r => r?.expenses,        pill: expensePill },
           { key: 'operatingProfit', label: 'Operating Profit', fmt: fmtCr,  get: r => r?.operatingProfit, pill: growthPill },
           { key: 'operatingMargin', label: 'Operating Margin', fmt: fmtPct, get: r => opMarginOf(r),     pill: marginPill },
           { key: 'netProfit',       label: 'Net Profit',       fmt: fmtCr,  get: r => r?.netProfit,       pill: growthPill },
@@ -815,14 +828,16 @@ function Instrument() {
         });
 
         // Lightweight sparkline — no axes, no grid, just the line + endpoint dot.
-        const Sparkline = ({ points }) => {
+        const Sparkline = ({ points, invert = false }) => {
           const valid = points.filter(p => p.v != null);
           if (valid.length < 2) {
             return <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>—</span>;
           }
           const last = valid[valid.length - 1].v;
           const first = valid[0].v;
-          const color = last >= first ? '#10b981' : '#ef4444';
+          const rising = last >= first;
+          const good = invert ? !rising : rising;
+          const color = good ? '#10b981' : '#ef4444';
           return (
             <div style={{ width: '70px', height: '28px' }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -924,7 +939,7 @@ function Instrument() {
                           })}
                           <td style={{ textAlign: 'right', padding: '0.85rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                             <div style={{ display: 'inline-block' }}>
-                              <Sparkline points={sparkPoints} />
+                              <Sparkline points={sparkPoints} invert={row.key === 'expenses'} />
                             </div>
                           </td>
                         </tr>
