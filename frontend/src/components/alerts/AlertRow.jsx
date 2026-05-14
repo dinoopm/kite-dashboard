@@ -33,6 +33,7 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
   const isStrongBuy = tp.action === 'STRONG BUY'
   const isTrendingWait = tp.action === 'TRENDING (WAIT)'
   const isBearishExit = tp.action === 'BEARISH / EXIT'
+  const isWeakening = tp.action === 'WEAKENING'
   const isBuyAction = tp.action === 'BUY SEEN' || tp.action === 'ADD'
   const isBreakoutAction = tp.action.includes('BREAKOUT')
   const isBearishAction = isBearishExit || tp.action.includes('SELL') || tp.action === 'AVOID'
@@ -40,6 +41,7 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
   const actColor = isStrongBuy ? '#14F195'           // neon teal
     : isTrendingWait ? '#FBBF24'                     // amber
     : isBearishExit ? '#FB7185'                      // muted coral
+    : isWeakening ? '#FCD34D'                        // soft yellow — caution, not exit
     : isBuyAction ? '#10b981'
     : isBearishAction ? '#ef4444'
     : isBreakoutAction ? '#fcd34d'
@@ -49,10 +51,12 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
   const actBg = isStrongBuy ? 'rgba(20,241,149,0.12)'
     : isTrendingWait ? 'rgba(251,191,36,0.12)'
     : isBearishExit ? 'rgba(251,113,133,0.12)'
+    : isWeakening ? 'rgba(252,211,77,0.10)'
     : 'transparent'
   const actGlyph = isStrongBuy ? '🟢 '
     : isTrendingWait ? '🟡 '
     : isBearishExit ? '🔴 '
+    : isWeakening ? '⚠ '
     : isBuyAction ? '▲ '
     : isBearishAction ? '▼ '
     : isTrimAction ? '✂ '
@@ -86,6 +90,7 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
   // ─── Compact "Triggered by …" chip — keyword-classify tp.reason.
   const reasonChip = (() => {
     const r = (tp.reason || '').toLowerCase()
+    if (r.includes('supertrend flipped red but smart signal')) return 'ST red, Smart still holds'
     if (r.includes('supertrend') && (r.includes('flipped red') || r.includes('just flipped'))) return 'Supertrend flip'
     if (r.includes('supertrend') && r.includes('red')) return 'Supertrend bearish'
     if (r.includes('supertrend green') || r.includes('200 ema')) return 'Trend + EMA confluence'
@@ -101,41 +106,58 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
     return null
   })()
 
-  // ─── SMART SIGNAL — Weighted Action Score blending Supertrend, RSI slope, volume.
+  // ─── SMART SIGNAL — backend-computed (computeStockAlert), with client-side
+  // fallback so the UI stays robust if a payload doesn't carry the field yet.
   //   score = 0.4·Supertrend + 0.3·RSI-slope + 0.3·Volume-surge
   //   Soft penalty: −0.3 if filter (Supertrend GREEN ∧ 40 ≤ RSI ≤ 60) fails.
   const smart = (() => {
+    const colorFor = (score) =>
+      score >= 0.80 ? '#10b981'
+      : score >= 0.65 ? '#f59e0b'
+      : score >= 0.45 ? '#94a3b8'
+      : '#ef4444'
+    const glyphFor = (score) =>
+      score >= 0.80 ? '⚡'
+      : score >= 0.65 ? '⌛'
+      : score >= 0.45 ? '◯'
+      : '⛔'
+
+    // Backend payload path — preferred.
+    if (stock.smartSignal && typeof stock.smartSignal.score === 'number') {
+      const s = stock.smartSignal
+      return {
+        score: s.score, label: s.label, filterPass: s.filterPass,
+        supertrendState: s.supertrendState, rsiSlope: s.rsiSlope, volScore: s.volScore,
+        color: colorFor(s.score), glyph: glyphFor(s.score)
+      }
+    }
+
+    // Fallback — compute from raw fields (older backend / unit-testable path).
     const st = stock.supertrend
     const rsi = stock.rsi
     const rsiHist = stock.rsiHistory || []
     const volSurge = stock.volSurge != null ? stock.volSurge : 1.0
-
-    // 1) Supertrend State (0..1) — BULL=0.9, fresh flip=1.0, BEAR=0.0
     let supertrendState = 0
     if (st?.signal === 'BULL') supertrendState = st.flippedToBull ? 1.0 : 0.9
-
-    // 2) RSI Slope (0..1) — last-5-bar delta linearly mapped from [−15, +15]
     let rsiSlope = 0.5
     if (rsiHist.length >= 5) {
       const delta = rsiHist[rsiHist.length - 1] - rsiHist[rsiHist.length - 5]
       rsiSlope = Math.max(0, Math.min(1, (delta + 15) / 30))
     }
-
-    // 3) Volume Surge (0..1) — map [0.8×, 3.0×] → [0, 1]
     const volScore = Math.max(0, Math.min(1, (volSurge - 0.8) / 2.2))
-
     let score = 0.4 * supertrendState + 0.3 * rsiSlope + 0.3 * volScore
     const filterPass = st?.signal === 'BULL' && rsi != null && rsi >= 40 && rsi <= 60
     if (!filterPass) score -= 0.3
     score = Math.max(0, Math.min(1, score))
-
-    let label, color, glyph
-    if (score >= 0.80)       { label = 'STRONG CONVICTION',     color = '#10b981', glyph = '⚡' }
-    else if (score >= 0.65)  { label = 'WAIT FOR CONFIRMATION', color = '#f59e0b', glyph = '⌛' }
-    else if (score >= 0.45)  { label = 'WEAK SETUP',            color = '#94a3b8', glyph = '◯' }
-    else                     { label = 'NO TRADE',              color = '#ef4444', glyph = '⛔' }
-
-    return { score, label, color, glyph, filterPass, supertrendState, rsiSlope, volScore }
+    const label =
+      score >= 0.80 ? 'STRONG CONVICTION'
+      : score >= 0.65 ? 'WAIT FOR CONFIRMATION'
+      : score >= 0.45 ? 'WEAK SETUP'
+      : 'NO TRADE'
+    return {
+      score, label, filterPass, supertrendState, rsiSlope, volScore,
+      color: colorFor(score), glyph: glyphFor(score)
+    }
   })()
 
   // ─── R:R Gauge — segmented bar with break-even (1.0×) and target (2.0×) ticks.
@@ -374,7 +396,7 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
                 fontSize: '0.65rem', fontWeight: 800, padding: '0.18rem 0.55rem',
                 border: `1px solid ${actColor}`, color: actColor, borderRadius: '4px',
                 background: actBg,
-                textShadow: `0 0 4px rgba(${actColor === '#10b981' ? '16,185,129' : actColor === '#ef4444' ? '239,68,68' : actColor === '#14F195' ? '20,241,149' : actColor === '#FB7185' ? '251,113,133' : actColor === '#FBBF24' ? '251,191,36' : '245,158,11'}, 0.2)`,
+                textShadow: `0 0 4px rgba(${actColor === '#10b981' ? '16,185,129' : actColor === '#ef4444' ? '239,68,68' : actColor === '#14F195' ? '20,241,149' : actColor === '#FB7185' ? '251,113,133' : actColor === '#FBBF24' ? '251,191,36' : actColor === '#FCD34D' ? '252,211,77' : '245,158,11'}, 0.2)`,
                 cursor: 'pointer', whiteSpace: 'nowrap',
                 transition: 'transform 0.12s, filter 0.12s'
               }}

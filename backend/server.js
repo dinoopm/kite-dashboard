@@ -1538,12 +1538,63 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     }
   }
 
-  // ── Dynamic SL — use SuperTrend line whenever the trend is up ──
-  // The classic trailing-stop discipline for the SuperTrend strategy. Stops
-  // tighten as the trend matures and we never sell into noise.
-  if (supertrend?.signal === 'BULL' && supertrend.line) {
-    tradePlan.sl = supertrend.line;
-    // Recompute R:R against the new (usually tighter) stop.
+  // ── Smart Signal — weighted action score (Supertrend + RSI-slope + Volume) ──
+  // Soft-gates 'buy at top' setups in sideways markets. Component weights
+  // taken from the user's spec; each input is normalized to [0,1] before
+  // weighting. A −0.30 penalty applies when the discretionary filter
+  // (Supertrend GREEN ∧ 40 ≤ RSI ≤ 60) fails.
+  const smartSignal = (() => {
+    let supertrendState = 0;
+    if (supertrend?.signal === 'BULL') {
+      supertrendState = supertrend.flippedToBull ? 1.0 : 0.9;
+    }
+    let rsiSlope = 0.5;
+    if (rsiHistory.length >= 5) {
+      const delta = rsiHistory[rsiHistory.length - 1] - rsiHistory[rsiHistory.length - 5];
+      rsiSlope = Math.max(0, Math.min(1, (delta + 15) / 30));
+    }
+    const volScore = Math.max(0, Math.min(1, (volSurge - 0.8) / 2.2));
+
+    let score = 0.4 * supertrendState + 0.3 * rsiSlope + 0.3 * volScore;
+    const filterPass = supertrend?.signal === 'BULL' && rsi14 != null && rsi14 >= 40 && rsi14 <= 60;
+    if (!filterPass) score -= 0.3;
+    score = Math.max(0, Math.min(1, score));
+
+    let label;
+    if (score >= 0.80)      label = 'STRONG CONVICTION';
+    else if (score >= 0.65) label = 'WAIT FOR CONFIRMATION';
+    else if (score >= 0.45) label = 'WEAK SETUP';
+    else                    label = 'NO TRADE';
+
+    return {
+      score: +score.toFixed(3),
+      label,
+      filterPass,
+      supertrendState: +supertrendState.toFixed(2),
+      rsiSlope: +rsiSlope.toFixed(2),
+      volScore: +volScore.toFixed(2)
+    };
+  })();
+
+  // ── Smart-Signal-aware exit guard ──
+  // SuperTrend flipping red is a strict exit in the legacy rule, but it
+  // whipsaws in choppy regimes. Downgrade to WEAKENING when the broader
+  // Smart Signal still reads ≥ 0.65 — trader tightens stops instead of
+  // bailing on a single-bar signal flip.
+  if (tradePlan.action === 'BEARISH / EXIT' && smartSignal.score >= 0.65) {
+    tradePlan.action = 'WEAKENING';
+    tradePlan.reason = `SuperTrend flipped red but Smart Signal still ${smartSignal.score.toFixed(2)} (${smartSignal.label}). Setup weakening — tighten stop, don't panic-exit.`;
+  }
+
+  // ── ATR-derived SL/TG with Supertrend trail ──
+  // 1.5× ATR stop, 3.0× ATR target — natural ~2:1 R:R for any long setup.
+  // The Supertrend line takes over the stop when it sits above the ATR
+  // stop (i.e. tighter), preserving the trailing-stop discipline.
+  if (supertrend?.signal === 'BULL' && atr) {
+    const atrSL = +(currentPrice - 1.5 * atr).toFixed(1);
+    const atrTgt = +(currentPrice + 3.0 * atr).toFixed(1);
+    tradePlan.sl = (supertrend.line && supertrend.line > atrSL) ? supertrend.line : atrSL;
+    tradePlan.tgt = atrTgt;
     tradePlan.rrRatio = rrFor(tradePlan.tgt, tradePlan.sl);
   }
 
@@ -1588,6 +1639,7 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
       : null,
     isBreakout,
     tradePlan,
+    smartSignal,
     rsiHistory,
     confidence,
     confBreakdown,
