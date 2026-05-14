@@ -101,6 +101,43 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
     return null
   })()
 
+  // ─── SMART SIGNAL — Weighted Action Score blending Supertrend, RSI slope, volume.
+  //   score = 0.4·Supertrend + 0.3·RSI-slope + 0.3·Volume-surge
+  //   Soft penalty: −0.3 if filter (Supertrend GREEN ∧ 40 ≤ RSI ≤ 60) fails.
+  const smart = (() => {
+    const st = stock.supertrend
+    const rsi = stock.rsi
+    const rsiHist = stock.rsiHistory || []
+    const volSurge = stock.volSurge != null ? stock.volSurge : 1.0
+
+    // 1) Supertrend State (0..1) — BULL=0.9, fresh flip=1.0, BEAR=0.0
+    let supertrendState = 0
+    if (st?.signal === 'BULL') supertrendState = st.flippedToBull ? 1.0 : 0.9
+
+    // 2) RSI Slope (0..1) — last-5-bar delta linearly mapped from [−15, +15]
+    let rsiSlope = 0.5
+    if (rsiHist.length >= 5) {
+      const delta = rsiHist[rsiHist.length - 1] - rsiHist[rsiHist.length - 5]
+      rsiSlope = Math.max(0, Math.min(1, (delta + 15) / 30))
+    }
+
+    // 3) Volume Surge (0..1) — map [0.8×, 3.0×] → [0, 1]
+    const volScore = Math.max(0, Math.min(1, (volSurge - 0.8) / 2.2))
+
+    let score = 0.4 * supertrendState + 0.3 * rsiSlope + 0.3 * volScore
+    const filterPass = st?.signal === 'BULL' && rsi != null && rsi >= 40 && rsi <= 60
+    if (!filterPass) score -= 0.3
+    score = Math.max(0, Math.min(1, score))
+
+    let label, color, glyph
+    if (score >= 0.80)       { label = 'STRONG CONVICTION',     color = '#10b981', glyph = '⚡' }
+    else if (score >= 0.65)  { label = 'WAIT FOR CONFIRMATION', color = '#f59e0b', glyph = '⌛' }
+    else if (score >= 0.45)  { label = 'WEAK SETUP',            color = '#94a3b8', glyph = '◯' }
+    else                     { label = 'NO TRADE',              color = '#ef4444', glyph = '⛔' }
+
+    return { score, label, color, glyph, filterPass, supertrendState, rsiSlope, volScore }
+  })()
+
   // ─── R:R Gauge — segmented bar with break-even (1.0×) and target (2.0×) ticks.
   const RRGauge = ({ rr }) => {
     if (rr == null) return null
@@ -272,8 +309,58 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
           })()}
         </div>
 
-        {/* Trade Plan — Dual Horizons (Strategic over Tactical) */}
+        {/* Trade Plan — Smart Signal over Strategic over Tactical */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', alignItems: 'stretch', justifyContent: 'center', padding: '0 0.15rem' }}>
+
+          {/* ── SMART SIGNAL lane (weighted Action Score: 0.4 ST + 0.3 RSI-slope + 0.3 Vol) ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.5rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1.2px', fontWeight: 700, alignSelf: 'flex-start' }}>
+              ✨ Smart Signal
+            </span>
+            <span
+              title={
+                `Action Score = 0.4·ST + 0.3·RSI-slope + 0.3·Vol\n` +
+                `  Supertrend State : ${smart.supertrendState.toFixed(2)}\n` +
+                `  RSI Slope (5-bar): ${smart.rsiSlope.toFixed(2)}\n` +
+                `  Volume Surge     : ${smart.volScore.toFixed(2)}\n` +
+                (smart.filterPass
+                  ? `Filter PASSED (Supertrend GREEN ∧ 40≤RSI≤60)`
+                  : `Filter FAILED — −0.30 penalty (need Supertrend GREEN ∧ 40≤RSI≤60)`)
+              }
+              style={{
+                fontSize: '0.62rem', fontWeight: 800, padding: '0.18rem 0.5rem',
+                border: `1px solid ${smart.color}`, color: smart.color, borderRadius: '4px',
+                background: `${smart.color}1a`,
+                letterSpacing: '0.5px', whiteSpace: 'nowrap',
+                boxShadow: smart.score >= 0.8 ? `0 0 8px ${smart.color}55` : 'none'
+              }}
+            >
+              {smart.glyph} {smart.label}
+            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', maxWidth: '150px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '0.5rem', letterSpacing: '0.6px', color: 'var(--text-secondary)' }}>
+                <span style={{ textTransform: 'uppercase' }}>Score</span>
+                <span className="mono" style={{ color: smart.color, fontWeight: 800, fontSize: '0.62rem' }}>
+                  {smart.score.toFixed(2)}
+                </span>
+              </div>
+              <div style={{ position: 'relative', height: '4px', background: '#0b1220', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${smart.score * 100}%`, background: smart.color, transition: 'width 0.2s' }} />
+                <div style={{ position: 'absolute', left: '45%',  top: '-2px', bottom: '-2px', width: '1px', background: '#475569' }} title="0.45 — weak/no-trade boundary" />
+                <div style={{ position: 'absolute', left: '65%',  top: '-2px', bottom: '-2px', width: '1px', background: '#64748b' }} title="0.65 — wait-for-confirmation boundary" />
+                <div style={{ position: 'absolute', left: '80%',  top: '-2px', bottom: '-2px', width: '1px', background: '#10b981' }} title="0.80 — strong-conviction boundary" />
+              </div>
+            </div>
+            {!smart.filterPass && (
+              <span style={{ fontSize: '0.5rem', color: '#fbbf24', letterSpacing: '0.3px', fontStyle: 'italic', textAlign: 'center', lineHeight: 1.2 }}
+                    title="Filter: Supertrend GREEN AND 40 ≤ RSI ≤ 60. Failure deducts 0.30 from the score to prevent buying at tops in sideways markets.">
+                ⚠ Filter failed −0.30
+              </span>
+            )}
+          </div>
+
+          {/* hairline divider */}
+          <div style={{ height: '1px', background: 'linear-gradient(to right, transparent, rgba(255,255,255,0.08), transparent)' }} />
 
           {/* ── STRATEGIC lane (long-swing: SuperTrend + 200 EMA verdict) ── */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'center' }}>
