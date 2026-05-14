@@ -26,6 +26,7 @@ A real-time analytical dashboard for your Zerodha Kite portfolio — built with 
 - **Technical indicators** — RSI, SMA (5/20/50/200), EMA (12/26), MACD, Bollinger Bands
 - **Signal labels** — Bullish / Bearish / Neutral per indicator
 - **Fundamentals & Cashflow** via Yahoo Finance
+- **Quarterly Results** — last 4 quarters from screener.in with YoY/QoQ growth pills and trend sparklines. Rows: **Sales · Expenses · Operating Profit · Operating Margin · Net Profit · EPS**. Expenses use inverted polarity so rising costs render red.
 
 ### 🚨 Technical Alerts (Portfolio-wide)
 Portfolio-level technical scanner with per-stock conviction scoring and trade plans:
@@ -129,6 +130,7 @@ kite-dashboard/
 │   │   ├── large_deals.js      # NSE bulk/block deals → Supabase
 │   │   ├── top_gainers_losers.js  # NSE top gainers/losers → Supabase
 │   │   ├── volume_gainers.js   # NSE volume spurts → Supabase
+│   │   ├── fifty_two_week_high_low.js  # NSE 52-week H/L daily snapshot → Supabase
 │   │   └── surveillance.js     # NSE ASM/GSM list → Supabase
 │   └── package.json
 ├── frontend/
@@ -161,6 +163,7 @@ kite-dashboard/
 | `large_deals` | NSE bulk/block deals | `trade_date, symbol, client_name, deal_type, quantity` |
 | `top_gainers_losers` | NSE live analysis | `trade_date, symbol, index_name, category` |
 | `volume_gainers` | NSE volume spurts | `trade_date, symbol` |
+| `nse_52_week_high_low` | NSE 52-week H/L archive CSV | `trade_date, symbol, series` |
 | `surveillance` | NSE ASM/GSM list | — |
 
 ---
@@ -211,7 +214,7 @@ kite-dashboard/
 
 | Workflow | Schedule | Steps |
 |----------|----------|-------|
-| `fii_dii_sync.yml` | Mon–Fri at 7 PM & 8 PM IST | FII/DII → Participant OI → Large Deals → Top Gainers/Losers → Volume Gainers |
+| `fii_dii_sync.yml` | Mon–Fri at 7 PM & 8 PM IST | FII/DII → Participant OI → Large Deals → Top Gainers/Losers → Volume Gainers → 52-Week High/Low |
 | `surveillance_sync.yml` | Every Saturday at 5:30 AM IST | ASM/GSM list refresh |
 
 ---
