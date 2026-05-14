@@ -29,3 +29,7 @@ backend/backend.log
 # One-off debugging probes — keep them local, don't commit
 scratch*.py
 scratch*.js
+
+# local worktrees and secret-file backups
+.claude/
+.env*
