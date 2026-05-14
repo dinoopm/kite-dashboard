@@ -937,18 +937,16 @@ export default function SectorDetail() {
         </div>
 
         {/* Column Headers */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(200px, 1.2fr) minmax(240px, 1.5fr) minmax(140px, 1fr) minmax(120px, 0.6fr)', gap: '1rem', padding: '0 1rem 0.5rem 1rem', fontSize: '0.65rem', color: 'var(--text-secondary)', letterSpacing: '1px', fontWeight: 700 }}>
-          <div>SYMBOL / PRICE</div>
-          <div>CORE TECHNICALS <span className="info-icon">ⓘ</span></div>
-          <div style={{ textAlign: 'center' }}>MONEY FLOW <span className="info-icon">ⓘ</span></div>
-          <div style={{ textAlign: 'center' }}>TRADE PLAN <span className="info-icon">ⓘ</span></div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) minmax(280px, 1.3fr) minmax(420px, 2fr)', gap: '1.25rem', padding: '0 1.25rem 0.5rem 1.25rem', fontSize: '0.65rem', color: 'var(--text-secondary)', letterSpacing: '1px', fontWeight: 700 }}>
+          <div>IDENTITY</div>
           <div
             onClick={() => setAlertSortDir(d => d === 'desc' ? 'asc' : 'desc')}
-            style={{ textAlign: 'right', cursor: 'pointer' }}
-            title="Click to flip sort direction"
+            style={{ textAlign: 'center', cursor: 'pointer' }}
+            title="Smart Signal — click to flip sort direction"
           >
-            MOMENTUM {alertSortDir === 'desc' ? '↓' : '↑'}
+            ✨ SMART SIGNAL {alertSortDir === 'desc' ? '↓' : '↑'}
           </div>
+          <div>◆ ANALYSIS <span className="info-icon">ⓘ</span></div>
         </div>
 
         {filtered.length === 0 ? (

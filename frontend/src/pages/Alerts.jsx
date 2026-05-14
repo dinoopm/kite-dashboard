@@ -457,12 +457,10 @@ function Alerts() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {/* Column Headers */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(200px, 1.2fr) minmax(240px, 1.5fr) minmax(140px, 1fr) minmax(120px, 0.6fr)', gap: '1rem', padding: '0 1rem 0.5rem 1rem', fontSize: '0.65rem', color: 'var(--text-secondary)', letterSpacing: '1px', fontWeight: 700 }}>
-            <div onClick={() => requestSort('symbol')} className="sort-header" title="Filter alphabetically or by raw asset price">SYMBOL / PRICE {renderSortArrow('symbol')}</div>
-            <div onClick={() => requestSort('vwap')} className="sort-header" title="20-day VWAP deviation and RSI trends">CORE TECHNICALS <span className="info-icon">ⓘ</span> {renderSortArrow('vwap')}</div>
-            <div onClick={() => requestSort('aggressor')} className="sort-header" style={{ justifyContent: 'center' }} title="Chaikin-style money flow: right (Cyan) = accumulation, left (Red) = distribution">MONEY FLOW <span className="info-icon">ⓘ</span> {renderSortArrow('aggressor')}</div>
-            <div style={{ textAlign: 'center' }} title="Algorithmic entry and exit positioning">TRADE PLAN <span className="info-icon">ⓘ</span></div>
-            <div onClick={() => requestSort('confidence')} className="sort-header" style={{ justifyContent: 'flex-end' }} title="Momentum conviction score (0-100)">MOMENTUM {renderSortArrow('confidence')}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) minmax(280px, 1.3fr) minmax(420px, 2fr)', gap: '1.25rem', padding: '0 1.25rem 0.5rem 1.25rem', fontSize: '0.65rem', color: 'var(--text-secondary)', letterSpacing: '1px', fontWeight: 700 }}>
+            <div onClick={() => requestSort('symbol')} className="sort-header" title="Symbol, price, day change, holdings, and bullish-bias %">IDENTITY {renderSortArrow('symbol')}</div>
+            <div onClick={() => requestSort('confidence')} className="sort-header" style={{ justifyContent: 'center' }} title="Smart Signal — weighted action score (0.4·Supertrend + 0.3·RSI-slope + 0.3·Volume). Hover the cell for the breakdown.">✨ SMART SIGNAL {renderSortArrow('confidence')}</div>
+            <div title="Analysis — technicals, strategic verdict, R:R gauge, and tactical bias.">◆ ANALYSIS <span className="info-icon">ⓘ</span></div>
           </div>
 
           {filteredStocks.map(stock => (

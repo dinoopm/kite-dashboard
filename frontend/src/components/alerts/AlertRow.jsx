@@ -184,16 +184,21 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
     )
   }
 
+  // ─── Smart-Signal-driven entry block — disables Buy-flavoured actions
+  // when the Smart Signal verdict is below the WEAK band (score < 0.45).
+  const isBuyFlavoured = isStrongBuy || isBuyAction || isBreakoutAction || isTrendingWait
+  const smartBlocksEntry = isBuyFlavoured && smart.score < 0.45
+
   return (
     <div className="quant-row" style={{ display: 'flex', flexDirection: 'column' }}>
-      {/* Main Content Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(200px, 1.2fr) minmax(240px, 1.5fr) minmax(190px, 1.25fr) minmax(120px, 0.6fr)', gap: '1rem', padding: '0.6rem 1.25rem', alignItems: 'center' }}>
+      {/* 3-column grid — progressive disclosure, Smart Signal as hero */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) minmax(280px, 1.3fr) minmax(420px, 2fr)', gap: '1.25rem', padding: '0.8rem 1.25rem', alignItems: 'stretch' }}>
 
-        {/* Symbol & Price */}
-        <div>
+        {/* ═══ Col 1: IDENTITY ═══════════════════════════════════════ */}
+        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '0.3rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span style={{ color: dotColor, fontSize: '0.7rem', fontWeight: 800, width: '10px', textAlign: 'center' }}>{dotGlyph}</span>
-            <Link to={`/instrument/${stock.token}?symbol=${stock.symbol}`} style={{ fontSize: '1rem', fontWeight: '800', color: '#f8fafc', textDecoration: 'none', letterSpacing: '0.5px' }}>
+            <Link to={`/instrument/${stock.token}?symbol=${stock.symbol}`} style={{ fontSize: '1rem', fontWeight: 800, color: '#f8fafc', textDecoration: 'none', letterSpacing: '0.5px' }}>
               {stock.symbol}
             </Link>
             {stock.divergence && (
@@ -210,18 +215,13 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
               </span>
             )}
           </div>
-          <div className="mono" style={{ fontSize: '0.85rem', color: '#cbd5e1', marginTop: '0.2rem', marginLeft: '1.2rem', display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
+          <div className="mono" style={{ fontSize: '0.85rem', color: '#cbd5e1', marginLeft: '1.2rem', display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
             <span>{stock.price?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-            {stock.dayChangePct !== null && stock.dayChangePct !== undefined && (
-              <span
-                title={`Today vs previous close${stock.prevClose ? ` (₹${stock.prevClose})` : ''}`}
-                style={{
-                  fontSize: '0.65rem',
-                  fontWeight: 700,
-                  letterSpacing: '0.3px',
-                  color: stock.dayChangePct > 0 ? '#10b981' : stock.dayChangePct < 0 ? '#ef4444' : '#94a3b8'
-                }}
-              >
+            {stock.dayChangePct != null && (
+              <span style={{
+                fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.3px',
+                color: stock.dayChangePct > 0 ? '#10b981' : stock.dayChangePct < 0 ? '#ef4444' : '#94a3b8'
+              }}>
                 DAY {stock.dayChangePct > 0 ? '+' : ''}{stock.dayChangePct.toFixed(2)}%
               </span>
             )}
@@ -229,269 +229,236 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
           {showHoldingsFields && stock.quantity > 0 && (
             <div
               className="mono"
-              style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: '0.2rem', marginLeft: '1.2rem', letterSpacing: '0.3px', display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}
+              style={{ fontSize: '0.6rem', color: '#94a3b8', marginLeft: '1.2rem', letterSpacing: '0.3px', display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}
               title={`Today's rupee impact ${stock.dayChangeRupee >= 0 ? '+' : '−'}₹${Math.abs(stock.dayChangeRupee || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}; lifetime ₹${(stock.pnl || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
             >
               <span>Qty {stock.quantity} @ ₹{stock.avgPrice?.toFixed(1)}</span>
-              {stock.pnlPct !== null && stock.pnlPct !== undefined && (
-                <span style={{
-                  fontWeight: 700,
-                  color: stock.pnlPct > 0 ? '#10b981' : stock.pnlPct < 0 ? '#ef4444' : '#94a3b8'
-                }}>
+              {stock.pnlPct != null && (
+                <span style={{ fontWeight: 700, color: stock.pnlPct > 0 ? '#10b981' : stock.pnlPct < 0 ? '#ef4444' : '#94a3b8' }}>
                   {stock.pnlPct > 0 ? '+' : ''}{stock.pnlPct.toFixed(2)}%
                 </span>
               )}
             </div>
           )}
+          {/* Bullish Bias — demoted to small secondary metric. */}
+          <div
+            className="conviction-click"
+            onClick={onOpenConviction}
+            title="Click for bullish-bias breakdown"
+            style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginLeft: '1.2rem', marginTop: '0.15rem' }}
+          >
+            <span style={{ fontSize: '0.5rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.6px' }}>Bullish Bias</span>
+            {(() => {
+              const conf = stock.confidence
+              const cColor = conf > 75 ? '#10b981' : conf < 40 ? '#ef4444' : '#f59e0b'
+              return <span className="mono" style={{ fontSize: '0.85rem', fontWeight: 800, color: cColor }}>{conf}%</span>
+            })()}
+          </div>
         </div>
 
-        {/* Core Technicals */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span className="dotted-underline" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }} title="Price distance from the 20-day volume-weighted average. Positive = stretched above average (mean-reversion risk). This is NOT today's price change — see DAY % next to the price.">vs 20D AVG</span>
-            <span className="mono" style={{ fontSize: '0.9rem', color: devColor, fontWeight: 700 }}>
-              {dev > 0 ? '+' : ''}{dev.toFixed(2)}%
-            </span>
+        {/* ═══ Col 2: SMART SIGNAL — HERO ════════════════════════════ */}
+        <div
+          title={
+            `Action Score = 0.4·Supertrend + 0.3·RSI-slope + 0.3·Volume\n` +
+            `  Supertrend State : ${smart.supertrendState.toFixed(2)}\n` +
+            `  RSI Slope (5-bar): ${smart.rsiSlope.toFixed(2)}\n` +
+            `  Volume Surge     : ${smart.volScore.toFixed(2)}\n` +
+            (smart.filterPass
+              ? `Filter PASSED  (Supertrend GREEN ∧ 40 ≤ RSI ≤ 60)`
+              : `Filter FAILED — −0.30 penalty (need Supertrend GREEN ∧ 40 ≤ RSI ≤ 60)`)
+          }
+          style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            gap: '0.35rem', padding: '0.6rem',
+            borderRadius: '6px',
+            background: smart.score >= 0.8 ? `${smart.color}0d` : 'rgba(255,255,255,0.015)',
+            border: `1px solid ${smart.score >= 0.8 ? `${smart.color}33` : 'rgba(255,255,255,0.04)'}`,
+            boxShadow: smart.score >= 0.8 ? `inset 0 0 12px ${smart.color}1f` : 'none'
+          }}
+        >
+          <span style={{ fontSize: '0.55rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+            ✨ Smart Signal
+          </span>
+          <span style={{
+            fontSize: '0.7rem', fontWeight: 800, padding: '0.2rem 0.7rem',
+            border: `1px solid ${smart.color}`, color: smart.color, borderRadius: '4px',
+            background: `${smart.color}1a`,
+            letterSpacing: '0.6px', whiteSpace: 'nowrap',
+            boxShadow: smart.score >= 0.8 ? `0 0 10px ${smart.color}66` : 'none'
+          }}>
+            {smart.glyph} {smart.label}
+          </span>
+          {/* Hero score number */}
+          <div className="mono" style={{
+            fontSize: '2.4rem', fontWeight: 800, color: smart.color, lineHeight: 1,
+            textShadow: smart.score >= 0.8 ? `0 0 14px ${smart.color}55` : 'none',
+            letterSpacing: '-1px'
+          }}>
+            {smart.score.toFixed(2)}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span className="dotted-underline" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }} title="Relative Strength Index (14 Days) with 10-day sparkline.">RSI (14)</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span className="mono" style={{ fontSize: '0.9rem', color: stock.rsi > 70 ? '#ef4444' : stock.rsi < 30 ? '#10b981' : 'var(--text-secondary)', fontWeight: 700 }}>
+          {/* Gauge */}
+          <div style={{ width: '100%', maxWidth: '200px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+            <div style={{ position: 'relative', height: '5px', background: '#0b1220', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '1px' }}>
+              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${smart.score * 100}%`, background: smart.color, transition: 'width 0.2s' }} />
+              <div style={{ position: 'absolute', left: '45%', top: '-2px', bottom: '-2px', width: '1px', background: '#475569' }} />
+              <div style={{ position: 'absolute', left: '65%', top: '-2px', bottom: '-2px', width: '1px', background: '#64748b' }} />
+              <div style={{ position: 'absolute', left: '80%', top: '-2px', bottom: '-2px', width: '1px', background: '#10b981' }} />
+            </div>
+            <div className="mono" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.48rem', color: '#475569', letterSpacing: '0.4px' }}>
+              <span>0.00</span><span>0.45</span><span>0.65</span><span>0.80</span><span>1.00</span>
+            </div>
+          </div>
+          <span style={{ fontSize: '0.5rem', color: '#64748b', letterSpacing: '0.4px', fontStyle: 'italic' }}>
+            {smart.filterPass ? '✓ Filter passed' : '⚠ Filter blocked'} · hover for math
+          </span>
+        </div>
+
+        {/* ═══ Col 3: ANALYSIS (Strategic + Tactical merged) ═════════ */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem', justifyContent: 'center' }}>
+          <span style={{ fontSize: '0.55rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '1.5px', fontWeight: 700 }}>
+            ◆ Analysis
+          </span>
+
+          {/* Compact technicals strip */}
+          <div style={{ display: 'flex', gap: '1.2rem', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.65rem' }}>
+            {/* RSI + sparkline + ST badge */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span style={{ fontSize: '0.55rem', color: '#64748b', letterSpacing: '0.4px' }}>RSI</span>
+              <span className="mono" style={{ fontWeight: 700, color: stock.rsi > 70 ? '#ef4444' : stock.rsi < 30 ? '#10b981' : '#cbd5e1' }}>
                 {stock.rsi}
               </span>
               {rsiHistory.length > 0 && (
-                <svg width="40" height="20" style={{ overflow: 'visible' }}>
-                  <polyline points={sparkPoints} fill="none" stroke="#475569" strokeWidth="1.5" />
-                  <circle cx="40" cy={20 - ((lastRsi / 100) * 20)} r="2" fill={lastRsi > 70 ? '#ef4444' : lastRsi < 30 ? '#10b981' : '#cbd5e1'} />
+                <svg width="36" height="16" style={{ overflow: 'visible' }}>
+                  <polyline points={sparkPoints} fill="none" stroke="#475569" strokeWidth="1.3" />
+                  <circle cx="36" cy={20 - ((lastRsi / 100) * 20)} r="1.8" fill={lastRsi > 70 ? '#ef4444' : lastRsi < 30 ? '#10b981' : '#cbd5e1'} />
                 </svg>
               )}
-              {/* SuperTrend(10,3) badge — green = line below price (uptrend),
-                  coral = line above price (downtrend). Hover for the line value. */}
               {stock.supertrend && (() => {
-                const isBull = stock.supertrend.signal === 'BULL';
-                const teal = '#14F195', coral = '#FB7185';
-                const color = isBull ? teal : coral;
+                const isBull = stock.supertrend.signal === 'BULL'
+                const color = isBull ? '#14F195' : '#FB7185'
                 return (
                   <span
                     title={`SuperTrend(10,3): ${isBull ? 'Uptrend' : 'Downtrend'} · line ₹${stock.supertrend.line?.toFixed?.(2) ?? '—'}${stock.supertrend.flippedToBull ? ' · just flipped GREEN' : stock.supertrend.flippedToBear ? ' · just flipped RED' : ''}`}
                     style={{
-                      padding: '0.1rem 0.4rem',
-                      borderRadius: '4px',
-                      fontSize: '0.6rem',
-                      fontWeight: 800,
-                      letterSpacing: '0.5px',
-                      color,
+                      padding: '0.08rem 0.35rem', borderRadius: '3px',
+                      fontSize: '0.55rem', fontWeight: 800, letterSpacing: '0.5px', color,
                       background: isBull ? 'rgba(20,241,149,0.10)' : 'rgba(251,113,133,0.10)',
                       border: `1px solid ${isBull ? 'rgba(20,241,149,0.45)' : 'rgba(251,113,133,0.45)'}`,
-                      boxShadow: isBull ? '0 0 8px rgba(20,241,149,0.35)' : '0 0 6px rgba(251,113,133,0.30)',
+                      boxShadow: isBull ? '0 0 6px rgba(20,241,149,0.30)' : 'none'
                     }}
                   >
                     ST{stock.supertrend.flippedToBull ? '⚡' : ''}
                   </span>
-                );
+                )
+              })()}
+            </div>
+            {/* VWAP deviation */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }} title="Price distance from the 20-day volume-weighted average.">
+              <span style={{ fontSize: '0.55rem', color: '#64748b', letterSpacing: '0.4px' }}>vs 20D VWAP</span>
+              <span className="mono" style={{ fontWeight: 700, color: devColor }}>
+                {dev > 0 ? '+' : ''}{dev.toFixed(2)}%
+              </span>
+            </div>
+            {/* Money flow inline gauge */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }} title="Chaikin-style money flow index: +1 = heavy accumulation, -1 = heavy distribution.">
+              <span style={{ fontSize: '0.55rem', color: '#64748b', letterSpacing: '0.4px' }}>FLOW</span>
+              <div style={{ width: '70px', height: '4px', background: '#1e293b', position: 'relative' }}>
+                <div style={{ position: 'absolute', left: '50%', top: '-1.5px', bottom: '-1.5px', width: '1px', background: '#64748b' }} />
+                {agg < 0 && <div style={{ position: 'absolute', right: '50%', top: 0, height: '100%', width: `${rectWidth}%`, background: '#FF3D00' }} />}
+                {agg > 0 && <div style={{ position: 'absolute', left: '50%',  top: 0, height: '100%', width: `${rectWidth}%`, background: '#00E5FF' }} />}
+              </div>
+              <span className="mono" style={{ fontSize: '0.55rem', color: agg > 0 ? '#00E5FF' : agg < 0 ? '#FF3D00' : '#94a3b8', fontWeight: 700 }}>
+                {agg > 0 ? '+' : ''}{agg.toFixed(2)}
+              </span>
+              {stock.volSurge != null && stock.volSurge > 0 && (() => {
+                const side = stock.volumeConfirmedSide
+                const volColor = side === 'up' ? '#10b981' : side === 'down' ? '#ef4444' : '#94a3b8'
+                const volGlyph = side === 'up' ? '✓' : side === 'down' ? '✗' : ''
+                return (
+                  <span className="mono" style={{ fontSize: '0.55rem', color: volColor, letterSpacing: '0.3px' }}>
+                    VOL {stock.volSurge.toFixed(1)}× {volGlyph}
+                  </span>
+                )
               })()}
             </div>
           </div>
-        </div>
 
-        {/* Money Flow Gauge */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }} title="Chaikin-style money flow index: +1 = heavy accumulation, -1 = heavy distribution.">
-          <div style={{ width: '100%', maxWidth: '240px', height: '6px', background: '#1e293b', position: 'relative', borderRadius: '1px' }}>
-            <div style={{ position: 'absolute', left: '50%', top: '-2px', bottom: '-2px', width: '2px', background: '#64748b' }}></div>
-            {agg < 0 && (
-              <div style={{ position: 'absolute', right: '50%', top: 0, height: '100%', width: `${rectWidth}%`, background: '#FF3D00' }}></div>
-            )}
-            {agg > 0 && (
-              <div style={{ position: 'absolute', left: '50%', top: 0, height: '100%', width: `${rectWidth}%`, background: '#00E5FF' }}></div>
-            )}
-          </div>
-          <div className="mono" style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: '0.3rem', display: 'flex', justifyContent: 'space-between', width: '100%', maxWidth: '240px' }}>
-            <span>-1.0</span>
-            <span style={{ color: agg > 0 ? '#00E5FF' : agg < 0 ? '#FF3D00' : '#94a3b8' }}>{agg.toFixed(2)}</span>
-            <span>+1.0</span>
-          </div>
-          {stock.volSurge !== undefined && stock.volSurge > 0 && (() => {
-            const side = stock.volumeConfirmedSide
-            const volColor = side === 'up' ? '#10b981'
-              : side === 'down' ? '#ef4444'
-                : '#94a3b8'
-            const volGlyph = side === 'up' ? '✓'
-              : side === 'down' ? '✗'
-                : ''
-            const volTitle = side === 'up'
-              ? 'Accumulation confirmed — today up on ≥1.5× 20-day average volume'
-              : side === 'down'
-                ? 'Distribution confirmed — today down on ≥1.5× 20-day average volume (heavy selling)'
-                : 'Volume below 1.5× 20-day average'
-            return (
-              <div className="mono" style={{ fontSize: '0.55rem', color: volColor, marginTop: '0.2rem', letterSpacing: '0.5px' }} title={volTitle}>
-                VOL {stock.volSurge.toFixed(1)}× {volGlyph}
-              </div>
-            )
-          })()}
-        </div>
-
-        {/* Trade Plan — Smart Signal over Strategic over Tactical */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', alignItems: 'stretch', justifyContent: 'center', padding: '0 0.15rem' }}>
-
-          {/* ── SMART SIGNAL lane (weighted Action Score: 0.4 ST + 0.3 RSI-slope + 0.3 Vol) ── */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.5rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1.2px', fontWeight: 700, alignSelf: 'flex-start' }}>
-              ✨ Smart Signal
-            </span>
+          {/* Verdict + targets — disabled-styled when Smart Signal blocks entry */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '0.7rem', flexWrap: 'wrap',
+            opacity: smartBlocksEntry ? 0.45 : 1,
+            filter: smartBlocksEntry ? 'grayscale(80%)' : 'none',
+            transition: 'opacity 0.15s, filter 0.15s'
+          }}>
             <span
-              title={
-                `Action Score = 0.4·ST + 0.3·RSI-slope + 0.3·Vol\n` +
-                `  Supertrend State : ${smart.supertrendState.toFixed(2)}\n` +
-                `  RSI Slope (5-bar): ${smart.rsiSlope.toFixed(2)}\n` +
-                `  Volume Surge     : ${smart.volScore.toFixed(2)}\n` +
-                (smart.filterPass
-                  ? `Filter PASSED (Supertrend GREEN ∧ 40≤RSI≤60)`
-                  : `Filter FAILED — −0.30 penalty (need Supertrend GREEN ∧ 40≤RSI≤60)`)
-              }
+              title={smartBlocksEntry
+                ? `Smart Signal (${smart.score.toFixed(2)}) blocks this entry. ${tp.reason}`
+                : `${tp.reason}\n\nClick for full breakdown.`}
+              onClick={smartBlocksEntry ? undefined : onOpenTradePlan}
               style={{
-                fontSize: '0.62rem', fontWeight: 800, padding: '0.18rem 0.5rem',
-                border: `1px solid ${smart.color}`, color: smart.color, borderRadius: '4px',
-                background: `${smart.color}1a`,
-                letterSpacing: '0.5px', whiteSpace: 'nowrap',
-                boxShadow: smart.score >= 0.8 ? `0 0 8px ${smart.color}55` : 'none'
-              }}
-            >
-              {smart.glyph} {smart.label}
-            </span>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', maxWidth: '150px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '0.5rem', letterSpacing: '0.6px', color: 'var(--text-secondary)' }}>
-                <span style={{ textTransform: 'uppercase' }}>Score</span>
-                <span className="mono" style={{ color: smart.color, fontWeight: 800, fontSize: '0.62rem' }}>
-                  {smart.score.toFixed(2)}
-                </span>
-              </div>
-              <div style={{ position: 'relative', height: '4px', background: '#0b1220', border: '1px solid rgba(255,255,255,0.06)' }}>
-                <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${smart.score * 100}%`, background: smart.color, transition: 'width 0.2s' }} />
-                <div style={{ position: 'absolute', left: '45%',  top: '-2px', bottom: '-2px', width: '1px', background: '#475569' }} title="0.45 — weak/no-trade boundary" />
-                <div style={{ position: 'absolute', left: '65%',  top: '-2px', bottom: '-2px', width: '1px', background: '#64748b' }} title="0.65 — wait-for-confirmation boundary" />
-                <div style={{ position: 'absolute', left: '80%',  top: '-2px', bottom: '-2px', width: '1px', background: '#10b981' }} title="0.80 — strong-conviction boundary" />
-              </div>
-            </div>
-            {!smart.filterPass && (
-              <span style={{ fontSize: '0.5rem', color: '#fbbf24', letterSpacing: '0.3px', fontStyle: 'italic', textAlign: 'center', lineHeight: 1.2 }}
-                    title="Filter: Supertrend GREEN AND 40 ≤ RSI ≤ 60. Failure deducts 0.30 from the score to prevent buying at tops in sideways markets.">
-                ⚠ Filter failed −0.30
-              </span>
-            )}
-          </div>
-
-          {/* hairline divider */}
-          <div style={{ height: '1px', background: 'linear-gradient(to right, transparent, rgba(255,255,255,0.08), transparent)' }} />
-
-          {/* ── STRATEGIC lane (long-swing: SuperTrend + 200 EMA verdict) ── */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.5rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1.2px', fontWeight: 700, alignSelf: 'flex-start' }}>
-              ◆ Strategic
-            </span>
-            <span
-              title={`${tp.reason}\n\nClick for full breakdown.`}
-              onClick={onOpenTradePlan}
-              style={{
-                fontSize: '0.65rem', fontWeight: 800, padding: '0.18rem 0.55rem',
+                fontSize: '0.68rem', fontWeight: 800, padding: '0.2rem 0.6rem',
                 border: `1px solid ${actColor}`, color: actColor, borderRadius: '4px',
                 background: actBg,
-                textShadow: `0 0 4px rgba(${actColor === '#10b981' ? '16,185,129' : actColor === '#ef4444' ? '239,68,68' : actColor === '#14F195' ? '20,241,149' : actColor === '#FB7185' ? '251,113,133' : actColor === '#FBBF24' ? '251,191,36' : actColor === '#FCD34D' ? '252,211,77' : '245,158,11'}, 0.2)`,
-                cursor: 'pointer', whiteSpace: 'nowrap',
-                transition: 'transform 0.12s, filter 0.12s'
+                textShadow: smartBlocksEntry ? 'none' : `0 0 4px rgba(${actColor === '#10b981' ? '16,185,129' : actColor === '#ef4444' ? '239,68,68' : actColor === '#14F195' ? '20,241,149' : actColor === '#FB7185' ? '251,113,133' : actColor === '#FBBF24' ? '251,191,36' : actColor === '#FCD34D' ? '252,211,77' : '245,158,11'}, 0.2)`,
+                cursor: smartBlocksEntry ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
+                transition: 'transform 0.12s, filter 0.12s', pointerEvents: smartBlocksEntry ? 'none' : 'auto'
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.06)'; e.currentTarget.style.filter = 'brightness(1.15)' }}
-              onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.filter = 'brightness(1)' }}
             >
               {actGlyph}{tp.action}
             </span>
-
             {reasonChip && (
-              <span
-                title={tp.reason}
-                style={{ fontSize: '0.5rem', color: '#94a3b8', letterSpacing: '0.3px', fontStyle: 'italic', textAlign: 'center', lineHeight: 1.2 }}
-              >
+              <span title={tp.reason} style={{ fontSize: '0.55rem', color: '#94a3b8', fontStyle: 'italic', letterSpacing: '0.3px' }}>
                 Triggered by <span style={{ color: '#cbd5e1', fontStyle: 'normal', fontWeight: 600 }}>{reasonChip}</span>
               </span>
             )}
-
             {stock.isBreakout && (() => {
               const SHORT = { '3y': '3Y', '2y': '2Y', '1y': '1Y', '6m': '6M', '3m': '3M', '1m': '1M' }
               const winKey = stock.activeBreakoutWindow?.key
               const winShort = SHORT[winKey] || ''
               return (
-                <div style={{ fontSize: '0.55rem', fontWeight: 800, color: '#fcd34d', background: 'rgba(252,211,77,0.15)', padding: '0.1rem 0.4rem', borderRadius: '3px', letterSpacing: '0.5px' }} title={`Price broke through the ${stock.activeBreakoutWindow?.label || '20-day'} resistance ceiling.`}>
+                <span style={{ fontSize: '0.55rem', fontWeight: 800, color: '#fcd34d', background: 'rgba(252,211,77,0.15)', padding: '0.1rem 0.4rem', borderRadius: '3px', letterSpacing: '0.5px' }}>
                   🚀 {winShort ? `${winShort} ` : ''}BREAKOUT
-                </div>
+                </span>
               )
             })()}
+          </div>
 
-            {(tp.tgt || tp.sl) && (
-              <div className="mono" style={{ display: 'flex', gap: '0.6rem', fontSize: '0.55rem', color: 'var(--text-secondary)' }}>
+          {smartBlocksEntry && (
+            <div style={{
+              fontSize: '0.55rem', color: '#f87171', letterSpacing: '0.5px',
+              border: '1px solid rgba(248,113,113,0.3)', background: 'rgba(248,113,113,0.06)',
+              padding: '0.2rem 0.5rem', borderRadius: '3px', alignSelf: 'flex-start',
+              fontWeight: 600
+            }} title={`Smart Signal score is ${smart.score.toFixed(2)} (< 0.45). Entry actions are disabled to prevent buying into a hostile regime.`}>
+              ⛔ Smart Signal blocks new entries
+            </div>
+          )}
+
+          {/* TG / SL / RR — only when entry not blocked */}
+          {!smartBlocksEntry && (tp.tgt || tp.sl) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+              <div className="mono" style={{ display: 'flex', gap: '0.7rem', fontSize: '0.6rem', color: 'var(--text-secondary)' }}>
                 {tp.tgt && <span title="Target exit level">TG ₹{tp.tgt}</span>}
                 {tp.sl && <span title="Suggested stop loss" style={{ color: '#ef4444' }}>SL ₹{tp.sl}</span>}
               </div>
-            )}
+              {tp.rrRatio != null && <RRGauge rr={tp.rrRatio} />}
+            </div>
+          )}
 
-            {tp.rrRatio !== null && tp.rrRatio !== undefined && (tp.tgt || tp.sl) && (
-              <RRGauge rr={tp.rrRatio} />
-            )}
-          </div>
-
-          {/* hairline divider */}
-          <div style={{ height: '1px', background: 'linear-gradient(to right, transparent, rgba(255,255,255,0.08), transparent)' }} />
-
-          {/* ── TACTICAL lane (short-term: intraday bias from VWAP / day / flow) ── */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.5rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1.2px', fontWeight: 700, alignSelf: 'flex-start' }}>
-              ⚡ Tactical
-            </span>
-            <span
-              title={`Short-term intraday bias derived from day change, VWAP deviation, money flow, and RSI extremes.`}
-              style={{
-                fontSize: '0.6rem', fontWeight: 800, padding: '0.12rem 0.45rem',
-                border: `1px solid ${tactical.color}`, color: tactical.color, borderRadius: '4px',
-                background: 'transparent',
-                letterSpacing: '0.5px', whiteSpace: 'nowrap'
-              }}
-            >
+          {/* Tactical inline — single line, secondary */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', fontSize: '0.55rem', color: '#64748b', letterSpacing: '0.3px' }}>
+            <span style={{ textTransform: 'uppercase', fontWeight: 700 }}>Tactical</span>
+            <span style={{
+              padding: '0.06rem 0.4rem', border: `1px solid ${tactical.color}`, color: tactical.color,
+              borderRadius: '3px', fontWeight: 700, letterSpacing: '0.5px',
+              fontSize: '0.55rem'
+            }}>
               {tactical.glyph} {tactical.label}
             </span>
-            <span className="mono" style={{ fontSize: '0.5rem', color: '#64748b', letterSpacing: '0.3px' }}>
-              {stock.dayChangePct != null && (<>DAY {stock.dayChangePct > 0 ? '+' : ''}{stock.dayChangePct.toFixed(2)}%</>)}
-              {stock.dayChangePct != null && ' · '}
-              VWAP {dev > 0 ? '+' : ''}{dev.toFixed(1)}%
-            </span>
+            {stock.dayChangePct != null && <span className="mono">DAY {stock.dayChangePct > 0 ? '+' : ''}{stock.dayChangePct.toFixed(2)}%</span>}
+            <span className="mono">· VWAP {dev > 0 ? '+' : ''}{dev.toFixed(1)}%</span>
+            <span>· {trendLabel}</span>
           </div>
-
-          <span style={{ fontSize: '0.5rem', color: '#64748b', fontWeight: 600, textAlign: 'center', marginTop: '2px' }}>
-            ({trendLabel})
-          </span>
-        </div>
-
-        {/* Confidence Score — Click to open modal */}
-        <div
-          className="conviction-click"
-          style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'center', position: 'relative' }}
-          title="Click for conviction breakdown"
-          onClick={onOpenConviction}
-        >
-          {(() => {
-            const conf = stock.confidence
-            const cColor = conf > 75 ? '#10b981' : conf < 40 ? '#ef4444' : '#f59e0b'
-            const shadowAlpha = conf > 75 ? '16,185,129,0.4' : conf < 40 ? '239,68,68,0.4' : '245,158,11,0.4'
-            return (
-              <span className="mono" style={{ fontSize: '1.4rem', fontWeight: 800, color: cColor, textShadow: `0 0 8px rgba(${shadowAlpha})` }}>
-                {conf}%
-              </span>
-            )
-          })()}
-          <span
-            style={{ fontSize: '0.55rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}
-            title="Bullish bias: 0 = strongly bearish, 50 = balanced, 100 = strongly bullish. Click for breakdown."
-          >
-            Bullish Bias ⓘ
-          </span>
         </div>
       </div>
 
