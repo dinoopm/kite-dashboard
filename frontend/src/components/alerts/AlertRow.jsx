@@ -62,10 +62,73 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
     ? (stock.trendDirection === 'BULL' ? 'STRONG TREND ▲' : 'STRONG TREND ▼')
     : stock.regime
 
+  // ─── Tactical (short-term) signal — derived from intraday-flavoured fields.
+  // Strategic verdict lives in tp.action; this is the day-trader companion.
+  const tactical = (() => {
+    let score = 0
+    if (stock.dayChangePct > 0.5) score += 1
+    else if (stock.dayChangePct < -0.5) score -= 1
+    if (dev > 0.5) score += 1
+    else if (dev < -0.5) score -= 1
+    if (agg > 0.2) score += 1
+    else if (agg < -0.2) score -= 1
+    if (stock.rsi != null) {
+      if (stock.rsi > 75) score -= 0.5
+      else if (stock.rsi < 25) score += 0.5
+    }
+    if (score >= 1.5)  return { label: 'INTRADAY LONG',  color: '#10b981', glyph: '▲' }
+    if (score >= 0.5)  return { label: 'TILT UP',         color: '#34d399', glyph: '↗' }
+    if (score <= -1.5) return { label: 'INTRADAY SHORT',  color: '#ef4444', glyph: '▼' }
+    if (score <= -0.5) return { label: 'TILT DOWN',       color: '#f87171', glyph: '↘' }
+    return                  { label: 'NEUTRAL',           color: '#94a3b8', glyph: '■' }
+  })()
+
+  // ─── Compact "Triggered by …" chip — keyword-classify tp.reason.
+  const reasonChip = (() => {
+    const r = (tp.reason || '').toLowerCase()
+    if (r.includes('supertrend') && (r.includes('flipped red') || r.includes('just flipped'))) return 'Supertrend flip'
+    if (r.includes('supertrend') && r.includes('red')) return 'Supertrend bearish'
+    if (r.includes('supertrend green') || r.includes('200 ema')) return 'Trend + EMA confluence'
+    if (r.includes('overbought') || r.includes('stretched')) return 'RSI overheated'
+    if (r.includes('false breakout') || r.includes('bull trap')) return 'False breakout risk'
+    if (r.includes('breakout') && r.includes('volume')) return 'Volume breakout'
+    if (r.includes('breakout')) return 'Range breakout'
+    if (r.includes('wild swings') || r.includes('erratic')) return 'Wild swings'
+    if (r.includes('strict technical ceiling')) return 'Range compression'
+    if (r.includes('reward/risk is only')) return 'R:R too thin'
+    if (r.includes('book') && r.includes('partial')) return 'Book partials'
+    if (r.includes('no asymmetric edge')) return 'No edge'
+    return null
+  })()
+
+  // ─── R:R Gauge — segmented bar with break-even (1.0×) and target (2.0×) ticks.
+  const RRGauge = ({ rr }) => {
+    if (rr == null) return null
+    const warn = rr < 1.0
+    const fillPct = (Math.min(Math.max(rr, 0), 3) / 3) * 100
+    const color = warn ? '#ef4444' : rr < 1.5 ? '#f59e0b' : rr < 2 ? '#06b6d4' : '#10b981'
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', maxWidth: '150px' }}
+           title={`Reward-to-risk: ${rr.toFixed(2)}× · ticks at 1.0× (break-even) and 2.0× (target).${warn ? ' Below 1.0× — risk exceeds reward.' : ''}`}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '0.5rem', letterSpacing: '0.6px', color: 'var(--text-secondary)' }}>
+          <span style={{ textTransform: 'uppercase' }}>R:R</span>
+          <span className="mono" style={{ color, fontWeight: 800, fontSize: '0.62rem' }}>
+            {warn && <span style={{ marginRight: '2px' }}>⚠</span>}{rr.toFixed(2)}×
+          </span>
+        </div>
+        <div style={{ position: 'relative', height: '4px', background: '#0b1220', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${fillPct}%`, background: color, boxShadow: warn ? '0 0 6px rgba(239,68,68,0.55)' : 'none', transition: 'width 0.2s' }} />
+          <div style={{ position: 'absolute', left: '33.33%', top: '-2px', bottom: '-2px', width: '1px', background: warn ? '#fbbf24' : '#64748b' }} title="1.0× break-even" />
+          <div style={{ position: 'absolute', left: '66.66%', top: '-2px', bottom: '-2px', width: '1px', background: '#64748b' }} title="2.0× target" />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="quant-row" style={{ display: 'flex', flexDirection: 'column' }}>
       {/* Main Content Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(200px, 1.2fr) minmax(240px, 1.5fr) minmax(140px, 1fr) minmax(120px, 0.6fr)', gap: '1rem', padding: '0.6rem 1.25rem', alignItems: 'center' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(200px, 1.2fr) minmax(240px, 1.5fr) minmax(190px, 1.25fr) minmax(120px, 0.6fr)', gap: '1rem', padding: '0.6rem 1.25rem', alignItems: 'center' }}>
 
         {/* Symbol & Price */}
         <div>
@@ -209,53 +272,90 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
           })()}
         </div>
 
-        {/* Trade Plan */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.2rem' }}>
-          <span
-            title={`${tp.reason}\n\nClick for full breakdown.`}
-            onClick={onOpenTradePlan}
-            style={{
-              fontSize: '0.65rem', fontWeight: 800, padding: '0.15rem 0.5rem',
-              border: `1px solid ${actColor}`, color: actColor, borderRadius: '4px',
-              background: actBg,
-              textShadow: `0 0 4px rgba(${actColor === '#10b981' ? '16,185,129' : actColor === '#ef4444' ? '239,68,68' : actColor === '#14F195' ? '20,241,149' : actColor === '#FB7185' ? '251,113,133' : actColor === '#FBBF24' ? '251,191,36' : '245,158,11'}, 0.2)`,
-              cursor: 'pointer', whiteSpace: 'nowrap',
-              transition: 'transform 0.12s, filter 0.12s'
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.06)'; e.currentTarget.style.filter = 'brightness(1.15)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.filter = 'brightness(1)' }}
-          >
-            {actGlyph}{tp.action}
-          </span>
+        {/* Trade Plan — Dual Horizons (Strategic over Tactical) */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', alignItems: 'stretch', justifyContent: 'center', padding: '0 0.15rem' }}>
 
-          {stock.isBreakout && (() => {
-            const SHORT = { '3y': '3Y', '2y': '2Y', '1y': '1Y', '6m': '6M', '3m': '3M', '1m': '1M' }
-            const winKey = stock.activeBreakoutWindow?.key
-            const winShort = SHORT[winKey] || ''
-            return (
-              <div style={{ fontSize: '0.55rem', fontWeight: 800, color: '#fcd34d', background: 'rgba(252,211,77,0.15)', padding: '0.1rem 0.4rem', borderRadius: '3px', marginTop: '0.2rem', letterSpacing: '0.5px' }} title={`Price broke through the ${stock.activeBreakoutWindow?.label || '20-day'} resistance ceiling.`}>
-                🚀 {winShort ? `${winShort} ` : ''}BREAKOUT
+          {/* ── STRATEGIC lane (long-swing: SuperTrend + 200 EMA verdict) ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.5rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1.2px', fontWeight: 700, alignSelf: 'flex-start' }}>
+              ◆ Strategic
+            </span>
+            <span
+              title={`${tp.reason}\n\nClick for full breakdown.`}
+              onClick={onOpenTradePlan}
+              style={{
+                fontSize: '0.65rem', fontWeight: 800, padding: '0.18rem 0.55rem',
+                border: `1px solid ${actColor}`, color: actColor, borderRadius: '4px',
+                background: actBg,
+                textShadow: `0 0 4px rgba(${actColor === '#10b981' ? '16,185,129' : actColor === '#ef4444' ? '239,68,68' : actColor === '#14F195' ? '20,241,149' : actColor === '#FB7185' ? '251,113,133' : actColor === '#FBBF24' ? '251,191,36' : '245,158,11'}, 0.2)`,
+                cursor: 'pointer', whiteSpace: 'nowrap',
+                transition: 'transform 0.12s, filter 0.12s'
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.06)'; e.currentTarget.style.filter = 'brightness(1.15)' }}
+              onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.filter = 'brightness(1)' }}
+            >
+              {actGlyph}{tp.action}
+            </span>
+
+            {reasonChip && (
+              <span
+                title={tp.reason}
+                style={{ fontSize: '0.5rem', color: '#94a3b8', letterSpacing: '0.3px', fontStyle: 'italic', textAlign: 'center', lineHeight: 1.2 }}
+              >
+                Triggered by <span style={{ color: '#cbd5e1', fontStyle: 'normal', fontWeight: 600 }}>{reasonChip}</span>
+              </span>
+            )}
+
+            {stock.isBreakout && (() => {
+              const SHORT = { '3y': '3Y', '2y': '2Y', '1y': '1Y', '6m': '6M', '3m': '3M', '1m': '1M' }
+              const winKey = stock.activeBreakoutWindow?.key
+              const winShort = SHORT[winKey] || ''
+              return (
+                <div style={{ fontSize: '0.55rem', fontWeight: 800, color: '#fcd34d', background: 'rgba(252,211,77,0.15)', padding: '0.1rem 0.4rem', borderRadius: '3px', letterSpacing: '0.5px' }} title={`Price broke through the ${stock.activeBreakoutWindow?.label || '20-day'} resistance ceiling.`}>
+                  🚀 {winShort ? `${winShort} ` : ''}BREAKOUT
+                </div>
+              )
+            })()}
+
+            {(tp.tgt || tp.sl) && (
+              <div className="mono" style={{ display: 'flex', gap: '0.6rem', fontSize: '0.55rem', color: 'var(--text-secondary)' }}>
+                {tp.tgt && <span title="Target exit level">TG ₹{tp.tgt}</span>}
+                {tp.sl && <span title="Suggested stop loss" style={{ color: '#ef4444' }}>SL ₹{tp.sl}</span>}
               </div>
-            )
-          })()}
+            )}
 
-          {(tp.tgt || tp.sl) && (
-            <div style={{ display: 'flex', gap: '0.6rem', fontSize: '0.55rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-              {tp.tgt && <span title="Target exit level">TG: ₹{tp.tgt}</span>}
-              {tp.sl && <span title="Suggested stop loss" style={{ color: '#ef4444' }}>SL: ₹{tp.sl}</span>}
-            </div>
-          )}
+            {tp.rrRatio !== null && tp.rrRatio !== undefined && (tp.tgt || tp.sl) && (
+              <RRGauge rr={tp.rrRatio} />
+            )}
+          </div>
 
-          {tp.rrRatio !== null && tp.rrRatio !== undefined && (tp.tgt || tp.sl) && (
-            <div style={{
-              fontSize: '0.55rem', fontWeight: 700, letterSpacing: '0.5px',
-              color: tp.rrRatio >= 2 ? '#10b981' : tp.rrRatio >= 1.5 ? '#06b6d4' : '#94a3b8'
-            }} title="Reward-to-risk ratio: (TG − price) / (price − SL)">
-              R:R {tp.rrRatio}×
-            </div>
-          )}
+          {/* hairline divider */}
+          <div style={{ height: '1px', background: 'linear-gradient(to right, transparent, rgba(255,255,255,0.08), transparent)' }} />
 
-          <span style={{ fontSize: '0.5rem', color: '#64748b', fontWeight: 600, marginTop: '2px' }}>
+          {/* ── TACTICAL lane (short-term: intraday bias from VWAP / day / flow) ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.5rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '1.2px', fontWeight: 700, alignSelf: 'flex-start' }}>
+              ⚡ Tactical
+            </span>
+            <span
+              title={`Short-term intraday bias derived from day change, VWAP deviation, money flow, and RSI extremes.`}
+              style={{
+                fontSize: '0.6rem', fontWeight: 800, padding: '0.12rem 0.45rem',
+                border: `1px solid ${tactical.color}`, color: tactical.color, borderRadius: '4px',
+                background: 'transparent',
+                letterSpacing: '0.5px', whiteSpace: 'nowrap'
+              }}
+            >
+              {tactical.glyph} {tactical.label}
+            </span>
+            <span className="mono" style={{ fontSize: '0.5rem', color: '#64748b', letterSpacing: '0.3px' }}>
+              {stock.dayChangePct != null && (<>DAY {stock.dayChangePct > 0 ? '+' : ''}{stock.dayChangePct.toFixed(2)}%</>)}
+              {stock.dayChangePct != null && ' · '}
+              VWAP {dev > 0 ? '+' : ''}{dev.toFixed(1)}%
+            </span>
+          </div>
+
+          <span style={{ fontSize: '0.5rem', color: '#64748b', fontWeight: 600, textAlign: 'center', marginTop: '2px' }}>
             ({trendLabel})
           </span>
         </div>
