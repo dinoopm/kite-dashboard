@@ -345,6 +345,22 @@ function Instrument() {
           Fundamentals
         </button>
         <button
+          onClick={() => setActiveTab('quarterly')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'quarterly' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'quarterly' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '0.5rem 1rem',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'quarterly' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+            fontSize: '1rem'
+          }}
+        >
+          Quarterly Results
+        </button>
+        <button
           onClick={() => setActiveTab('cashflow')}
           style={{
             background: 'transparent',
@@ -652,6 +668,134 @@ function Instrument() {
           )}
         </>
       )}
+
+      {activeTab === 'quarterly' && (() => {
+        // ── Quarterly Results comparison ────────────────────────────────
+        // Reuses the /api/cashflow response (no extra fetch). We force a
+        // quarterly view here regardless of the cashflow tab toggle, since
+        // YoY comparison is meaningful on quarterly data only.
+        const isReady = cashflowType === 'quarterly' && Array.isArray(cashflow);
+        const quarters = isReady ? [...cashflow].sort((a, b) => new Date(a.date) - new Date(b.date)) : [];
+        const last4 = quarters.slice(-4);
+
+        // Indian FY label: Apr–Jun = Q1, Jul–Sep = Q2, Oct–Dec = Q3, Jan–Mar = Q4.
+        // FY = calendar year if month >= 4, else year-1. Display as "Q2 FY26".
+        const formatFY = (date) => {
+          const d = new Date(date);
+          const m = d.getMonth() + 1;
+          const y = d.getFullYear();
+          const q = m <= 3 ? 4 : m <= 6 ? 1 : m <= 9 ? 2 : 3;
+          const fy = m >= 4 ? y + 1 : y;
+          return `Q${q} FY${String(fy).slice(-2)}`;
+        };
+
+        // Find the row 4 quarters earlier than `target` (same period prev year).
+        // Yahoo's quarter dates can drift by a few days, so match by FY label.
+        const findYoYRow = (targetRow) => {
+          if (!targetRow) return null;
+          const targetLabel = formatFY(targetRow.date);
+          const targetFy = parseInt(targetLabel.slice(targetLabel.indexOf('FY') + 2), 10);
+          const targetQ = parseInt(targetLabel.charAt(1), 10);
+          const prevFyLabel = `Q${targetQ} FY${String(targetFy - 1).padStart(2, '0').slice(-2)}`;
+          return quarters.find(r => formatFY(r.date) === prevFyLabel) || null;
+        };
+
+        const fmtCr = (v) => {
+          if (v == null || v === 0) return '—';
+          const cr = v / 1e7;
+          // Show one decimal for values < 1000 Cr, integer otherwise
+          return `₹${cr.toLocaleString('en-IN', { maximumFractionDigits: Math.abs(cr) < 1000 ? 1 : 0 })} Cr`;
+        };
+        const fmtEPS = (v) => (v == null || v === 0) ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+        // YoY %: returns { pct, label, color } or null if comparison missing.
+        const computeYoY = (curr, prev) => {
+          if (curr == null || prev == null || prev === 0) return null;
+          const pct = ((curr - prev) / Math.abs(prev)) * 100;
+          const positive = pct >= 0;
+          // Intensity by magnitude — pale, normal, saturated.
+          const abs = Math.abs(pct);
+          let color;
+          if (abs < 5)        color = positive ? '#34d399' : '#fca5a5';   // pale
+          else if (abs < 15)  color = positive ? '#10b981' : '#ef4444';   // normal
+          else                color = positive ? '#059669' : '#dc2626';   // saturated
+          return {
+            pct,
+            label: `${positive ? '↑' : '↓'} ${abs.toFixed(1)}%`,
+            color,
+            weight: abs >= 15 ? 800 : 700,
+          };
+        };
+
+        const rows = [
+          { key: 'totalRevenue',    label: 'Sales',            fmt: fmtCr,  field: 'totalRevenue' },
+          { key: 'operatingIncome', label: 'Operating Profit', fmt: fmtCr,  field: 'operatingIncome' },
+          { key: 'netIncome',       label: 'Net Profit',       fmt: fmtCr,  field: 'netIncome' },
+          { key: 'dilutedEPS',      label: 'EPS',              fmt: fmtEPS, field: 'dilutedEPS' },
+        ];
+
+        return (
+          <section className="glass-panel" style={{ marginTop: '1rem', padding: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <h2 style={{ margin: 0 }}>Quarterly Results — last 4 quarters</h2>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>YoY growth vs same quarter previous year · Yahoo Finance</span>
+            </div>
+            {(!isReady || last4.length === 0) ? (
+              <p style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '2rem' }}>
+                {cashflowType !== 'quarterly'
+                  ? 'Switch the Cashflow Chart tab to "Quarterly" first — this view shares the same underlying data.'
+                  : cashflow == null
+                    ? 'Loading…'
+                    : 'Quarterly comparison data is not available for this instrument.'}
+              </p>
+            ) : (
+              <div style={{ overflowX: 'auto', marginTop: '1rem' }}>
+                <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.9rem' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: 'left', padding: '0.65rem 0.75rem', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.75rem', letterSpacing: '0.5px', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Metric</th>
+                      {last4.map(q => (
+                        <th key={q.date} style={{ textAlign: 'right', padding: '0.65rem 0.75rem', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.75rem', letterSpacing: '0.5px', borderBottom: '1px solid var(--border)' }}>
+                          {formatFY(q.date)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(row => (
+                      <tr key={row.key}>
+                        <td style={{ textAlign: 'left', padding: '0.85rem 0.75rem', color: 'var(--text-primary)', fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          {row.label}
+                        </td>
+                        {last4.map((q, idx) => {
+                          const value = q[row.field];
+                          const prev = findYoYRow(q);
+                          const prevValue = prev?.[row.field];
+                          const yoy = computeYoY(value, prevValue);
+                          return (
+                            <td key={q.date + idx} style={{ textAlign: 'right', padding: '0.85rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                              <div style={{ color: 'var(--text-primary)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                                {row.fmt(value)}
+                              </div>
+                              {yoy ? (
+                                <div style={{ fontSize: '0.72rem', fontWeight: yoy.weight, color: yoy.color, marginTop: '0.15rem' }}>
+                                  {yoy.label}
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>—</div>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        );
+      })()}
 
       {activeTab === 'cashflow' && (
         <section className="glass-panel" style={{ marginTop: '1rem', height: '500px', display: 'flex', flexDirection: 'column' }}>

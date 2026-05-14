@@ -1614,7 +1614,13 @@ app.get('/api/cashflow/:symbol', async (req, res) => {
       financingCashFlow: item.financingCashFlow || 0,
       freeCashFlow: item.freeCashFlow || 0,
       netIncome: item.netIncome || 0,
-      totalRevenue: item.totalRevenue || 0
+      totalRevenue: item.totalRevenue || 0,
+      // Added for the Quarterly Results tab on the Instrument page. Yahoo's
+      // fundamentalsTimeSeries (module:'all', type:'quarterly') exposes
+      // operatingIncome and dilutedEPS directly — verified against
+      // RELIANCE.NS response shape.
+      operatingIncome: item.operatingIncome || 0,
+      dilutedEPS: item.dilutedEPS ?? null
     })).filter(item =>
       item.operatingCashFlow !== 0 ||
       item.investingCashFlow !== 0 ||
