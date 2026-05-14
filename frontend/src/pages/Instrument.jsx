@@ -726,25 +726,18 @@ function Instrument() {
         const quarters = isReady ? [...screenerQuarterly.quarters].sort((a, b) => a.sortKey - b.sortKey) : [];
 
         const labelFromQFy = (q, fy) => `Q${q} FY${String(fy).slice(-2)}`;
-        const prevQuarter = (q, fy) => q === 1 ? { q: 4, fy: fy - 1 } : { q: q - 1, fy };
         const prevYearQuarter = (q, fy) => ({ q, fy: fy - 1 });
 
         // Build a label → quarter-row map. Screener rows already carry q/fy/label.
         const byLabel = {};
         for (const row of quarters) byLabel[row.label] = row;
 
-        // 4 consecutive labels ending at the latest available quarter.
-        const latest = quarters.length > 0 ? quarters[quarters.length - 1] : null;
-        const columns = [];
-        if (latest) {
-          let cur = { q: latest.q, fy: latest.fy };
-          const stack = [];
-          for (let i = 0; i < 4; i++) {
-            stack.unshift({ ...cur, label: labelFromQFy(cur.q, cur.fy) });
-            cur = prevQuarter(cur.q, cur.fy);
-          }
-          columns.push(...stack);
-        }
+        // Last 4 quarters that screener actually reports. Building synthetic
+        // consecutive labels here would render empty columns for companies with
+        // sparse screener history (recent IPOs like AEQUS, or stocks whose
+        // latest filing hasn't been parsed yet). The YoY pill below still does
+        // a same-quarter-previous-year lookup, so gaps elsewhere stay handled.
+        const columns = quarters.slice(-4);
 
         // Operating Margin: screener exposes OPM directly as `opm` (percent
         // already). Fall back to computed margin if absent.
