@@ -1644,7 +1644,43 @@ app.get('/api/cashflow/:symbol', async (req, res) => {
 // consecutive quarters with no gaps. Cached aggressively because quarterly
 // data only changes 4 times a year — also keeps us off screener's radar.
 const SCREENER_TTL = 12 * 60 * 60 * 1000; // 12h
-const screenerCache = {}; // symbol -> { data, ts }
+const screenerCache = {}; // symbol -> { data, ts } — keeps the parsed quarterly payload
+const screenerHtmlCache = {}; // symbol -> { html, ts } — raw HTML shared across endpoints
+const screenerHtmlInflight = {}; // symbol -> Promise so concurrent requests dedupe
+
+// Shared HTML fetch. Multiple endpoints scrape the same page; this caches the
+// raw HTML so /api/screener-quarterly and /api/screener-cashflow don't each
+// hit screener.in independently.
+async function fetchScreenerHTML(symbol) {
+  const cached = screenerHtmlCache[symbol];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) return { html: cached.html, hit: true };
+  if (screenerHtmlInflight[symbol]) return screenerHtmlInflight[symbol];
+
+  const url = `https://www.screener.in/company/${encodeURIComponent(symbol)}/`;
+  const p = (async () => {
+    try {
+      const r = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
+      if (!r.ok) {
+        const err = new Error(`Screener returned ${r.status}`);
+        err.status = r.status;
+        throw err;
+      }
+      const html = await r.text();
+      screenerHtmlCache[symbol] = { html, ts: Date.now() };
+      return { html, hit: false };
+    } finally {
+      delete screenerHtmlInflight[symbol];
+    }
+  })();
+  screenerHtmlInflight[symbol] = p;
+  return p;
+}
 
 // Convert "Mar 2023" cell header to an Indian-FY label + sortable key.
 function parseScreenerHeader(text) {
@@ -1729,21 +1765,7 @@ app.get('/api/screener-quarterly/:symbol', async (req, res) => {
     return res.json({ ...cached.data, cached: true });
   }
   try {
-    const url = `https://www.screener.in/company/${encodeURIComponent(symbol)}/`;
-    const r = await fetch(url, {
-      headers: {
-        // A real-looking UA. Screener serves bots a stripped page; this gets us full HTML.
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-    });
-    if (!r.ok) {
-      // 404 = unknown ticker; everything else = upstream issue worth surfacing.
-      return res.status(r.status === 404 ? 404 : 502)
-        .json({ error: `Screener returned ${r.status}`, fallback: 'yahoo' });
-    }
-    const html = await r.text();
+    const { html } = await fetchScreenerHTML(symbol);
     const quarters = parseScreenerQuarterly(html);
     if (quarters.length === 0) {
       return res.status(502).json({ error: 'No quarterly data parsed', fallback: 'yahoo' });
@@ -1753,7 +1775,77 @@ app.get('/api/screener-quarterly/:symbol', async (req, res) => {
     res.json({ ...payload, cached: false });
   } catch (err) {
     console.error(`[screener-quarterly] ${symbol}:`, err.message);
-    res.status(500).json({ error: err.message, fallback: 'yahoo' });
+    res.status(err.status === 404 ? 404 : (err.status ? 502 : 500))
+      .json({ error: err.message, fallback: 'yahoo' });
+  }
+});
+
+// ─── Screener cashflow (annual) ──────────────────────────────────
+// Indian companies don't file quarterly cashflow statements in their
+// standalone disclosures, so screener only carries annual cashflow. Returns
+// up to 12 fiscal years with CFO/CFI/CFF/Net + Free Cash Flow already
+// calculated (saves us re-doing FCF math).
+const SCREENER_CASHFLOW_ROW_MAP = {
+  'Cash from Operating Activity': 'operatingCashFlow',
+  'Cash from Investing Activity': 'investingCashFlow',
+  'Cash from Financing Activity': 'financingCashFlow',
+  'Net Cash Flow': 'netCashFlow',
+  'Free Cash Flow': 'freeCashFlow',
+};
+
+function parseScreenerCashflow(html) {
+  const $ = cheerio.load(html);
+  const section = $('section#cash-flow');
+  if (section.length === 0) throw new Error('Cashflow section not found on screener page');
+  const table = section.find('table.data-table').first();
+  if (table.length === 0) throw new Error('Cashflow table not found');
+
+  // Headers are fiscal-year ends (e.g. "Mar 2024" = FY24). Build a label per column.
+  const headerCells = table.find('thead th').toArray();
+  const columns = headerCells.slice(1).map(el => {
+    const parsed = parseScreenerHeader($(el).text());
+    if (!parsed) return null;
+    // For annual cashflow, label by FY only (the Q is always FY-end Q4 = Mar).
+    return { ...parsed, fyLabel: `FY${String(parsed.fy).slice(-2)}` };
+  }).filter(Boolean);
+  if (columns.length === 0) throw new Error('No cashflow year columns parsed');
+
+  table.find('tbody tr').each((_, tr) => {
+    const tds = $(tr).find('td').toArray();
+    if (tds.length === 0) return;
+    const rawLabel = $(tds[0]).text().trim().replace(/\s*\+\s*$/, '').replace(/\s+/g, ' ');
+    const field = SCREENER_CASHFLOW_ROW_MAP[rawLabel];
+    if (!field) return;
+    tds.slice(1).forEach((td, i) => {
+      if (i >= columns.length) return;
+      columns[i][field] = parseNumberCell($(td).text());
+    });
+  });
+
+  return columns;
+}
+
+const screenerCashflowCache = {};
+
+app.get('/api/screener-cashflow/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const cached = screenerCashflowCache[symbol];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) {
+    return res.json({ ...cached.data, cached: true });
+  }
+  try {
+    const { html } = await fetchScreenerHTML(symbol);
+    const years = parseScreenerCashflow(html);
+    if (years.length === 0) {
+      return res.status(502).json({ error: 'No cashflow data parsed', fallback: 'yahoo' });
+    }
+    const payload = { source: 'screener.in', symbol, period: 'annual', years };
+    screenerCashflowCache[symbol] = { data: payload, ts: Date.now() };
+    res.json({ ...payload, cached: false });
+  } catch (err) {
+    console.error(`[screener-cashflow] ${symbol}:`, err.message);
+    res.status(err.status === 404 ? 404 : (err.status ? 502 : 500))
+      .json({ error: err.message, fallback: 'yahoo' });
   }
 });
 

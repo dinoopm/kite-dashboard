@@ -14,7 +14,7 @@ function Instrument() {
   const [quote, setQuote] = useState(null)
   const [indicators, setIndicators] = useState(null)
   const [fundamentals, setFundamentals] = useState(null)
-  const [cashflow, setCashflow] = useState(null)
+  // cashflow state retired — both tabs now use screener-backed state below.
   // Company name sourced from Kite (search_instruments) — populates faster than
   // Yahoo fundamentals and is canonical for Indian tickers.
   const [kiteName, setKiteName] = useState(null)
@@ -22,11 +22,16 @@ function Instrument() {
   // Indian tickers — no gaps, 13 quarters of history typically).
   const [screenerQuarterly, setScreenerQuarterly] = useState(null)
   const [screenerError, setScreenerError] = useState(null)
+  // Annual cashflow scraped from the same screener page (separate cache entry).
+  // Yahoo's quarterly cashflow was synthesised; Indian companies only file
+  // annual cashflow in standalone disclosures anyway.
+  const [screenerCashflow, setScreenerCashflow] = useState(null)
+  const [screenerCashflowError, setScreenerCashflowError] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
   const [activeTab, setActiveTab] = useState('technicals')
-  const [cashflowType, setCashflowType] = useState('quarterly')
+  // cashflowType toggle removed — screener has only annual cashflow.
 
   // Fetch live quote
   useEffect(() => {
@@ -95,6 +100,32 @@ function Instrument() {
     return () => controller.abort();
   }, [symbol])
 
+  // Fetch annual cashflow from screener.in (same page, separate parser).
+  useEffect(() => {
+    if (!symbol) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetchWithAbort(`/api/screener-cashflow/${symbol}`, { signal: controller.signal });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data?.years) && data.years.length > 0) {
+            setScreenerCashflow(data);
+          } else {
+            setScreenerCashflowError('Screener returned no cashflow rows');
+          }
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setScreenerCashflowError(err.error || `Screener fetch failed (${res.status})`);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        setScreenerCashflowError(e.message);
+      }
+    })();
+    return () => controller.abort();
+  }, [symbol])
+
   // Fetch indicators
   useEffect(() => {
     const controller = new AbortController();
@@ -146,23 +177,9 @@ function Instrument() {
     return () => controller.abort();
   }, [symbol]);
 
-  useEffect(() => {
-    if (!symbol) return;
-    const controller = new AbortController();
-    (async () => {
-      try {
-        const res = await fetchWithAbort(`/api/cashflow/${symbol}?type=${cashflowType}`, { signal: controller.signal });
-        if (res.ok) {
-          const data = await res.json();
-          setCashflow(data);
-        }
-      } catch (e) {
-        if (e.name === 'AbortError') return;
-        console.error("Failed to fetch cashflow", e);
-      }
-    })();
-    return () => controller.abort();
-  }, [symbol, cashflowType]);
+  // (Yahoo /api/cashflow fetch was here — removed when both Quarterly Results
+  // and Cashflow Chart switched to screener.in. Backend route stays around
+  // for now in case anything else hits it.)
 
   // Fetch historical data
   useEffect(() => {
@@ -916,7 +933,7 @@ function Instrument() {
                   </tbody>
                 </table>
                 <div style={{ marginTop: '0.75rem', fontSize: '0.7rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                  Source: screener.in (standalone, ₹ Cr). Operating Margin uses percentage-point change. Cashflow Chart tab still uses Yahoo (consolidated) — small numerical differences between the two tabs are expected.
+                  Source: screener.in (standalone, ₹ Cr). Operating Margin uses percentage-point change. Quarterly results refresh once every 12 hours.
                 </div>
               </div>
             )}
@@ -924,79 +941,68 @@ function Instrument() {
         );
       })()}
 
-      {activeTab === 'cashflow' && (
-        <section className="glass-panel" style={{ marginTop: '1rem', height: '500px', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h2 style={{ margin: 0 }}>Financials / Cashflow Analysis (Yahoo Finance)</h2>
-            <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--bg-dark)', padding: '0.25rem', borderRadius: '4px' }}>
-              <button
-                onClick={() => setCashflowType('quarterly')}
-                style={{
-                  background: cashflowType === 'quarterly' ? 'var(--accent)' : 'transparent',
-                  color: cashflowType === 'quarterly' ? '#fff' : 'var(--text-secondary)',
-                  border: 'none',
-                  padding: '4px 12px',
-                  borderRadius: '3px',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem'
-                }}
-              >
-                Quarterly
-              </button>
-              <button
-                onClick={() => setCashflowType('annual')}
-                style={{
-                  background: cashflowType === 'annual' ? 'var(--accent)' : 'transparent',
-                  color: cashflowType === 'annual' ? '#fff' : 'var(--text-secondary)',
-                  border: 'none',
-                  padding: '4px 12px',
-                  borderRadius: '3px',
-                  cursor: 'pointer',
-                  fontSize: '0.85rem'
-                }}
-              >
-                Yearly
-              </button>
-            </div>
-          </div>
+      {activeTab === 'cashflow' && (() => {
+        // ── Annual cashflow chart — screener.in-backed ──────────────────
+        // Indian companies don't file quarterly cashflow statements (standalone),
+        // so the previous quarterly toggle was being fed Yahoo-derived numbers
+        // of dubious accuracy. Switched to screener's annual cashflow which
+        // gives us up to 12 fiscal years with CFO/CFI/CFF and pre-computed FCF.
+        const years = Array.isArray(screenerCashflow?.years) ? screenerCashflow.years : [];
+        // Show most-recent 8 years (chart gets unreadable past that).
+        const visible = years.slice(-8);
 
-          {cashflow && cashflow.length > 0 ? (
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={cashflow.slice().reverse()} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                  <XAxis
-                    dataKey="date"
-                    stroke="var(--text-secondary)"
-                    tickFormatter={(val) => {
-                      const d = new Date(val);
-                      return cashflowType === 'quarterly' ? `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}` : d.getFullYear();
-                    }}
-                  />
-                  <YAxis
-                    stroke="var(--text-secondary)"
-                    tickFormatter={(val) => `₹${(val / 10000000).toFixed(0)}Cr`}
-                  />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: 'var(--bg-dark)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
-                    formatter={(value, name) => [`₹${(value / 10000000).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr`, name]}
-                    labelFormatter={(label) => new Date(label).toDateString()}
-                  />
-                  <Legend />
-                  <Bar dataKey="totalRevenue" name="Total Revenue" fill="#3498db" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="netIncome" name="Net Income" fill="#f39c12" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="operatingCashFlow" name="Operating Cashflow" fill="var(--accent)" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="investingCashFlow" name="Investing Cashflow" fill="#a29bfe" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="financingCashFlow" name="Financing Cashflow" fill="var(--danger)" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="freeCashFlow" name="Free Cashflow" fill="var(--success)" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+        return (
+          <section className="glass-panel" style={{ marginTop: '1rem', height: '500px', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Cashflow Analysis</h2>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  Annual cashflow statement · Screener.in (standalone, ₹ Cr)
+                </span>
+              </div>
+              {visible.length > 0 && (
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  {visible[0].fyLabel} → {visible[visible.length - 1].fyLabel}
+                </span>
+              )}
             </div>
-          ) : (
-            <p style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>Cashflow data is not available for this instrument.</p>
-          )}
-        </section>
-      )}
+
+            {visible.length === 0 ? (
+              <p style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
+                {screenerCashflowError
+                  ? `Cashflow unavailable: ${screenerCashflowError}`
+                  : screenerCashflow == null ? 'Loading from Screener.in…' : 'Cashflow data is not available for this instrument.'}
+              </p>
+            ) : (
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={visible} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                    <XAxis dataKey="fyLabel" stroke="var(--text-secondary)" />
+                    <YAxis
+                      stroke="var(--text-secondary)"
+                      tickFormatter={(val) => `₹${val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}Cr`}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: 'var(--bg-dark)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+                      formatter={(value, name) => [
+                        value == null ? '—' : `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr`,
+                        name,
+                      ]}
+                      labelFormatter={(label) => `Fiscal Year ${label}`}
+                    />
+                    <Legend />
+                    <Bar dataKey="operatingCashFlow"  name="Operating (CFO)"  fill="var(--accent)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="investingCashFlow"  name="Investing (CFI)"  fill="#a29bfe"       radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="financingCashFlow"  name="Financing (CFF)"  fill="var(--danger)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="freeCashFlow"       name="Free Cash Flow"   fill="var(--success)" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </section>
+        );
+      })()}
     </div>
   )
 }
