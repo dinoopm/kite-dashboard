@@ -18,6 +18,10 @@ function Instrument() {
   // Company name sourced from Kite (search_instruments) — populates faster than
   // Yahoo fundamentals and is canonical for Indian tickers.
   const [kiteName, setKiteName] = useState(null)
+  // Quarterly Results scraped from screener.in (richer + denser than Yahoo for
+  // Indian tickers — no gaps, 13 quarters of history typically).
+  const [screenerQuarterly, setScreenerQuarterly] = useState(null)
+  const [screenerError, setScreenerError] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
@@ -60,6 +64,32 @@ function Instrument() {
         if (info?.name) setKiteName(info.name);
       } catch (e) {
         if (e.name === 'AbortError') return;
+      }
+    })();
+    return () => controller.abort();
+  }, [symbol])
+
+  // Fetch quarterly results from screener.in scrape (cached 12h server-side)
+  useEffect(() => {
+    if (!symbol) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetchWithAbort(`/api/screener-quarterly/${symbol}`, { signal: controller.signal });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data?.quarters) && data.quarters.length > 0) {
+            setScreenerQuarterly(data);
+          } else {
+            setScreenerError('Screener returned no quarterly rows');
+          }
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setScreenerError(err.error || `Screener fetch failed (${res.status})`);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        setScreenerError(e.message);
       }
     })();
     return () => controller.abort();
@@ -670,39 +700,24 @@ function Instrument() {
       )}
 
       {activeTab === 'quarterly' && (() => {
-        // ── Quarterly Results — pro-investor redesign ───────────────────
-        // Reuses the /api/cashflow response. Key change vs. the first cut:
-        // we build 4 *consecutive* Indian-FY columns by computing labels from
-        // the latest available quarter; missing data renders as "—" rather
-        // than creating a visual gap in the timeline.
-        const isReady = cashflowType === 'quarterly' && Array.isArray(cashflow);
-        const quarters = isReady ? [...cashflow].sort((a, b) => new Date(a.date) - new Date(b.date)) : [];
+        // ── Quarterly Results — screener.in-backed ──────────────────────
+        // Switched from Yahoo to screener.in for this view. Screener gives 13
+        // consecutive quarters with no gaps (Yahoo's fundamentalsTimeSeries
+        // randomly misses quarters for some Indian tickers — JIOFIN/HINDZINC
+        // were both showing a missing Q2 FY26). Values arrive already in ₹ Cr.
+        const isReady = Array.isArray(screenerQuarterly?.quarters);
+        const quarters = isReady ? [...screenerQuarterly.quarters].sort((a, b) => a.sortKey - b.sortKey) : [];
 
-        // Indian FY: Apr–Jun=Q1, Jul–Sep=Q2, Oct–Dec=Q3, Jan–Mar=Q4.
-        // FY = calendar year if month ≥ 4, else year-1.
-        const formatFY = (date) => {
-          const d = new Date(date);
-          const m = d.getMonth() + 1;
-          const y = d.getFullYear();
-          const q = m <= 3 ? 4 : m <= 6 ? 1 : m <= 9 ? 2 : 3;
-          const fy = m >= 4 ? y + 1 : y;
-          return { q, fy, label: `Q${q} FY${String(fy).slice(-2)}` };
-        };
         const labelFromQFy = (q, fy) => `Q${q} FY${String(fy).slice(-2)}`;
         const prevQuarter = (q, fy) => q === 1 ? { q: 4, fy: fy - 1 } : { q: q - 1, fy };
         const prevYearQuarter = (q, fy) => ({ q, fy: fy - 1 });
 
-        // Build a label→row map (label is unique within Indian FY system).
+        // Build a label → quarter-row map. Screener rows already carry q/fy/label.
         const byLabel = {};
-        for (const row of quarters) {
-          const { label } = formatFY(row.date);
-          // If duplicate (rare; Yahoo edge case), keep the later one.
-          byLabel[label] = row;
-        }
+        for (const row of quarters) byLabel[row.label] = row;
 
-        // Compute the 4 consecutive labels ending at the latest available quarter.
-        // Falls back to the most-recent label found in `byLabel` if no data.
-        const latest = quarters.length > 0 ? formatFY(quarters[quarters.length - 1].date) : null;
+        // 4 consecutive labels ending at the latest available quarter.
+        const latest = quarters.length > 0 ? quarters[quarters.length - 1] : null;
         const columns = [];
         if (latest) {
           let cur = { q: latest.q, fy: latest.fy };
@@ -714,19 +729,20 @@ function Instrument() {
           columns.push(...stack);
         }
 
-        // Derived metric: Operating Margin (%) = operatingIncome / totalRevenue × 100.
-        // NBFCs can show >100% if Yahoo categorises some investment income outside
-        // totalRevenue — we still show the number rather than swallowing it.
+        // Operating Margin: screener exposes OPM directly as `opm` (percent
+        // already). Fall back to computed margin if absent.
         const opMarginOf = (row) => {
-          if (!row || !row.totalRevenue || row.operatingIncome == null) return null;
-          return (row.operatingIncome / row.totalRevenue) * 100;
+          if (!row) return null;
+          if (row.opm != null) return row.opm;
+          if (row.totalIncome && row.operatingProfit != null) return (row.operatingProfit / row.totalIncome) * 100;
+          return null;
         };
 
         // ── Formatters ────────────────────────────────────────────────
+        // Screener serves numbers already in ₹ Cr (no /1e7 needed, unlike Yahoo).
         const fmtCr = (v) => {
           if (v == null || v === 0) return '—';
-          const cr = v / 1e7;
-          return `₹${cr.toLocaleString('en-IN', { maximumFractionDigits: Math.abs(cr) < 1000 ? 1 : 0 })} Cr`;
+          return `₹${v.toLocaleString('en-IN', { maximumFractionDigits: Math.abs(v) < 1000 ? 1 : 0 })} Cr`;
         };
         const fmtEPS = (v) => (v == null || v === 0) ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
         const fmtPct = (v) => v == null ? '—' : `${v.toFixed(1)}%`;
@@ -764,23 +780,21 @@ function Instrument() {
           };
         };
 
-        // Row spec: each row defines how to extract its value and which pill to use.
+        // Row spec mapped to screener.in field names.
         const rows = [
-          { key: 'totalIncome',    label: 'Total Income',      fmt: fmtCr,  get: r => r?.totalRevenue,     pill: growthPill },
-          { key: 'operatingIncome',label: 'Operating Profit',  fmt: fmtCr,  get: r => r?.operatingIncome,  pill: growthPill },
-          { key: 'operatingMargin',label: 'Operating Margin',  fmt: fmtPct, get: r => opMarginOf(r),      pill: marginPill },
-          { key: 'netIncome',      label: 'Net Profit',        fmt: fmtCr,  get: r => r?.netIncome,        pill: growthPill },
-          { key: 'dilutedEPS',     label: 'EPS',               fmt: fmtEPS, get: r => r?.dilutedEPS,       pill: growthPill },
+          { key: 'totalIncome',     label: 'Total Income',     fmt: fmtCr,  get: r => r?.totalIncome,     pill: growthPill },
+          { key: 'operatingProfit', label: 'Operating Profit', fmt: fmtCr,  get: r => r?.operatingProfit, pill: growthPill },
+          { key: 'operatingMargin', label: 'Operating Margin', fmt: fmtPct, get: r => opMarginOf(r),     pill: marginPill },
+          { key: 'netProfit',       label: 'Net Profit',       fmt: fmtCr,  get: r => r?.netProfit,       pill: growthPill },
+          { key: 'eps',             label: 'EPS',              fmt: fmtEPS, get: r => r?.eps,             pill: growthPill },
         ];
 
         // Sparkline data per row (4 numbers, one per visible column; nulls allowed).
+        // Values are already in their natural units (₹ Cr or ₹ for EPS).
         const sparklineFor = (row) => columns.map(c => {
           const r = byLabel[c.label];
           const v = row.get(r);
-          // Bars/values are in ₹ (raw paise×); divide for visual scaling consistency.
-          if (v == null) return { v: null };
-          if (row.key === 'totalIncome' || row.key === 'operatingIncome' || row.key === 'netIncome') return { v: v / 1e7 };
-          return { v };
+          return { v: v == null ? null : v };
         });
 
         // Lightweight sparkline — no axes, no grid, just the line + endpoint dot.
@@ -809,7 +823,7 @@ function Instrument() {
               <div>
                 <h2 style={{ margin: 0 }}>Quarterly Results</h2>
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  Last 4 consecutive quarters · YoY · QoQ · Yahoo Finance
+                  Last 4 consecutive quarters · YoY · QoQ · Screener.in (standalone)
                 </span>
               </div>
               {columns.length > 0 && (
@@ -821,7 +835,11 @@ function Instrument() {
 
             {!isReady || columns.length === 0 ? (
               <p style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '1.5rem' }}>
-                {cashflow == null ? 'Loading…' : 'Quarterly comparison data is not available for this instrument.'}
+                {screenerError
+                  ? `Screener.in data unavailable: ${screenerError}`
+                  : screenerQuarterly == null
+                    ? 'Loading from Screener.in…'
+                    : 'Quarterly comparison data is not available for this instrument.'}
               </p>
             ) : (
               <div style={{ overflowX: 'auto' }}>
@@ -898,7 +916,7 @@ function Instrument() {
                   </tbody>
                 </table>
                 <div style={{ marginTop: '0.75rem', fontSize: '0.7rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                  Operating Margin shown as percentage-point change. Cells with "—" indicate Yahoo lacks the comparison quarter for this ticker.
+                  Source: screener.in (standalone, ₹ Cr). Operating Margin uses percentage-point change. Cashflow Chart tab still uses Yahoo (consolidated) — small numerical differences between the two tabs are expected.
                 </div>
               </div>
             )}

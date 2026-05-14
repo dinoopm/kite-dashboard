@@ -6,6 +6,7 @@ const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio
 const { SMA, EMA, RSI, MACD, BollingerBands, ATR, VWAP } = require('technicalindicators');
 const YahooFinance = require('yahoo-finance2').default;
 const yahooFinance = new YahooFinance();
+const cheerio = require('cheerio');
 
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const { createClient } = require('@supabase/supabase-js');
@@ -1633,6 +1634,126 @@ app.get('/api/cashflow/:symbol', async (req, res) => {
   } catch (err) {
     console.error("Yahoo Finance cashflow error:", err);
     res.status(500).json({ error: "Failed to fetch cashflow data: " + err.message });
+  }
+});
+
+// ─── Screener.in scrape for canonical quarterly results ──────────
+// Yahoo's fundamentalsTimeSeries has sparse Indian coverage (random missing
+// quarters, e.g. HINDZINC Sep 2025). Screener.in renders the same data
+// server-side as plain HTML, so a single GET + cheerio gives us up to 13
+// consecutive quarters with no gaps. Cached aggressively because quarterly
+// data only changes 4 times a year — also keeps us off screener's radar.
+const SCREENER_TTL = 12 * 60 * 60 * 1000; // 12h
+const screenerCache = {}; // symbol -> { data, ts }
+
+// Convert "Mar 2023" cell header to an Indian-FY label + sortable key.
+function parseScreenerHeader(text) {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const [monthStr, yearStr] = text.trim().split(/\s+/);
+  const m = months.indexOf(monthStr) + 1;
+  const y = parseInt(yearStr, 10);
+  if (!m || !y) return null;
+  // Apr–Jun=Q1, Jul–Sep=Q2, Oct–Dec=Q3, Jan–Mar=Q4
+  const q = m <= 3 ? 4 : m <= 6 ? 1 : m <= 9 ? 2 : 3;
+  const fy = m >= 4 ? y + 1 : y;
+  // YYYYMM sort key works because columns are in chronological order regardless.
+  return {
+    q, fy, month: m, year: y,
+    label: `Q${q} FY${String(fy).slice(-2)}`,
+    sortKey: y * 100 + m,
+  };
+}
+
+// Maps screener's row label to our internal field name. Banks/NBFCs sometimes
+// use "Revenue" or "Financing Profit" — we accept both.
+const SCREENER_ROW_MAP = {
+  'Sales': 'totalIncome',
+  'Revenue': 'totalIncome',
+  'Operating Profit': 'operatingProfit',
+  'Financing Profit': 'operatingProfit', // NBFCs
+  'OPM %': 'opm',
+  'Financing Margin %': 'opm',
+  'Net Profit': 'netProfit',
+  'EPS in Rs': 'eps',
+  'Expenses': 'expenses',
+  'Other Income': 'otherIncome',
+  'Interest': 'interest',
+  'Depreciation': 'depreciation',
+  'Profit before tax': 'pbt',
+  'Tax %': 'taxPct',
+};
+
+function parseNumberCell(text) {
+  if (!text) return null;
+  const cleaned = text.trim().replace(/,/g, '').replace(/%/g, '').replace(/\s/g, '');
+  if (cleaned === '' || cleaned === '-') return null;
+  const num = parseFloat(cleaned);
+  return Number.isNaN(num) ? null : num;
+}
+
+function parseScreenerQuarterly(html) {
+  const $ = cheerio.load(html);
+  const section = $('section#quarters');
+  if (section.length === 0) throw new Error('Quarterly section not found on screener page');
+  const table = section.find('table.data-table').first();
+  if (table.length === 0) throw new Error('Quarterly table not found');
+
+  // First header cell is empty (the "metric" column). Rest are month headers.
+  const headerCells = table.find('thead th').toArray();
+  const columns = headerCells.slice(1)
+    .map(el => parseScreenerHeader($(el).text()))
+    .filter(Boolean);
+  if (columns.length === 0) throw new Error('No quarter columns parsed');
+
+  // Each row's first cell is a metric label (with trailing " +" sometimes —
+  // those are screener's "expand for breakdown" hints we strip).
+  table.find('tbody tr').each((_, tr) => {
+    const tds = $(tr).find('td').toArray();
+    if (tds.length === 0) return;
+    const rawLabel = $(tds[0]).text().trim().replace(/\s*\+\s*$/, '').replace(/\s+/g, ' ');
+    const field = SCREENER_ROW_MAP[rawLabel];
+    if (!field) return;
+    tds.slice(1).forEach((td, i) => {
+      if (i >= columns.length) return;
+      columns[i][field] = parseNumberCell($(td).text());
+    });
+  });
+
+  return columns;
+}
+
+app.get('/api/screener-quarterly/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const cached = screenerCache[symbol];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) {
+    return res.json({ ...cached.data, cached: true });
+  }
+  try {
+    const url = `https://www.screener.in/company/${encodeURIComponent(symbol)}/`;
+    const r = await fetch(url, {
+      headers: {
+        // A real-looking UA. Screener serves bots a stripped page; this gets us full HTML.
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    if (!r.ok) {
+      // 404 = unknown ticker; everything else = upstream issue worth surfacing.
+      return res.status(r.status === 404 ? 404 : 502)
+        .json({ error: `Screener returned ${r.status}`, fallback: 'yahoo' });
+    }
+    const html = await r.text();
+    const quarters = parseScreenerQuarterly(html);
+    if (quarters.length === 0) {
+      return res.status(502).json({ error: 'No quarterly data parsed', fallback: 'yahoo' });
+    }
+    const payload = { source: 'screener.in', symbol, quarters };
+    screenerCache[symbol] = { data: payload, ts: Date.now() };
+    res.json({ ...payload, cached: false });
+  } catch (err) {
+    console.error(`[screener-quarterly] ${symbol}:`, err.message);
+    res.status(500).json({ error: err.message, fallback: 'yahoo' });
   }
 });
 
