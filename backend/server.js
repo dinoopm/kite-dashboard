@@ -1530,8 +1530,17 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
         ? `SuperTrend(10,3) just flipped red — exit / avoid new entries.`
         : `SuperTrend(10,3) is red (line ₹${supertrend.line}) — stay out / exit existing.`;
     } else if (supertrend.signal === 'BULL' && ema200 != null && currentPrice > ema200 && rsi14 != null && rsi14 < 65) {
-      tradePlan.action = 'STRONG BUY';
-      tradePlan.reason = `Price ₹${currentPrice.toFixed(1)} > 200 EMA ₹${ema200} · SuperTrend green (line ₹${supertrend.line}) · RSI ${rsi14.toFixed(0)} not overbought.`;
+      // Trend-follow says BUY, but a bearish RSI divergence is the canonical
+      // counter-signal — price kept climbing while RSI failed to confirm. We
+      // don't suppress the entry (the trend strategy is independent of RSI
+      // divergence), but we qualify the badge so the conflict is visible.
+      if (divergence === 'SELL SETUP') {
+        tradePlan.action = 'STRONG BUY (DIV WARN)';
+        tradePlan.reason = `Trend setup clean (Price ₹${currentPrice.toFixed(1)} > 200 EMA ₹${ema200} · SuperTrend green) but RSI is diverging bearishly from price — momentum may be fading. Enter with tighter stops or wait for divergence to resolve.`;
+      } else {
+        tradePlan.action = 'STRONG BUY';
+        tradePlan.reason = `Price ₹${currentPrice.toFixed(1)} > 200 EMA ₹${ema200} · SuperTrend green (line ₹${supertrend.line}) · RSI ${rsi14.toFixed(0)} not overbought.`;
+      }
     } else if (supertrend.signal === 'BULL' && rsi14 != null && rsi14 > 70) {
       tradePlan.action = 'TRENDING (WAIT)';
       tradePlan.reason = `Uptrend intact (SuperTrend green @ ₹${supertrend.line}) but RSI ${rsi14.toFixed(0)} is overbought — wait for cooldown to add.`;

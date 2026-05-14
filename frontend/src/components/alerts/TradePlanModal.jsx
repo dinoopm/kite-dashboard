@@ -18,6 +18,7 @@ function TradePlanModal({ stock, onClose }) {
 
   // New strategy verdicts take precedence in colour selection.
   const isStrongBuy = action === 'STRONG BUY'
+  const isStrongBuyWarn = action === 'STRONG BUY (DIV WARN)'
   const isTrendingWait = action === 'TRENDING (WAIT)'
   const isBearishExit = action === 'BEARISH'
   const isBuy = action === 'BUY SEEN' || action === 'ADD'
@@ -25,6 +26,7 @@ function TradePlanModal({ stock, onClose }) {
   const isBearAct = isBearishExit || action.includes('SELL') || action === 'AVOID'
   const isTrim = action === 'TRIM'
   const accentColor = isStrongBuy ? '#14F195'
+    : isStrongBuyWarn ? '#FBBF24'
     : isTrendingWait ? '#FBBF24'
     : isBearishExit ? '#FB7185'
     : isBuy ? '#10b981'
@@ -35,6 +37,7 @@ function TradePlanModal({ stock, onClose }) {
 
   const verdicts = {
     'STRONG BUY':         { headline: 'Trend-aligned entry', body: 'Price is above the 200 EMA, SuperTrend is green (line below price acting as support), and RSI is below 65 — entry is not chasing a stretched move. The cleanest swing setup the engine generates.' },
+    'STRONG BUY (DIV WARN)': { headline: 'Trend OK, momentum diverging', body: 'The SuperTrend + 200 EMA trend setup is intact, but RSI is making lower highs while price makes higher highs — a classic bearish divergence. The trend strategy still says enter, but the momentum lens says be cautious. Enter with tighter stops, smaller size, or wait for the divergence to resolve.' },
     'TRENDING (WAIT)':    { headline: 'Uptrend intact, but overbought', body: 'SuperTrend is still green, but RSI is above 70 — entering here means buying near the peak. Wait for RSI to cool below 65 while the trend holds, then re-evaluate.' },
     'BEARISH':            { headline: 'SuperTrend flipped red', body: 'Price closed below the SuperTrend line, signalling a trend reversal. Exit longs and avoid new entries until SuperTrend flips back to green.' },
     'BUY SEEN':           { headline: 'Clean buy setup', body: 'Momentum, trend alignment, volume, and reward/risk all line up. The engine sees a textbook entry here — but always confirm with your own thesis before clicking buy.' },

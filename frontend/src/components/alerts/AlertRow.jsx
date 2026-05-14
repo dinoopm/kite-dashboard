@@ -31,6 +31,7 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
   const tp = stock.tradePlan || { action: 'UNK', tgt: null, sl: null, rrRatio: null }
   // New strategy verdicts take precedence in the colour map.
   const isStrongBuy = tp.action === 'STRONG BUY'
+  const isStrongBuyWarn = tp.action === 'STRONG BUY (DIV WARN)'
   const isTrendingWait = tp.action === 'TRENDING (WAIT)'
   const isBearishExit = tp.action === 'BEARISH'
   const isBuyAction = tp.action === 'BUY SEEN' || tp.action === 'ADD'
@@ -38,6 +39,7 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
   const isBearishAction = isBearishExit || tp.action.includes('SELL') || tp.action === 'AVOID'
   const isTrimAction = tp.action === 'TRIM'
   const actColor = isStrongBuy ? '#14F195'           // neon teal
+    : isStrongBuyWarn ? '#FBBF24'                    // amber — trend OK, momentum diverging
     : isTrendingWait ? '#FBBF24'                     // amber
     : isBearishExit ? '#FB7185'                      // muted coral
     : isBuyAction ? '#10b981'
@@ -47,10 +49,12 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
     : '#f59e0b'
   // Pill background: subtle tint of action colour for strategy verdicts so they pop.
   const actBg = isStrongBuy ? 'rgba(20,241,149,0.12)'
+    : isStrongBuyWarn ? 'rgba(251,191,36,0.12)'
     : isTrendingWait ? 'rgba(251,191,36,0.12)'
     : isBearishExit ? 'rgba(251,113,133,0.12)'
     : 'transparent'
   const actGlyph = isStrongBuy ? '🟢 '
+    : isStrongBuyWarn ? '⚠ '
     : isTrendingWait ? '🟡 '
     : isBearishExit ? '🔴 '
     : isBuyAction ? '▲ '
