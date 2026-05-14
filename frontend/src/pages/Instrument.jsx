@@ -670,127 +670,236 @@ function Instrument() {
       )}
 
       {activeTab === 'quarterly' && (() => {
-        // ── Quarterly Results comparison ────────────────────────────────
-        // Reuses the /api/cashflow response (no extra fetch). We force a
-        // quarterly view here regardless of the cashflow tab toggle, since
-        // YoY comparison is meaningful on quarterly data only.
+        // ── Quarterly Results — pro-investor redesign ───────────────────
+        // Reuses the /api/cashflow response. Key change vs. the first cut:
+        // we build 4 *consecutive* Indian-FY columns by computing labels from
+        // the latest available quarter; missing data renders as "—" rather
+        // than creating a visual gap in the timeline.
         const isReady = cashflowType === 'quarterly' && Array.isArray(cashflow);
         const quarters = isReady ? [...cashflow].sort((a, b) => new Date(a.date) - new Date(b.date)) : [];
-        const last4 = quarters.slice(-4);
 
-        // Indian FY label: Apr–Jun = Q1, Jul–Sep = Q2, Oct–Dec = Q3, Jan–Mar = Q4.
-        // FY = calendar year if month >= 4, else year-1. Display as "Q2 FY26".
+        // Indian FY: Apr–Jun=Q1, Jul–Sep=Q2, Oct–Dec=Q3, Jan–Mar=Q4.
+        // FY = calendar year if month ≥ 4, else year-1.
         const formatFY = (date) => {
           const d = new Date(date);
           const m = d.getMonth() + 1;
           const y = d.getFullYear();
           const q = m <= 3 ? 4 : m <= 6 ? 1 : m <= 9 ? 2 : 3;
           const fy = m >= 4 ? y + 1 : y;
-          return `Q${q} FY${String(fy).slice(-2)}`;
+          return { q, fy, label: `Q${q} FY${String(fy).slice(-2)}` };
+        };
+        const labelFromQFy = (q, fy) => `Q${q} FY${String(fy).slice(-2)}`;
+        const prevQuarter = (q, fy) => q === 1 ? { q: 4, fy: fy - 1 } : { q: q - 1, fy };
+        const prevYearQuarter = (q, fy) => ({ q, fy: fy - 1 });
+
+        // Build a label→row map (label is unique within Indian FY system).
+        const byLabel = {};
+        for (const row of quarters) {
+          const { label } = formatFY(row.date);
+          // If duplicate (rare; Yahoo edge case), keep the later one.
+          byLabel[label] = row;
+        }
+
+        // Compute the 4 consecutive labels ending at the latest available quarter.
+        // Falls back to the most-recent label found in `byLabel` if no data.
+        const latest = quarters.length > 0 ? formatFY(quarters[quarters.length - 1].date) : null;
+        const columns = [];
+        if (latest) {
+          let cur = { q: latest.q, fy: latest.fy };
+          const stack = [];
+          for (let i = 0; i < 4; i++) {
+            stack.unshift({ ...cur, label: labelFromQFy(cur.q, cur.fy) });
+            cur = prevQuarter(cur.q, cur.fy);
+          }
+          columns.push(...stack);
+        }
+
+        // Derived metric: Operating Margin (%) = operatingIncome / totalRevenue × 100.
+        // NBFCs can show >100% if Yahoo categorises some investment income outside
+        // totalRevenue — we still show the number rather than swallowing it.
+        const opMarginOf = (row) => {
+          if (!row || !row.totalRevenue || row.operatingIncome == null) return null;
+          return (row.operatingIncome / row.totalRevenue) * 100;
         };
 
-        // Find the row 4 quarters earlier than `target` (same period prev year).
-        // Yahoo's quarter dates can drift by a few days, so match by FY label.
-        const findYoYRow = (targetRow) => {
-          if (!targetRow) return null;
-          const targetLabel = formatFY(targetRow.date);
-          const targetFy = parseInt(targetLabel.slice(targetLabel.indexOf('FY') + 2), 10);
-          const targetQ = parseInt(targetLabel.charAt(1), 10);
-          const prevFyLabel = `Q${targetQ} FY${String(targetFy - 1).padStart(2, '0').slice(-2)}`;
-          return quarters.find(r => formatFY(r.date) === prevFyLabel) || null;
-        };
-
+        // ── Formatters ────────────────────────────────────────────────
         const fmtCr = (v) => {
           if (v == null || v === 0) return '—';
           const cr = v / 1e7;
-          // Show one decimal for values < 1000 Cr, integer otherwise
           return `₹${cr.toLocaleString('en-IN', { maximumFractionDigits: Math.abs(cr) < 1000 ? 1 : 0 })} Cr`;
         };
         const fmtEPS = (v) => (v == null || v === 0) ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+        const fmtPct = (v) => v == null ? '—' : `${v.toFixed(1)}%`;
 
-        // YoY %: returns { pct, label, color } or null if comparison missing.
-        const computeYoY = (curr, prev) => {
+        // Pair growth = computed once per cell, colour-graded by magnitude.
+        const growthPill = (curr, prev) => {
           if (curr == null || prev == null || prev === 0) return null;
           const pct = ((curr - prev) / Math.abs(prev)) * 100;
           const positive = pct >= 0;
-          // Intensity by magnitude — pale, normal, saturated.
           const abs = Math.abs(pct);
           let color;
-          if (abs < 5)        color = positive ? '#34d399' : '#fca5a5';   // pale
-          else if (abs < 15)  color = positive ? '#10b981' : '#ef4444';   // normal
-          else                color = positive ? '#059669' : '#dc2626';   // saturated
+          if (abs < 5)        color = positive ? '#34d399' : '#fca5a5';
+          else if (abs < 15)  color = positive ? '#10b981' : '#ef4444';
+          else                color = positive ? '#059669' : '#dc2626';
           return {
-            pct,
-            label: `${positive ? '↑' : '↓'} ${abs.toFixed(1)}%`,
+            label: `${positive ? '↑' : '↓'}${abs.toFixed(1)}%`,
             color,
             weight: abs >= 15 ? 800 : 700,
           };
         };
+        // Margin uses a percentage-points pill instead of relative growth.
+        const marginPill = (curr, prev) => {
+          if (curr == null || prev == null) return null;
+          const diff = curr - prev;
+          const positive = diff >= 0;
+          const abs = Math.abs(diff);
+          let color;
+          if (abs < 1)        color = positive ? '#34d399' : '#fca5a5';
+          else if (abs < 5)   color = positive ? '#10b981' : '#ef4444';
+          else                color = positive ? '#059669' : '#dc2626';
+          return {
+            label: `${positive ? '+' : '−'}${abs.toFixed(1)} pp`,
+            color,
+            weight: abs >= 5 ? 800 : 700,
+          };
+        };
 
+        // Row spec: each row defines how to extract its value and which pill to use.
         const rows = [
-          { key: 'totalRevenue',    label: 'Sales',            fmt: fmtCr,  field: 'totalRevenue' },
-          { key: 'operatingIncome', label: 'Operating Profit', fmt: fmtCr,  field: 'operatingIncome' },
-          { key: 'netIncome',       label: 'Net Profit',       fmt: fmtCr,  field: 'netIncome' },
-          { key: 'dilutedEPS',      label: 'EPS',              fmt: fmtEPS, field: 'dilutedEPS' },
+          { key: 'totalIncome',    label: 'Total Income',      fmt: fmtCr,  get: r => r?.totalRevenue,     pill: growthPill },
+          { key: 'operatingIncome',label: 'Operating Profit',  fmt: fmtCr,  get: r => r?.operatingIncome,  pill: growthPill },
+          { key: 'operatingMargin',label: 'Operating Margin',  fmt: fmtPct, get: r => opMarginOf(r),      pill: marginPill },
+          { key: 'netIncome',      label: 'Net Profit',        fmt: fmtCr,  get: r => r?.netIncome,        pill: growthPill },
+          { key: 'dilutedEPS',     label: 'EPS',               fmt: fmtEPS, get: r => r?.dilutedEPS,       pill: growthPill },
         ];
+
+        // Sparkline data per row (4 numbers, one per visible column; nulls allowed).
+        const sparklineFor = (row) => columns.map(c => {
+          const r = byLabel[c.label];
+          const v = row.get(r);
+          // Bars/values are in ₹ (raw paise×); divide for visual scaling consistency.
+          if (v == null) return { v: null };
+          if (row.key === 'totalIncome' || row.key === 'operatingIncome' || row.key === 'netIncome') return { v: v / 1e7 };
+          return { v };
+        });
+
+        // Lightweight sparkline — no axes, no grid, just the line + endpoint dot.
+        const Sparkline = ({ points }) => {
+          const valid = points.filter(p => p.v != null);
+          if (valid.length < 2) {
+            return <span style={{ color: 'var(--text-secondary)', fontSize: '0.7rem' }}>—</span>;
+          }
+          const last = valid[valid.length - 1].v;
+          const first = valid[0].v;
+          const color = last >= first ? '#10b981' : '#ef4444';
+          return (
+            <div style={{ width: '70px', height: '28px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={points}>
+                  <Line type="monotone" dataKey="v" stroke={color} strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          );
+        };
 
         return (
           <section className="glass-panel" style={{ marginTop: '1rem', padding: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-              <h2 style={{ margin: 0 }}>Quarterly Results — last 4 quarters</h2>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>YoY growth vs same quarter previous year · Yahoo Finance</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Quarterly Results</h2>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  Last 4 consecutive quarters · YoY · QoQ · Yahoo Finance
+                </span>
+              </div>
+              {columns.length > 0 && (
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  {columns[0].label} → {columns[columns.length - 1].label}
+                </span>
+              )}
             </div>
-            {(!isReady || last4.length === 0) ? (
-              <p style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '2rem' }}>
-                {cashflowType !== 'quarterly'
-                  ? 'Switch the Cashflow Chart tab to "Quarterly" first — this view shares the same underlying data.'
-                  : cashflow == null
-                    ? 'Loading…'
-                    : 'Quarterly comparison data is not available for this instrument.'}
+
+            {!isReady || columns.length === 0 ? (
+              <p style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '1.5rem' }}>
+                {cashflow == null ? 'Loading…' : 'Quarterly comparison data is not available for this instrument.'}
               </p>
             ) : (
-              <div style={{ overflowX: 'auto', marginTop: '1rem' }}>
+              <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.9rem' }}>
                   <thead>
                     <tr>
-                      <th style={{ textAlign: 'left', padding: '0.65rem 0.75rem', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.75rem', letterSpacing: '0.5px', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Metric</th>
-                      {last4.map(q => (
-                        <th key={q.date} style={{ textAlign: 'right', padding: '0.65rem 0.75rem', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.75rem', letterSpacing: '0.5px', borderBottom: '1px solid var(--border)' }}>
-                          {formatFY(q.date)}
+                      <th style={{ textAlign: 'left', padding: '0.65rem 0.75rem', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.72rem', letterSpacing: '0.5px', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>
+                        Metric
+                      </th>
+                      {columns.map(col => (
+                        <th key={col.label} style={{ textAlign: 'right', padding: '0.65rem 0.75rem', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.72rem', letterSpacing: '0.5px', borderBottom: '1px solid var(--border)' }}>
+                          {col.label}
                         </th>
                       ))}
+                      <th style={{ textAlign: 'right', padding: '0.65rem 0.75rem', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.72rem', letterSpacing: '0.5px', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>
+                        Trend
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map(row => (
-                      <tr key={row.key}>
-                        <td style={{ textAlign: 'left', padding: '0.85rem 0.75rem', color: 'var(--text-primary)', fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                          {row.label}
-                        </td>
-                        {last4.map((q, idx) => {
-                          const value = q[row.field];
-                          const prev = findYoYRow(q);
-                          const prevValue = prev?.[row.field];
-                          const yoy = computeYoY(value, prevValue);
-                          return (
-                            <td key={q.date + idx} style={{ textAlign: 'right', padding: '0.85rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                              <div style={{ color: 'var(--text-primary)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
-                                {row.fmt(value)}
-                              </div>
-                              {yoy ? (
-                                <div style={{ fontSize: '0.72rem', fontWeight: yoy.weight, color: yoy.color, marginTop: '0.15rem' }}>
-                                  {yoy.label}
+                    {rows.map(row => {
+                      const sparkPoints = sparklineFor(row);
+                      return (
+                        <tr key={row.key}>
+                          <td style={{ textAlign: 'left', padding: '0.85rem 0.75rem', color: 'var(--text-primary)', fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                            {row.label}
+                          </td>
+                          {columns.map((col, idx) => {
+                            const currRow = byLabel[col.label];
+                            const value = row.get(currRow);
+                            // QoQ → prior column in the visible 4-window
+                            const qoqCol = idx > 0 ? columns[idx - 1] : null;
+                            const qoqValue = qoqCol ? row.get(byLabel[qoqCol.label]) : undefined;
+                            // YoY → same-quarter previous year (looked up regardless of visibility)
+                            const yoy = prevYearQuarter(col.q, col.fy);
+                            const yoyValue = row.get(byLabel[labelFromQFy(yoy.q, yoy.fy)]);
+                            const yoyPill = row.pill(value, yoyValue);
+                            const qoqPill = qoqValue !== undefined ? row.pill(value, qoqValue) : null;
+
+                            return (
+                              <td key={col.label} style={{ textAlign: 'right', padding: '0.85rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.04)', verticalAlign: 'top' }}>
+                                <div style={{ color: 'var(--text-primary)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                                  {row.fmt(value)}
                                 </div>
-                              ) : (
-                                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>—</div>
-                              )}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
+                                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.1rem', marginTop: '0.2rem', fontSize: '0.7rem' }}>
+                                  {yoyPill ? (
+                                    <span title="Year-on-Year" style={{ color: yoyPill.color, fontWeight: yoyPill.weight }}>
+                                      <span style={{ color: 'var(--text-secondary)', fontWeight: 500, marginRight: '3px' }}>YoY</span>
+                                      {yoyPill.label}
+                                    </span>
+                                  ) : (
+                                    <span style={{ color: 'var(--text-secondary)' }}>YoY —</span>
+                                  )}
+                                  {qoqPill ? (
+                                    <span title="Quarter-on-Quarter" style={{ color: qoqPill.color, fontWeight: qoqPill.weight }}>
+                                      <span style={{ color: 'var(--text-secondary)', fontWeight: 500, marginRight: '3px' }}>QoQ</span>
+                                      {qoqPill.label}
+                                    </span>
+                                  ) : (
+                                    idx > 0 && <span style={{ color: 'var(--text-secondary)' }}>QoQ —</span>
+                                  )}
+                                </div>
+                              </td>
+                            );
+                          })}
+                          <td style={{ textAlign: 'right', padding: '0.85rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                            <div style={{ display: 'inline-block' }}>
+                              <Sparkline points={sparkPoints} />
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
+                <div style={{ marginTop: '0.75rem', fontSize: '0.7rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                  Operating Margin shown as percentage-point change. Cells with "—" indicate Yahoo lacks the comparison quarter for this ticker.
+                </div>
               </div>
             )}
           </section>
