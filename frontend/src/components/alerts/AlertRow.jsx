@@ -29,16 +29,34 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
   const rectWidth = Math.abs(agg) * 50
 
   const tp = stock.tradePlan || { action: 'UNK', tgt: null, sl: null, rrRatio: null }
+  // New strategy verdicts take precedence in the colour map.
+  const isStrongBuy = tp.action === 'STRONG BUY'
+  const isTrendingWait = tp.action === 'TRENDING (WAIT)'
+  const isBearishExit = tp.action === 'BEARISH / EXIT'
   const isBuyAction = tp.action === 'BUY SEEN' || tp.action === 'ADD'
   const isBreakoutAction = tp.action.includes('BREAKOUT')
-  const isBearishAction = tp.action.includes('SELL') || tp.action === 'AVOID'
+  const isBearishAction = isBearishExit || tp.action.includes('SELL') || tp.action === 'AVOID'
   const isTrimAction = tp.action === 'TRIM'
-  const actColor = isBuyAction ? '#10b981'
+  const actColor = isStrongBuy ? '#14F195'           // neon teal
+    : isTrendingWait ? '#FBBF24'                     // amber
+    : isBearishExit ? '#FB7185'                      // muted coral
+    : isBuyAction ? '#10b981'
     : isBearishAction ? '#ef4444'
-      : isBreakoutAction ? '#fcd34d'
-        : isTrimAction ? '#06b6d4'
-          : '#f59e0b'
-  const actGlyph = isBuyAction ? '▲ ' : isBearishAction ? '▼ ' : isTrimAction ? '✂ ' : ''
+    : isBreakoutAction ? '#fcd34d'
+    : isTrimAction ? '#06b6d4'
+    : '#f59e0b'
+  // Pill background: subtle tint of action colour for strategy verdicts so they pop.
+  const actBg = isStrongBuy ? 'rgba(20,241,149,0.12)'
+    : isTrendingWait ? 'rgba(251,191,36,0.12)'
+    : isBearishExit ? 'rgba(251,113,133,0.12)'
+    : 'transparent'
+  const actGlyph = isStrongBuy ? '🟢 '
+    : isTrendingWait ? '🟡 '
+    : isBearishExit ? '🔴 '
+    : isBuyAction ? '▲ '
+    : isBearishAction ? '▼ '
+    : isTrimAction ? '✂ '
+    : ''
 
   const trendLabel = stock.regime === 'STRONG TREND' && stock.trendDirection
     ? (stock.trendDirection === 'BULL' ? 'STRONG TREND ▲' : 'STRONG TREND ▼')
@@ -125,6 +143,31 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
                   <circle cx="40" cy={20 - ((lastRsi / 100) * 20)} r="2" fill={lastRsi > 70 ? '#ef4444' : lastRsi < 30 ? '#10b981' : '#cbd5e1'} />
                 </svg>
               )}
+              {/* SuperTrend(10,3) badge — green = line below price (uptrend),
+                  coral = line above price (downtrend). Hover for the line value. */}
+              {stock.supertrend && (() => {
+                const isBull = stock.supertrend.signal === 'BULL';
+                const teal = '#14F195', coral = '#FB7185';
+                const color = isBull ? teal : coral;
+                return (
+                  <span
+                    title={`SuperTrend(10,3): ${isBull ? 'Uptrend' : 'Downtrend'} · line ₹${stock.supertrend.line?.toFixed?.(2) ?? '—'}${stock.supertrend.flippedToBull ? ' · just flipped GREEN' : stock.supertrend.flippedToBear ? ' · just flipped RED' : ''}`}
+                    style={{
+                      padding: '0.1rem 0.4rem',
+                      borderRadius: '4px',
+                      fontSize: '0.6rem',
+                      fontWeight: 800,
+                      letterSpacing: '0.5px',
+                      color,
+                      background: isBull ? 'rgba(20,241,149,0.10)' : 'rgba(251,113,133,0.10)',
+                      border: `1px solid ${isBull ? 'rgba(20,241,149,0.45)' : 'rgba(251,113,133,0.45)'}`,
+                      boxShadow: isBull ? '0 0 8px rgba(20,241,149,0.35)' : '0 0 6px rgba(251,113,133,0.30)',
+                    }}
+                  >
+                    ST{stock.supertrend.flippedToBull ? '⚡' : ''}
+                  </span>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -174,7 +217,8 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
             style={{
               fontSize: '0.65rem', fontWeight: 800, padding: '0.15rem 0.5rem',
               border: `1px solid ${actColor}`, color: actColor, borderRadius: '4px',
-              textShadow: `0 0 4px rgba(${actColor === '#10b981' ? '16,185,129' : actColor === '#ef4444' ? '239,68,68' : '245,158,11'}, 0.2)`,
+              background: actBg,
+              textShadow: `0 0 4px rgba(${actColor === '#10b981' ? '16,185,129' : actColor === '#ef4444' ? '239,68,68' : actColor === '#14F195' ? '20,241,149' : actColor === '#FB7185' ? '251,113,133' : actColor === '#FBBF24' ? '251,191,36' : '245,158,11'}, 0.2)`,
               cursor: 'pointer', whiteSpace: 'nowrap',
               transition: 'transform 0.12s, filter 0.12s'
             }}

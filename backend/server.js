@@ -1065,6 +1065,55 @@ app.get('/api/indicators/:token', async (req, res) => {
 // Pure function over a candle series. Used by both /api/alerts (holdings) and
 // /api/sector-alerts/:sectorId (sector drill-down). Returns the alert object,
 // or null if the stock has no actionable signals.
+// Classic SuperTrend(period, multiplier) — iterative because each bar's bands
+// depend on the prior bar's "sticky" final bands and direction. Inputs:
+//   candles: full OHLC array (uses high, low, close)
+//   atrArr:  output from technicalindicators ATR.calculate (length = candles.length - period)
+//   period:  lookback used to align ATR with candles (default 10)
+//   mult:    band multiplier (default 3)
+// Returns one row per usable bar (starting from index `period` in candles)
+// shaped { value, direction: 'BULL'|'BEAR' }. The first row's direction is
+// seeded from close vs basic upper band; subsequent rows carry/flip per the
+// canonical SuperTrend rules.
+function computeSuperTrend(candles, atrArr, period = 10, mult = 3) {
+  if (!candles || candles.length <= period || atrArr.length === 0) return [];
+  const offset = candles.length - atrArr.length; // ATR lops off first `period` bars
+  const out = [];
+  let prevFinalUpper = null;
+  let prevFinalLower = null;
+  let prevDirection = null;
+  for (let i = 0; i < atrArr.length; i++) {
+    const c = candles[i + offset];
+    const prevC = candles[i + offset - 1] || c;
+    const hl2 = (c.high + c.low) / 2;
+    const basicUpper = hl2 + mult * atrArr[i];
+    const basicLower = hl2 - mult * atrArr[i];
+
+    // Sticky final bands — tighten only in the direction of trend.
+    const finalUpper = (prevFinalUpper == null || basicUpper < prevFinalUpper || prevC.close > prevFinalUpper)
+      ? basicUpper : prevFinalUpper;
+    const finalLower = (prevFinalLower == null || basicLower > prevFinalLower || prevC.close < prevFinalLower)
+      ? basicLower : prevFinalLower;
+
+    let direction;
+    if (prevDirection == null) {
+      // Seed off the very first bar — direction = whichever band the close is above.
+      direction = c.close > finalUpper ? 'BULL' : 'BEAR';
+    } else if (prevDirection === 'BULL') {
+      direction = c.close < finalLower ? 'BEAR' : 'BULL';
+    } else {
+      direction = c.close > finalUpper ? 'BULL' : 'BEAR';
+    }
+    const value = direction === 'BULL' ? finalLower : finalUpper;
+    out.push({ value, direction });
+
+    prevFinalUpper = finalUpper;
+    prevFinalLower = finalLower;
+    prevDirection = direction;
+  }
+  return out;
+}
+
 //
 // `holding` is the raw Kite holdings row when called from /api/alerts; pass
 // undefined for the sector path to skip qty/PnL fields and the holdings-aware
@@ -1105,9 +1154,26 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   const sma20Arr = SMA.calculate({ period: 20, values: closes });
   const sma50Arr = SMA.calculate({ period: 50, values: closes });
   const sma200Arr = SMA.calculate({ period: 200, values: closes });
+  const ema200Arr = EMA.calculate({ period: 200, values: closes });
   const rsi14Arr = RSI.calculate({ period: 14, values: closes });
 
   const atr14Arr = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
+  // ATR(10) feeds the SuperTrend(10,3) — the existing ATR(14) stays for everything else.
+  const atr10Arr = ATR.calculate({ high: highs, low: lows, close: closes, period: 10 });
+
+  // SuperTrend(10, 3) — trend filter for long-horizon swing strategy.
+  // Path-dependent (sticky bands), can't be vectorised. Returns one entry per
+  // candle aligned to the END of the candles array; pre-ATR bars are skipped.
+  const supertrendArr = computeSuperTrend(workingCandles, atr10Arr, 10, 3);
+  const supertrendLatest = supertrendArr.length > 0 ? supertrendArr[supertrendArr.length - 1] : null;
+  const supertrendPrev   = supertrendArr.length > 1 ? supertrendArr[supertrendArr.length - 2] : null;
+  const supertrend = supertrendLatest ? {
+    line: +supertrendLatest.value.toFixed(2),
+    signal: supertrendLatest.direction, // 'BULL' | 'BEAR'
+    flippedToBull: !!(supertrendLatest.direction === 'BULL' && supertrendPrev && supertrendPrev.direction === 'BEAR'),
+    flippedToBear: !!(supertrendLatest.direction === 'BEAR' && supertrendPrev && supertrendPrev.direction === 'BULL'),
+  } : null;
+  const ema200 = ema200Arr.length > 0 ? +ema200Arr[ema200Arr.length - 1].toFixed(2) : null;
 
   // Calculate 20-period Anchored VWAP
   const recent20 = workingCandles.slice(-20);
@@ -1224,6 +1290,11 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   if (vwapDeviation !== null && vwapDeviation < -2) addConf('Deep below 20d VWAP', -10);
   if (aggressorDelta < -0.2) addConf('Distribution (money flow)', -10);
   if (regime === 'WILD SWINGS') addConf('Volatile regime', -10);
+  // SuperTrend BULL acts as a confidence floor — a stock in a confirmed
+  // uptrend deserves at least 70% bias regardless of weaker secondary signals.
+  if (supertrend?.signal === 'BULL' && confidence < 70) {
+    addConf('SuperTrend(10,3) uptrend (floor)', 70 - confidence);
+  }
   confidence = Math.min(100, Math.max(0, Math.round(confidence)));
 
   const stockAlerts = [];
@@ -1447,6 +1518,35 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     }
   }
 
+  // ── SuperTrend + 200 EMA strategy verdicts (apply LAST so they win) ──
+  // These are the user's "long-swing" strategy: trend filter (200 EMA),
+  // entry filter (SuperTrend(10,3) green + RSI < 65), bearish exit (ST red).
+  // They override the legacy cascade because the strategy is more disciplined
+  // than the heuristic stack that came before.
+  if (supertrend) {
+    if (supertrend.signal === 'BEAR') {
+      tradePlan.action = 'BEARISH / EXIT';
+      tradePlan.reason = supertrend.flippedToBear
+        ? `SuperTrend(10,3) just flipped red — exit / avoid new entries.`
+        : `SuperTrend(10,3) is red (line ₹${supertrend.line}) — stay out / exit existing.`;
+    } else if (supertrend.signal === 'BULL' && ema200 != null && currentPrice > ema200 && rsi14 != null && rsi14 < 65) {
+      tradePlan.action = 'STRONG BUY';
+      tradePlan.reason = `Price ₹${currentPrice.toFixed(1)} > 200 EMA ₹${ema200} · SuperTrend green (line ₹${supertrend.line}) · RSI ${rsi14.toFixed(0)} not overbought.`;
+    } else if (supertrend.signal === 'BULL' && rsi14 != null && rsi14 > 70) {
+      tradePlan.action = 'TRENDING (WAIT)';
+      tradePlan.reason = `Uptrend intact (SuperTrend green @ ₹${supertrend.line}) but RSI ${rsi14.toFixed(0)} is overbought — wait for cooldown to add.`;
+    }
+  }
+
+  // ── Dynamic SL — use SuperTrend line whenever the trend is up ──
+  // The classic trailing-stop discipline for the SuperTrend strategy. Stops
+  // tighten as the trend matures and we never sell into noise.
+  if (supertrend?.signal === 'BULL' && supertrend.line) {
+    tradePlan.sl = supertrend.line;
+    // Recompute R:R against the new (usually tighter) stop.
+    tradePlan.rrRatio = rrFor(tradePlan.tgt, tradePlan.sl);
+  }
+
   const resolvedSector = sector !== undefined ? sector : await getSectorCached(symbol);
 
   const out = {
@@ -1458,6 +1558,8 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     sma20: sma20 ? +sma20.toFixed(2) : null,
     sma50: sma50 ? +sma50.toFixed(2) : null,
     sma200: sma200 ? +sma200.toFixed(2) : null,
+    ema200,
+    supertrend, // { line, signal, flippedToBull, flippedToBear } | null
     vwap20: vwap20 ? +vwap20.toFixed(2) : null,
     vwapDeviation: vwapDeviation !== null ? +vwapDeviation.toFixed(2) : null,
     atr: atr ? +atr.toFixed(2) : null,

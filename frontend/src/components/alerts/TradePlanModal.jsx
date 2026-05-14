@@ -16,17 +16,27 @@ function TradePlanModal({ stock, onClose }) {
   const tp = s.tradePlan || {}
   const action = tp.action || 'UNKNOWN'
 
+  // New strategy verdicts take precedence in colour selection.
+  const isStrongBuy = action === 'STRONG BUY'
+  const isTrendingWait = action === 'TRENDING (WAIT)'
+  const isBearishExit = action === 'BEARISH / EXIT'
   const isBuy = action === 'BUY SEEN' || action === 'ADD'
   const isBreakoutAct = action.includes('BREAKOUT')
-  const isBearAct = action.includes('SELL') || action === 'AVOID'
+  const isBearAct = isBearishExit || action.includes('SELL') || action === 'AVOID'
   const isTrim = action === 'TRIM'
-  const accentColor = isBuy ? '#10b981'
+  const accentColor = isStrongBuy ? '#14F195'
+    : isTrendingWait ? '#FBBF24'
+    : isBearishExit ? '#FB7185'
+    : isBuy ? '#10b981'
     : isBearAct ? '#ef4444'
-      : isBreakoutAct ? '#fcd34d'
-        : isTrim ? '#06b6d4'
-          : '#f59e0b'
+    : isBreakoutAct ? '#fcd34d'
+    : isTrim ? '#06b6d4'
+    : '#f59e0b'
 
   const verdicts = {
+    'STRONG BUY':         { headline: 'Trend-aligned entry', body: 'Price is above the 200 EMA, SuperTrend is green (line below price acting as support), and RSI is below 65 — entry is not chasing a stretched move. The cleanest swing setup the engine generates.' },
+    'TRENDING (WAIT)':    { headline: 'Uptrend intact, but overbought', body: 'SuperTrend is still green, but RSI is above 70 — entering here means buying near the peak. Wait for RSI to cool below 65 while the trend holds, then re-evaluate.' },
+    'BEARISH / EXIT':     { headline: 'SuperTrend flipped red', body: 'Price closed below the SuperTrend line, signalling a trend reversal. Exit longs and avoid new entries until SuperTrend flips back to green.' },
     'BUY SEEN':           { headline: 'Clean buy setup', body: 'Momentum, trend alignment, volume, and reward/risk all line up. The engine sees a textbook entry here — but always confirm with your own thesis before clicking buy.' },
     'ADD':                { headline: 'Add to existing position', body: 'You already own this and a fresh buy setup just triggered. Consider scaling into your position — but stay within your sizing rules.' },
     'BREAKOUT (CAUTION)': { headline: 'Breakout, but unconfirmed', body: 'Price crossed the 20-day ceiling, but either volume is light (<1.5× avg) or conviction is moderate. Wait 1–2 sessions to see if the breakout holds with rising volume.' },

@@ -120,7 +120,10 @@ function Alerts() {
   const allAlertsList = (alerts || []).flatMap(s => s.alerts.map(a => ({ ...a, symbol: s.symbol, price: s.price, rsi: s.rsi })))
   const bullishCount = (alerts || []).filter(s => biasClass(s) === 'bullish').length
   const bearishCount = (alerts || []).filter(s => biasClass(s) === 'bearish').length
-  const breakoutCount = (alerts || []).filter(s => s.isBreakout).length
+  // "Super-Flip" = stock whose SuperTrend just transitioned from red to green
+  // on the latest candle close. These are the high-conviction entry signals
+  // for the long-swing strategy.
+  const breakoutCount = (alerts || []).filter(s => s.supertrend?.flippedToBull).length
 
   let filteredStocks = (alerts || [])
     .filter(s => s.symbol.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -130,7 +133,7 @@ function Alerts() {
       if (filter === 'runners') return (s.dayChangePct ?? 0) > 2
       return biasClass(s) === filter
     })
-    .filter(s => filterBreakouts ? s.isBreakout : true)
+    .filter(s => filterBreakouts ? s.supertrend?.flippedToBull : true)
 
   // Effective sort direction:
   //   - BEAR tab: confidence ascending (most-bearish on top).
@@ -357,13 +360,13 @@ function Alerts() {
           <div style={{ display: 'flex', gap: '0.5rem', fontFamily: "'JetBrains Mono', monospace" }}>
             <button
               onClick={() => setFilterBreakouts(!filterBreakouts)}
-              style={{ fontSize: '0.7rem', fontWeight: filterBreakouts ? '800' : '500', padding: '0.3rem 0.6rem', background: filterBreakouts ? 'rgba(16,185,129,0.2)' : 'transparent', color: filterBreakouts ? '#10b981' : '#cbd5e1', border: `1px solid ${filterBreakouts ? '#10b981' : '#334155'}`, borderRadius: '4px', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-              title="Show only stocks breaking above their 20-day resistance ceilings"
+              style={{ fontSize: '0.7rem', fontWeight: filterBreakouts ? '800' : '500', padding: '0.3rem 0.6rem', background: filterBreakouts ? 'rgba(20,241,149,0.18)' : 'transparent', color: filterBreakouts ? '#14F195' : '#cbd5e1', border: `1px solid ${filterBreakouts ? '#14F195' : '#334155'}`, borderRadius: '4px', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+              title="Super-Flip: SuperTrend(10,3) just transitioned from red to green on the latest candle close — the long-swing strategy's primary entry signal"
             >
-              🚀 Breakouts
+              ⚡ Super-Flips
               {breakoutCount > 0 && (
                 <span style={{
-                  background: filterBreakouts ? '#10b981' : '#fcd34d',
+                  background: filterBreakouts ? '#14F195' : '#fcd34d',
                   color: '#0f172a',
                   fontSize: '0.6rem',
                   fontWeight: 800,
@@ -372,7 +375,7 @@ function Alerts() {
                   minWidth: '16px',
                   textAlign: 'center',
                   lineHeight: '1.3',
-                  boxShadow: `0 0 6px ${filterBreakouts ? 'rgba(16,185,129,0.4)' : 'rgba(252,211,77,0.4)'}`,
+                  boxShadow: `0 0 6px ${filterBreakouts ? 'rgba(20,241,149,0.45)' : 'rgba(252,211,77,0.4)'}`,
                   transition: 'all 0.2s'
                 }}>
                   {breakoutCount}
