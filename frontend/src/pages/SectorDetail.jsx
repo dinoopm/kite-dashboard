@@ -257,6 +257,8 @@ export default function SectorDetail() {
   const [sectorAlertsLastUpdated, setSectorAlertsLastUpdated] = useState(null);
   const [alertFilter, setAlertFilter] = useState('all'); // all | bullish | bearish
   const [alertFilterBreakouts, setAlertFilterBreakouts] = useState(false);
+  const [alertFilterSuperFlips, setAlertFilterSuperFlips] = useState(false);
+  const [alertFilterEarly, setAlertFilterEarly] = useState(false);
   const [alertSearch, setAlertSearch] = useState('');
   const [alertSortDir, setAlertSortDir] = useState('desc'); // confidence sort direction
   const [convictionStock, setConvictionStock] = useState(null);
@@ -854,11 +856,24 @@ export default function SectorDetail() {
     const bullishCount = sectorAlerts.filter(s => biasClass(s) === 'bullish').length;
     const bearishCount = sectorAlerts.filter(s => biasClass(s) === 'bearish').length;
     const breakoutCount = sectorAlerts.filter(s => s.isBreakout).length;
+    const superFlipCount = sectorAlerts.filter(s => s.supertrend?.flippedToBull).length;
+    // Early movers — any one of: fresh ST flip, bullish RSI divergence,
+    // fresh breakout, heavy buy-side volume. Mirrors the Alerts page rule.
+    const isEarlyMover = (s) => {
+      if (s.supertrend?.flippedToBull) return true;
+      if (s.divergence === 'BUY SETUP') return true;
+      if (s.isBreakout) return true;
+      if ((s.volSurge ?? 0) >= 1.5 && s.volumeConfirmedSide === 'up') return true;
+      return false;
+    };
+    const earlyCount = sectorAlerts.filter(isEarlyMover).length;
 
     const filtered = sectorAlerts
       .filter(s => s.symbol.toLowerCase().includes(alertSearch.toLowerCase()))
       .filter(s => alertFilter === 'all' ? true : biasClass(s) === alertFilter)
       .filter(s => alertFilterBreakouts ? s.isBreakout : true)
+      .filter(s => alertFilterSuperFlips ? s.supertrend?.flippedToBull : true)
+      .filter(s => alertFilterEarly ? isEarlyMover(s) : true)
       .slice()
       .sort((a, b) => {
         const dir = alertSortDir === 'desc' ? -1 : 1;
@@ -926,6 +941,38 @@ export default function SectorDetail() {
             title="Show only stocks that have crossed their 20-day resistance ceiling"
           >
             🚀 Breakouts{breakoutCount > 0 ? ` (${breakoutCount})` : ''}
+          </button>
+          <button
+            onClick={() => setAlertFilterSuperFlips(v => !v)}
+            style={{
+              padding: '0.4rem 0.9rem',
+              borderRadius: '6px',
+              border: alertFilterSuperFlips ? '1px solid #14F195' : '1px solid var(--border)',
+              background: alertFilterSuperFlips ? 'rgba(20,241,149,0.12)' : 'transparent',
+              color: alertFilterSuperFlips ? '#14F195' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: alertFilterSuperFlips ? 600 : 400,
+              fontSize: '0.8rem'
+            }}
+            title="Super-Flip: SuperTrend(10,3) just flipped from red to green on the latest candle — the long-swing strategy's primary entry trigger"
+          >
+            ⚡ Super-Flips{superFlipCount > 0 ? ` (${superFlipCount})` : ''}
+          </button>
+          <button
+            onClick={() => setAlertFilterEarly(v => !v)}
+            style={{
+              padding: '0.4rem 0.9rem',
+              borderRadius: '6px',
+              border: alertFilterEarly ? '1px solid #a855f7' : '1px solid var(--border)',
+              background: alertFilterEarly ? 'rgba(168,85,247,0.12)' : 'transparent',
+              color: alertFilterEarly ? '#a855f7' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: alertFilterEarly ? 600 : 400,
+              fontSize: '0.8rem'
+            }}
+            title="Early movers: stocks stirring before the full STRONG BUY chain fires. Any one of these trips it — ST just flipped BULL · bullish RSI divergence · fresh breakout · heavy buy-side volume (≥1.5× on up-day)."
+          >
+            ✨ Early{earlyCount > 0 ? ` (${earlyCount})` : ''}
           </button>
           <input
             type="text"
