@@ -14,6 +14,7 @@ function Alerts() {
   const [error, setError] = useState(null)
   const [filter, setFilter] = useState('all')
   const [filterBreakouts, setFilterBreakouts] = useState(false)
+  const [filterEarly, setFilterEarly] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [cacheProgress, setCacheProgress] = useState(null)
   const [sortConfig, setSortConfig] = useState({ key: 'confidence', direction: 'desc' })
@@ -125,6 +126,27 @@ function Alerts() {
   // for the long-swing strategy.
   const breakoutCount = (alerts || []).filter(s => s.supertrend?.flippedToBull).length
 
+  // "Early movers" — stocks stirring before the full STRONG BUY confirmation
+  // chain fires. Any one of these leading signals trips the filter:
+  //   · ST just flipped to BULL on the latest bar (today's reversal)
+  //   · Bullish RSI divergence (price made lower low, RSI made higher low)
+  //   · Fresh breakout above the most recent resistance window
+  //   · Heavy buy-side volume surge (≥ 1.5× avg on an up-day)
+  //   · ADX has just entered the trending regime (≥ 25) — only when paired
+  //     with a BULL Supertrend, to avoid surfacing bears as "early"
+  const isEarlyMover = (s) => {
+    if (s.supertrend?.flippedToBull) return true
+    if (s.divergence === 'BUY SETUP') return true
+    if (s.isBreakout) return true
+    if ((s.volSurge ?? 0) >= 1.5 && s.volumeConfirmedSide === 'up') return true
+    if ((s.adx ?? 0) >= 25 && s.supertrend?.signal === 'BULL' && !s.supertrend?.flippedToBull) {
+      // already trending and bullish — too late to count as "early"; skip
+      return false
+    }
+    return false
+  }
+  const earlyCount = (alerts || []).filter(isEarlyMover).length
+
   let filteredStocks = (alerts || [])
     .filter(s => s.symbol.toLowerCase().includes(searchQuery.toLowerCase()))
     .filter(s => {
@@ -134,6 +156,7 @@ function Alerts() {
       return biasClass(s) === filter
     })
     .filter(s => filterBreakouts ? s.supertrend?.flippedToBull : true)
+    .filter(s => filterEarly ? isEarlyMover(s) : true)
 
   // Effective sort direction:
   //   - BEAR tab: confidence ascending (most-bearish on top).
@@ -379,6 +402,30 @@ function Alerts() {
                   transition: 'all 0.2s'
                 }}>
                   {breakoutCount}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setFilterEarly(!filterEarly)}
+              style={{ fontSize: '0.7rem', fontWeight: filterEarly ? '800' : '500', padding: '0.3rem 0.6rem', background: filterEarly ? 'rgba(168,85,247,0.18)' : 'transparent', color: filterEarly ? '#a855f7' : '#cbd5e1', border: `1px solid ${filterEarly ? '#a855f7' : '#334155'}`, borderRadius: '4px', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+              title="Early movers: stocks stirring before the full STRONG BUY chain fires. Any one of these trips the filter — ST just flipped BULL · bullish RSI divergence · fresh breakout · heavy buy-side volume (≥1.5× on up-day). Use this to scout candidates before they confirm."
+            >
+              ✨ Early
+              {earlyCount > 0 && (
+                <span style={{
+                  background: filterEarly ? '#a855f7' : '#c084fc',
+                  color: '#0f172a',
+                  fontSize: '0.6rem',
+                  fontWeight: 800,
+                  padding: '0.05rem 0.35rem',
+                  borderRadius: '9px',
+                  minWidth: '16px',
+                  textAlign: 'center',
+                  lineHeight: '1.3',
+                  boxShadow: `0 0 6px ${filterEarly ? 'rgba(168,85,247,0.45)' : 'rgba(192,132,252,0.4)'}`,
+                  transition: 'all 0.2s'
+                }}>
+                  {earlyCount}
                 </span>
               )}
             </button>
