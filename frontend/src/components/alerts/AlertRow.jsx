@@ -25,6 +25,15 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
     return `${x},${y}`
   }).join(' ')
 
+  // Strategy-aligned RSI colour scheme. The 60-70 band gets neon teal so it
+  // visually matches the STRONG BUY verdict colour — eye learns to scan for
+  // "teal RSI → teal verdict" entries at a glance.
+  const rsiColor = (v) => v == null ? '#cbd5e1'
+    : v > 70 ? '#ef4444'        // overbought — wait for cooldown
+    : v >= 60 ? '#14F195'       // STRONG BUY entry sweet spot
+    : v < 30 ? '#10b981'        // oversold — bounce/divergence candidate
+    : '#94a3b8'                 // neutral / building
+
   const agg = stock.aggressorDelta || 0
   const rectWidth = Math.abs(agg) * 50
 
@@ -144,15 +153,15 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
             </span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span className="dotted-underline" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }} title="Relative Strength Index (14 Days) with 10-day sparkline.">RSI (14)</span>
+            <span className="dotted-underline" style={{ fontSize: '0.6rem', color: 'var(--text-secondary)' }} title="Relative Strength Index (14 Days) with 10-day sparkline. Colour: red >70 overbought · neon teal 60-70 STRONG BUY entry band · slate 30-60 neutral · green <30 oversold.">RSI (14)</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <span className="mono" style={{ fontSize: '0.9rem', color: stock.rsi > 70 ? '#ef4444' : stock.rsi < 30 ? '#10b981' : 'var(--text-secondary)', fontWeight: 700 }}>
+              <span className="mono" style={{ fontSize: '0.9rem', color: rsiColor(stock.rsi), fontWeight: 700 }}>
                 {stock.rsi}
               </span>
               {rsiHistory.length > 0 && (
                 <svg width="40" height="20" style={{ overflow: 'visible' }}>
                   <polyline points={sparkPoints} fill="none" stroke="#475569" strokeWidth="1.5" />
-                  <circle cx="40" cy={20 - ((lastRsi / 100) * 20)} r="2" fill={lastRsi > 70 ? '#ef4444' : lastRsi < 30 ? '#10b981' : '#cbd5e1'} />
+                  <circle cx="40" cy={20 - ((lastRsi / 100) * 20)} r="2" fill={rsiColor(lastRsi)} />
                 </svg>
               )}
               {/* SuperTrend(10,3) badge — green = line below price (uptrend),
