@@ -956,7 +956,7 @@ export default function SectorDetail() {
             }}
             title="Super-Flip: SuperTrend(10,3) just flipped from red to green on the latest candle — the long-swing strategy's primary entry trigger"
           >
-            ⚡ Super-Flips{superFlipCount > 0 ? ` (${superFlipCount})` : ''}
+            ⚡ Super-Flips ({superFlipCount})
           </button>
           <button
             onClick={() => setAlertFilterEarly(v => !v)}
@@ -972,7 +972,7 @@ export default function SectorDetail() {
             }}
             title="Early movers: stocks stirring before the full STRONG BUY chain fires. Any one of these trips it — ST just flipped BULL · bullish RSI divergence · fresh breakout · heavy buy-side volume (≥1.5× on up-day)."
           >
-            ✨ Early{earlyCount > 0 ? ` (${earlyCount})` : ''}
+            ✨ Early ({earlyCount})
           </button>
           <input
             type="text"

@@ -387,23 +387,21 @@ function Alerts() {
               title="Super-Flip: SuperTrend(10,3) just transitioned from red to green on the latest candle close — the long-swing strategy's primary entry signal"
             >
               ⚡ Super-Flips
-              {breakoutCount > 0 && (
-                <span style={{
-                  background: filterBreakouts ? '#14F195' : '#fcd34d',
-                  color: '#0f172a',
-                  fontSize: '0.6rem',
-                  fontWeight: 800,
-                  padding: '0.05rem 0.35rem',
-                  borderRadius: '9px',
-                  minWidth: '16px',
-                  textAlign: 'center',
-                  lineHeight: '1.3',
-                  boxShadow: `0 0 6px ${filterBreakouts ? 'rgba(20,241,149,0.45)' : 'rgba(252,211,77,0.4)'}`,
-                  transition: 'all 0.2s'
-                }}>
-                  {breakoutCount}
-                </span>
-              )}
+              <span style={{
+                background: filterBreakouts ? '#14F195' : breakoutCount > 0 ? '#fcd34d' : '#334155',
+                color: breakoutCount > 0 ? '#0f172a' : '#94a3b8',
+                fontSize: '0.6rem',
+                fontWeight: 800,
+                padding: '0.05rem 0.35rem',
+                borderRadius: '9px',
+                minWidth: '16px',
+                textAlign: 'center',
+                lineHeight: '1.3',
+                boxShadow: breakoutCount > 0 ? `0 0 6px ${filterBreakouts ? 'rgba(20,241,149,0.45)' : 'rgba(252,211,77,0.4)'}` : 'none',
+                transition: 'all 0.2s'
+              }}>
+                {breakoutCount}
+              </span>
             </button>
             <button
               onClick={() => setFilterEarly(!filterEarly)}
@@ -411,23 +409,21 @@ function Alerts() {
               title="Early movers: stocks stirring before the full STRONG BUY chain fires. Any one of these trips the filter — ST just flipped BULL · bullish RSI divergence · fresh breakout · heavy buy-side volume (≥1.5× on up-day). Use this to scout candidates before they confirm."
             >
               ✨ Early
-              {earlyCount > 0 && (
-                <span style={{
-                  background: filterEarly ? '#a855f7' : '#c084fc',
-                  color: '#0f172a',
-                  fontSize: '0.6rem',
-                  fontWeight: 800,
-                  padding: '0.05rem 0.35rem',
-                  borderRadius: '9px',
-                  minWidth: '16px',
-                  textAlign: 'center',
-                  lineHeight: '1.3',
-                  boxShadow: `0 0 6px ${filterEarly ? 'rgba(168,85,247,0.45)' : 'rgba(192,132,252,0.4)'}`,
-                  transition: 'all 0.2s'
-                }}>
-                  {earlyCount}
-                </span>
-              )}
+              <span style={{
+                background: filterEarly ? '#a855f7' : earlyCount > 0 ? '#c084fc' : '#334155',
+                color: earlyCount > 0 ? '#0f172a' : '#94a3b8',
+                fontSize: '0.6rem',
+                fontWeight: 800,
+                padding: '0.05rem 0.35rem',
+                borderRadius: '9px',
+                minWidth: '16px',
+                textAlign: 'center',
+                lineHeight: '1.3',
+                boxShadow: earlyCount > 0 ? `0 0 6px ${filterEarly ? 'rgba(168,85,247,0.45)' : 'rgba(192,132,252,0.4)'}` : 'none',
+                transition: 'all 0.2s'
+              }}>
+                {earlyCount}
+              </span>
             </button>
             <button
               onClick={() => setShowLegend(!showLegend)}
