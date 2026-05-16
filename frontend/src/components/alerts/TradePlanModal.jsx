@@ -19,6 +19,8 @@ function TradePlanModal({ stock, onClose }) {
   // New strategy verdicts take precedence in colour selection.
   const isStrongBuy = action === 'STRONG BUY'
   const isStrongBuyWarn = action === 'STRONG BUY (DIV WARN)'
+  const isStrongBuyUnconfirmed = action === 'STRONG BUY (UNCONFIRMED)'
+  const isChoppy = action === 'CHOPPY'
   const isTrendingWait = action === 'TRENDING (WAIT)'
   const isBearishExit = action === 'BEARISH'
   const isBuy = action === 'BUY SEEN' || action === 'ADD'
@@ -27,6 +29,8 @@ function TradePlanModal({ stock, onClose }) {
   const isTrim = action === 'TRIM'
   const accentColor = isStrongBuy ? '#14F195'
     : isStrongBuyWarn ? '#FBBF24'
+    : isStrongBuyUnconfirmed ? '#FBBF24'
+    : isChoppy ? '#94a3b8'
     : isTrendingWait ? '#FBBF24'
     : isBearishExit ? '#FB7185'
     : isBuy ? '#10b981'
@@ -36,10 +40,12 @@ function TradePlanModal({ stock, onClose }) {
     : '#f59e0b'
 
   const verdicts = {
-    'STRONG BUY':         { headline: 'Trend-aligned entry', body: 'Price is above the 200 EMA, SuperTrend is green (line below price acting as support), and RSI is below 65 — entry is not chasing a stretched move. The cleanest swing setup the engine generates.' },
-    'STRONG BUY (DIV WARN)': { headline: 'Trend OK, momentum diverging', body: 'The SuperTrend + 200 EMA trend setup is intact, but RSI is making lower highs while price makes higher highs — a classic bearish divergence. The trend strategy still says enter, but the momentum lens says be cautious. Enter with tighter stops, smaller size, or wait for the divergence to resolve.' },
-    'TRENDING (WAIT)':    { headline: 'Uptrend intact, but overbought', body: 'SuperTrend is still green, but RSI is above 70 — entering here means buying near the peak. Wait for RSI to cool below 65 while the trend holds, then re-evaluate.' },
-    'BEARISH':            { headline: 'SuperTrend flipped red', body: 'Price closed below the SuperTrend line, signalling a trend reversal. Exit longs and avoid new entries until SuperTrend flips back to green.' },
+    'STRONG BUY':         { headline: 'Trend-aligned entry', body: 'All five filters line up: ADX(14) ≥ 25 (real trend in this stock, not chop), SuperTrend green (line below price as trailing support), price above the 200 EMA, RSI in the 60-70 momentum band, volume ≥ 1.2× the 20-day average, and the broader bullish-bias score independently ≥ 70. Cleanest swing setup the engine generates.' },
+    'STRONG BUY (DIV WARN)': { headline: 'Trend OK, momentum diverging', body: 'Every entry filter passes (ADX, ST, RSI band, volume, conviction), but RSI is making lower highs while price makes higher highs — a classic bearish divergence. The trend strategy still says enter, but the momentum lens says be cautious. Enter with tighter stops, smaller size, or wait for the divergence to resolve.' },
+    'STRONG BUY (UNCONFIRMED)': { headline: 'Core rule passes, confirmation missing', body: 'ADX, Supertrend, and RSI all line up for an entry, but either volume is below 1.2× the 20-day average or the broader bullish-bias score is below 70. The engine sees the setup but not the agreement. Wait a session for volume to confirm, or take a smaller position.' },
+    'CHOPPY':             { headline: 'Sideways market — skip', body: 'ADX(14) is below 25, meaning trend strength is too weak. Supertrend signals whipsaw in this regime — STRONG BUY / BEARISH alerts are suppressed until ADX climbs above 25. Don\'t force a setup here. Wait for the stock to start trending before re-engaging.' },
+    'TRENDING (WAIT)':    { headline: 'Uptrend intact, but momentum off', body: 'SuperTrend is green and ADX confirms a trend, but RSI is either above 70 (overbought, near a peak) or below 60 (momentum hasn\'t kicked in yet). Wait for RSI to settle into the 60-70 entry band before acting.' },
+    'BEARISH':            { headline: 'SuperTrend flipped red', body: 'Price closed below the SuperTrend line, signalling a trend reversal. Exit longs and avoid new entries until SuperTrend flips back to green AND ADX ≥ 25.' },
     'BUY SEEN':           { headline: 'Clean buy setup', body: 'Momentum, trend alignment, volume, and reward/risk all line up. The engine sees a textbook entry here — but always confirm with your own thesis before clicking buy.' },
     'ADD':                { headline: 'Add to existing position', body: 'You already own this and a fresh buy setup just triggered. Consider scaling into your position — but stay within your sizing rules.' },
     'BREAKOUT (CAUTION)': { headline: 'Breakout, but unconfirmed', body: 'Price crossed the 20-day ceiling, but either volume is light (<1.5× avg) or conviction is moderate. Wait 1–2 sessions to see if the breakout holds with rising volume.' },

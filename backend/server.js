@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
 const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio.js");
-const { SMA, EMA, RSI, MACD, BollingerBands, ATR, VWAP } = require('technicalindicators');
+const { SMA, EMA, RSI, MACD, BollingerBands, ATR, VWAP, ADX } = require('technicalindicators');
 const YahooFinance = require('yahoo-finance2').default;
 const yahooFinance = new YahooFinance();
 const cheerio = require('cheerio');
@@ -1160,6 +1160,10 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   const atr14Arr = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
   // ATR(10) feeds the SuperTrend(10,3) — the existing ATR(14) stays for everything else.
   const atr10Arr = ATR.calculate({ high: highs, low: lows, close: closes, period: 10 });
+  // ADX(14) — trend-strength gate for the Supertrend block. Below 25 = sideways
+  // (signals suppressed). The library returns { adx, pdi, mdi } per bar; we
+  // keep only the latest adx value.
+  const adx14Arr = ADX.calculate({ period: 14, close: closes, high: highs, low: lows });
 
   // SuperTrend(10, 3) — trend filter for long-horizon swing strategy.
   // Path-dependent (sticky bands), can't be vectorised. Returns one entry per
@@ -1213,6 +1217,7 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   const sma200 = sma200Arr.length > 0 ? sma200Arr[sma200Arr.length - 1] : null;
   const rsi14 = rsi14Arr.length > 0 ? rsi14Arr[rsi14Arr.length - 1] : null;
   const atr = atr14Arr.length > 0 ? atr14Arr[atr14Arr.length - 1] : null;
+  const adx14 = adx14Arr.length > 0 ? adx14Arr[adx14Arr.length - 1].adx : null;
   const rsiHistory = rsi14Arr.slice(-10).map(v => parseFloat(v.toFixed(1)));
 
   // Regime Classification & Divergence Detection
@@ -1518,32 +1523,56 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     }
   }
 
-  // ── SuperTrend + 200 EMA strategy verdicts (apply LAST so they win) ──
-  // These are the user's "long-swing" strategy: trend filter (200 EMA),
-  // entry filter (SuperTrend(10,3) green + RSI < 65), bearish exit (ST red).
-  // They override the legacy cascade because the strategy is more disciplined
-  // than the heuristic stack that came before.
+  // ── Supertrend + ADX + RSI(60-70) + volume + confidence (long-swing) ──
+  // The entry must clear five independent filters: ADX(14) ≥ 25 (trend strong
+  // enough that ST signals don't whipsaw), price above the 200 EMA, RSI in
+  // the 60-70 momentum band (Constance Brown's "trending-market RSI"),
+  // volume ≥ 1.2× 20-day average (rules out light-volume false flips), and
+  // the broader confidence engine independently ≥ 70. Below ADX 25 the
+  // entire block returns CHOPPY — no Supertrend signal in sideways tape.
   if (supertrend) {
-    if (supertrend.signal === 'BEAR') {
+    const trendStrong = adx14 != null && adx14 >= 25;
+    const adxStr = adx14 != null ? adx14.toFixed(1) : '—';
+
+    if (!trendStrong) {
+      tradePlan.action = 'CHOPPY';
+      tradePlan.reason = `ADX(14) ${adxStr} is below 25 — trend strength too weak for Supertrend signals to be reliable. Wait for ADX to climb above 25 before acting on this name.`;
+    } else if (supertrend.signal === 'BEAR') {
       tradePlan.action = 'BEARISH';
       tradePlan.reason = supertrend.flippedToBear
-        ? `SuperTrend(10,3) just flipped red — exit / avoid new entries.`
-        : `SuperTrend(10,3) is red (line ₹${supertrend.line}) — stay out / exit existing.`;
-    } else if (supertrend.signal === 'BULL' && ema200 != null && currentPrice > ema200 && rsi14 != null && rsi14 < 65) {
-      // Trend-follow says BUY, but a bearish RSI divergence is the canonical
-      // counter-signal — price kept climbing while RSI failed to confirm. We
-      // don't suppress the entry (the trend strategy is independent of RSI
-      // divergence), but we qualify the badge so the conflict is visible.
+        ? `SuperTrend(10,3) just flipped red on ADX ${adxStr} — exit / avoid new entries.`
+        : `SuperTrend(10,3) red (line ₹${supertrend.line}) · ADX ${adxStr} confirms downtrend — stay out / exit existing.`;
+    } else if (
+      supertrend.signal === 'BULL' &&
+      ema200 != null && currentPrice > ema200 &&
+      rsi14 != null && rsi14 >= 60 && rsi14 <= 70 &&
+      volSurge >= 1.2 &&
+      confidence >= 70
+    ) {
       if (divergence === 'SELL SETUP') {
         tradePlan.action = 'STRONG BUY (DIV WARN)';
-        tradePlan.reason = `Trend setup clean (Price ₹${currentPrice.toFixed(1)} > 200 EMA ₹${ema200} · SuperTrend green) but RSI is diverging bearishly from price — momentum may be fading. Enter with tighter stops or wait for divergence to resolve.`;
+        tradePlan.reason = `Trend setup clean (ADX ${adxStr} · ST green · RSI ${rsi14.toFixed(0)} · vol ${volSurge.toFixed(1)}× · conviction ${confidence}%) but RSI is diverging bearishly from price — momentum may be fading. Tighter stops or wait for divergence to resolve.`;
       } else {
         tradePlan.action = 'STRONG BUY';
-        tradePlan.reason = `Price ₹${currentPrice.toFixed(1)} > 200 EMA ₹${ema200} · SuperTrend green (line ₹${supertrend.line}) · RSI ${rsi14.toFixed(0)} not overbought.`;
+        tradePlan.reason = `ADX ${adxStr} confirms trending tape · Price ₹${currentPrice.toFixed(1)} > 200 EMA ₹${ema200} · SuperTrend green (line ₹${supertrend.line}) · RSI ${rsi14.toFixed(0)} in momentum band · vol ${volSurge.toFixed(1)}× · conviction ${confidence}%.`;
       }
+    } else if (
+      supertrend.signal === 'BULL' &&
+      ema200 != null && currentPrice > ema200 &&
+      rsi14 != null && rsi14 >= 60 && rsi14 <= 70
+    ) {
+      // Core rule (ADX + ST + RSI band) passes but volume or confidence fails.
+      const failing = [];
+      if (volSurge < 1.2) failing.push(`vol only ${volSurge.toFixed(1)}× (need ≥ 1.2)`);
+      if (confidence < 70) failing.push(`conviction only ${confidence}% (need ≥ 70)`);
+      tradePlan.action = 'STRONG BUY (UNCONFIRMED)';
+      tradePlan.reason = `Core rule passes (ADX ${adxStr} · ST green · RSI ${rsi14.toFixed(0)}) but ${failing.join(' · ')}. Wait for confirmation or take a smaller position.`;
     } else if (supertrend.signal === 'BULL' && rsi14 != null && rsi14 > 70) {
       tradePlan.action = 'TRENDING (WAIT)';
-      tradePlan.reason = `Uptrend intact (SuperTrend green @ ₹${supertrend.line}) but RSI ${rsi14.toFixed(0)} is overbought — wait for cooldown to add.`;
+      tradePlan.reason = `Uptrend intact (ADX ${adxStr} · ST green @ ₹${supertrend.line}) but RSI ${rsi14.toFixed(0)} is overbought — wait for cooldown.`;
+    } else if (supertrend.signal === 'BULL' && rsi14 != null && rsi14 < 60) {
+      tradePlan.action = 'TRENDING (WAIT)';
+      tradePlan.reason = `SuperTrend green on ADX ${adxStr}, but RSI ${rsi14.toFixed(0)} below 60 — momentum hasn't confirmed yet. Wait for RSI to push above 60.`;
     }
   }
 
@@ -1568,6 +1597,7 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     sma50: sma50 ? +sma50.toFixed(2) : null,
     sma200: sma200 ? +sma200.toFixed(2) : null,
     ema200,
+    adx: adx14 != null ? +adx14.toFixed(2) : null,
     supertrend, // { line, signal, flippedToBull, flippedToBear } | null
     vwap20: vwap20 ? +vwap20.toFixed(2) : null,
     vwapDeviation: vwapDeviation !== null ? +vwapDeviation.toFixed(2) : null,

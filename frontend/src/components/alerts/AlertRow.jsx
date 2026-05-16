@@ -32,6 +32,8 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
   // New strategy verdicts take precedence in the colour map.
   const isStrongBuy = tp.action === 'STRONG BUY'
   const isStrongBuyWarn = tp.action === 'STRONG BUY (DIV WARN)'
+  const isStrongBuyUnconfirmed = tp.action === 'STRONG BUY (UNCONFIRMED)'
+  const isChoppy = tp.action === 'CHOPPY'
   const isTrendingWait = tp.action === 'TRENDING (WAIT)'
   const isBearishExit = tp.action === 'BEARISH'
   const isBuyAction = tp.action === 'BUY SEEN' || tp.action === 'ADD'
@@ -40,6 +42,8 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
   const isTrimAction = tp.action === 'TRIM'
   const actColor = isStrongBuy ? '#14F195'           // neon teal
     : isStrongBuyWarn ? '#FBBF24'                    // amber — trend OK, momentum diverging
+    : isStrongBuyUnconfirmed ? '#FBBF24'             // amber — core rule OK, vol/conviction missing
+    : isChoppy ? '#94a3b8'                           // slate — ADX too weak, skip
     : isTrendingWait ? '#FBBF24'                     // amber
     : isBearishExit ? '#FB7185'                      // muted coral
     : isBuyAction ? '#10b981'
@@ -50,11 +54,15 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
   // Pill background: subtle tint of action colour for strategy verdicts so they pop.
   const actBg = isStrongBuy ? 'rgba(20,241,149,0.12)'
     : isStrongBuyWarn ? 'rgba(251,191,36,0.12)'
+    : isStrongBuyUnconfirmed ? 'rgba(251,191,36,0.10)'
+    : isChoppy ? 'rgba(148,163,184,0.10)'
     : isTrendingWait ? 'rgba(251,191,36,0.12)'
     : isBearishExit ? 'rgba(251,113,133,0.12)'
     : 'transparent'
   const actGlyph = isStrongBuy ? '🟢 '
     : isStrongBuyWarn ? '⚠ '
+    : isStrongBuyUnconfirmed ? '⚠ '
+    : isChoppy ? '⏸ '
     : isTrendingWait ? '🟡 '
     : isBearishExit ? '🔴 '
     : isBuyAction ? '▲ '
@@ -169,6 +177,30 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
                     }}
                   >
                     ST{stock.supertrend.flippedToBull ? '⚡' : ''}
+                  </span>
+                );
+              })()}
+              {/* ADX(14) trend-strength chip. ≥25 = trending (signals valid),
+                  20-25 = borderline, <20 = sideways (Supertrend block returns CHOPPY). */}
+              {stock.adx != null && (() => {
+                const trending = stock.adx >= 25;
+                const borderline = stock.adx >= 20 && stock.adx < 25;
+                const color = trending ? '#14F195' : borderline ? '#FBBF24' : '#94a3b8';
+                return (
+                  <span
+                    title={`ADX(14): ${stock.adx.toFixed(1)} — ${trending ? 'Trending strongly (Supertrend signals valid)' : borderline ? 'Borderline trend strength (use caution)' : 'Sideways tape (Supertrend signals suppressed)'}`}
+                    style={{
+                      padding: '0.1rem 0.4rem',
+                      borderRadius: '4px',
+                      fontSize: '0.6rem',
+                      fontWeight: 800,
+                      letterSpacing: '0.5px',
+                      color,
+                      background: `${color}1a`,
+                      border: `1px solid ${color}80`,
+                    }}
+                  >
+                    ADX {stock.adx.toFixed(0)}
                   </span>
                 );
               })()}

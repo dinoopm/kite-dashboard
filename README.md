@@ -32,7 +32,9 @@ A real-time analytical dashboard for your Zerodha Kite portfolio — built with 
 Portfolio-level technical scanner with per-stock conviction scoring and trade plans:
 
 - **Bullish Bias score (0–100)** — stacked points from RSI zone, SMA alignment, VWAP deviation, money flow, trend regime, and price leadership. Clickable modal shows the full breakdown and "How it works" explainer
-- **Trade plan tag** per row: `BUY SEEN` / `BREAKOUT (CAUTION)` / `BREAKOUT (WEAK)` / `HOLD / WAIT` / `HOLD (OVERBOUGHT)` / `SELL (AT RANGE)` / `AVOID`, with target, stop-loss, and reward-to-risk ratio
+- **Trade plan tag** per row: `STRONG BUY` / `STRONG BUY (DIV WARN)` / `STRONG BUY (UNCONFIRMED)` / `TRENDING (WAIT)` / `CHOPPY` / `BEARISH` / `BUY SEEN` / `BREAKOUT (CAUTION)` / `BREAKOUT (WEAK)` / `HOLD / WAIT` / `HOLD (OVERBOUGHT)` / `SELL (AT RANGE)` / `AVOID`, with target, stop-loss, and reward-to-risk ratio
+- **Supertrend + RSI + ADX entry rule** — `STRONG BUY` requires five filters to align: ADX(14) ≥ 25 (real trend, not chop), Supertrend(10,3) green, price > 200 EMA, RSI in the 60-70 momentum band, volume ≥ 1.2× the 20-day average, and the broader bullish-bias score ≥ 70. ADX below 25 → `CHOPPY` (signals suppressed). Volume or conviction missing → `STRONG BUY (UNCONFIRMED)`. Stop-loss trails the Supertrend line.
+- **ADX(14) badge** alongside the Supertrend chip — green ≥25 (trending), amber 20-25 (borderline), slate <20 (sideways)
 - **Multi-window breakout ladder** — scans 6 historical windows (1M, 3M, 6M, 1Y, 2Y, 3Y) against full price history. Each broken window is highlighted green; the badge shows the longest cleared window (e.g. `🚀 3Y BREAKOUT`). Nearest unbroken overhead acts as next resistance
 - **52-week high/low breakout** — dedicated alert when price clears or falls below the 52-week range
 - **Regime classifier** — `STRONG TREND` (BULL/BEAR), `RANGE-BOUND`, `WILD SWINGS`
