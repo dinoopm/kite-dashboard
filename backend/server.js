@@ -352,16 +352,23 @@ async function largeDealsHandler(req, res) {
   if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
   try {
     const symbol = req.params.symbol;
+    const { from, to, search } = req.query;
+    // Default limit 1000 when no symbol path; preserves rich histories for
+    // the /market-data/large-deals page while keeping payloads bounded.
+    const limit = Math.min(parseInt(req.query.limit, 10) || (symbol ? 1000 : 1000), 5000);
+
     let query = supabase
       .from('large_deals')
       .select('*')
       .order('trade_date', { ascending: false });
 
-    if (symbol) {
-      query = query.eq('symbol', symbol.toUpperCase());
-    } else {
-      query = query.limit(100);
-    }
+    if (symbol) query = query.eq('symbol', symbol.toUpperCase());
+    if (from) query = query.gte('trade_date', from);
+    if (to)   query = query.lte('trade_date', to);
+    // Search is a substring filter on symbol or client_name (case-insensitive).
+    if (search) query = query.or(`symbol.ilike.%${search}%,client_name.ilike.%${search}%`);
+
+    query = query.limit(limit);
 
     const { data, error } = await query;
     if (error) throw error;
@@ -377,17 +384,24 @@ app.get('/api/large-deals/:symbol', largeDealsHandler);
 app.get('/api/top-gainers-losers', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
   try {
-    const { category, index_name } = req.query;
+    const { category, index_name, from, to, search } = req.query;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
     let query = supabase
       .from('top_gainers_losers')
       .select('*')
+      .order('trade_date', { ascending: false })
       .order('pct_change', { ascending: category === 'LOSER' });
 
     if (category) query = query.eq('category', category.toUpperCase());
     if (index_name) query = query.eq('index_name', index_name);
+    // Preserve legacy default: when no date or index filter is given,
+    // restrict to the 'allSec' index so the dashboard widget keeps working.
+    if (!index_name && !from && !to) query = query.eq('index_name', 'allSec');
+    if (from) query = query.gte('trade_date', from);
+    if (to)   query = query.lte('trade_date', to);
+    if (search) query = query.ilike('symbol', `%${search}%`);
 
-    // Default to today's data for allSec if no filters
-    if (!index_name) query = query.eq('index_name', 'allSec');
+    query = query.limit(limit);
 
     const { data, error } = await query;
     if (error) throw error;
@@ -442,10 +456,57 @@ app.get('/api/participant-oi', async (req, res) => {
 app.get('/api/surveillance', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
   try {
-    const { data, error } = await supabase
-      .from('surveillance_stocks')
-      .select('*');
-      
+    const { measure, search } = req.query;
+    let query = supabase.from('surveillance_stocks').select('*').order('symbol', { ascending: true });
+    if (measure) query = query.eq('measure', measure.toUpperCase());
+    if (search) query = query.ilike('symbol', `%${search}%`);
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// NSE 52-week high/low daily snapshot — daily-keyed time series.
+app.get('/api/52wk-high-low', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
+  try {
+    const { from, to, search } = req.query;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
+    let query = supabase
+      .from('nse_52_week_high_low')
+      .select('*')
+      .order('trade_date', { ascending: false })
+      .order('symbol', { ascending: true });
+    if (from) query = query.gte('trade_date', from);
+    if (to)   query = query.lte('trade_date', to);
+    if (search) query = query.or(`symbol.ilike.%${search}%,company_name.ilike.%${search}%`);
+    query = query.limit(limit);
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// NSE volume gainers — daily snapshot of stocks with unusual volume.
+app.get('/api/volume-gainers', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
+  try {
+    const { from, to, search } = req.query;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 1000, 5000);
+    let query = supabase
+      .from('volume_gainers')
+      .select('*')
+      .order('trade_date', { ascending: false })
+      .order('week1_vol_change', { ascending: false, nullsFirst: false });
+    if (from) query = query.gte('trade_date', from);
+    if (to)   query = query.lte('trade_date', to);
+    if (search) query = query.or(`symbol.ilike.%${search}%,company_name.ilike.%${search}%`);
+    query = query.limit(limit);
+    const { data, error } = await query;
     if (error) throw error;
     res.json(data);
   } catch (err) {

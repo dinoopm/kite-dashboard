@@ -10,6 +10,11 @@ import SectorDetail from './pages/SectorDetail'
 import VixIndex from './pages/VixIndex'
 import Chat from './pages/Chat'
 import FiiDii from './pages/marketData/FiiDii'
+import LargeDeals from './pages/marketData/LargeDeals'
+import Week52HighLow from './pages/marketData/Week52HighLow'
+import TopGainersLosers from './pages/marketData/TopGainersLosers'
+import VolumeGainers from './pages/marketData/VolumeGainers'
+import SurveillanceStocks from './pages/marketData/SurveillanceStocks'
 import Navbar from './components/Navbar'
 
 function App() {
@@ -137,6 +142,11 @@ function App() {
           <Route path="/vix" element={<VixIndex />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/market-data/fii-dii" element={<FiiDii />} />
+          <Route path="/market-data/large-deals" element={<LargeDeals />} />
+          <Route path="/market-data/52wk-high-low" element={<Week52HighLow />} />
+          <Route path="/market-data/top-gainers-losers" element={<TopGainersLosers />} />
+          <Route path="/market-data/volume-gainers" element={<VolumeGainers />} />
+          <Route path="/market-data/surveillance" element={<SurveillanceStocks />} />
           <Route path="/instrument/:token" element={<Instrument />} />
           <Route path="/sector/:sectorId" element={<SectorDetail />} />
         </Routes>

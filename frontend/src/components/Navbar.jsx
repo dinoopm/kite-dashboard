@@ -4,7 +4,12 @@ import InstrumentSearch from './InstrumentSearch';
 
 // Sublinks under the "Market Data" dropdown. Adding more is a one-liner.
 const MARKET_DATA_LINKS = [
-  { to: '/market-data/fii-dii', label: 'FII / DII Activities', hint: 'Daily institutional cash-market flows with date filter, pagination, CSV export.' },
+  { to: '/market-data/fii-dii',             label: 'FII / DII Activities',      hint: 'Daily institutional cash-market flows.' },
+  { to: '/market-data/large-deals',         label: 'Large Deals',               hint: 'NSE bulk and block deal disclosures by named entities.' },
+  { to: '/market-data/52wk-high-low',       label: '52-Week High / Low',        hint: 'Daily snapshot of stocks at or near their yearly extremes.' },
+  { to: '/market-data/top-gainers-losers',  label: 'Top Gainers / Losers',      hint: 'Daily top movers by index segment.' },
+  { to: '/market-data/volume-gainers',      label: 'Volume Gainers',            hint: 'Stocks with unusual volume vs 1W/2W averages.' },
+  { to: '/market-data/surveillance',        label: 'Surveillance (ASM / GSM)',  hint: 'NSE ASM and GSM surveillance list — handle with extra care.' },
 ];
 
 function Navbar({ onDisconnect }) {
