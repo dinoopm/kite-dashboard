@@ -256,6 +256,70 @@ function MarketDataTable({
 
   return (
     <div className="dashboard-layout" style={{ maxWidth: '1500px', margin: '0 auto', padding: '1rem 2rem' }}>
+      {/* Scoped styles for the polished filter row. Inline styles can't
+          express :focus-within / :hover, so a small <style> block does it. */}
+      <style>{`
+        .md-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.2rem 0.7rem;
+          background: rgba(255,255,255,0.025);
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+        }
+        .md-pill:hover { background: rgba(255,255,255,0.05); }
+        .md-pill:focus-within {
+          border-color: #38bdf8;
+          background: rgba(56,189,248,0.06);
+          box-shadow: 0 0 0 3px rgba(56,189,248,0.12);
+        }
+        .md-pill > .md-label {
+          font-size: 0.6rem;
+          font-weight: 700;
+          color: var(--text-secondary);
+          text-transform: uppercase;
+          letter-spacing: 0.7px;
+        }
+        .md-pill > input,
+        .md-pill > select {
+          background: transparent;
+          color: var(--text-primary);
+          border: none;
+          outline: none;
+          padding: 0.3rem 0;
+          font-size: 0.82rem;
+          font-family: 'JetBrains Mono', ui-monospace, monospace;
+          color-scheme: dark;
+        }
+        .md-pill > input[type="date"] { min-width: 120px; }
+        .md-pill > select { cursor: pointer; padding-right: 0.5rem; }
+        .md-pill > input[type="text"] { min-width: 200px; font-family: inherit; }
+        .md-preset {
+          padding: 0.32rem 0.75rem;
+          border-radius: 5px;
+          border: 1px solid var(--border);
+          background: transparent;
+          color: var(--text-secondary);
+          cursor: pointer;
+          font-size: 0.72rem;
+          font-weight: 600;
+          letter-spacing: 0.2px;
+          transition: all 0.15s;
+        }
+        .md-preset:hover {
+          border-color: #38bdf8;
+          color: #38bdf8;
+          background: rgba(56,189,248,0.06);
+        }
+        .md-preset.active {
+          border-color: #38bdf8;
+          color: #38bdf8;
+          background: rgba(56,189,248,0.12);
+        }
+      `}</style>
+
       <header style={{ marginBottom: '1.5rem' }}>
         <h1 style={{ margin: 0, fontSize: '1.5rem', color: 'var(--text-primary)' }}>{title}</h1>
         {description && (
@@ -263,49 +327,41 @@ function MarketDataTable({
         )}
       </header>
 
-      <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
+      <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
         {useDateFilter && (
           <>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Range</span>
-            {PRESETS.map(p => (
-              <button
-                key={p.key}
-                onClick={() => applyPreset(p)}
-                style={{
-                  padding: '0.35rem 0.7rem', borderRadius: '4px',
-                  border: '1px solid var(--border)', background: 'transparent',
-                  color: 'var(--text-secondary)', cursor: 'pointer',
-                  fontSize: '0.75rem', fontWeight: 600,
-                }}
-              >
-                {p.label}
-              </button>
-            ))}
-            <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              From
-              <input
-                type="date" value={from} onChange={e => setFrom(e.target.value)}
-                style={{ background: 'var(--bg-dark)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: '4px', padding: '0.3rem 0.5rem', fontSize: '0.8rem' }}
-              />
+            <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.7px', fontWeight: 700 }}>📅 Range</span>
+            {PRESETS.map(p => {
+              const range = p.range()
+              const active = from === range.from && to === range.to
+              return (
+                <button
+                  key={p.key}
+                  onClick={() => applyPreset(p)}
+                  className={active ? 'md-preset active' : 'md-preset'}
+                >
+                  {p.label}
+                </button>
+              )
+            })}
+            <label className="md-pill">
+              <span className="md-label">From</span>
+              <input type="date" value={from} onChange={e => setFrom(e.target.value)} />
             </label>
-            <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              To
-              <input
-                type="date" value={to} onChange={e => setTo(e.target.value)}
-                style={{ background: 'var(--bg-dark)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: '4px', padding: '0.3rem 0.5rem', fontSize: '0.8rem' }}
-              />
+            <label className="md-pill">
+              <span className="md-label">To</span>
+              <input type="date" value={to} onChange={e => setTo(e.target.value)} />
             </label>
-            <span style={{ width: '1px', height: '22px', background: 'var(--border)' }} />
+            <span style={{ width: '1px', height: '22px', background: 'var(--border)', margin: '0 0.2rem' }} />
           </>
         )}
 
         {filterFields.map(f => (
-          <label key={f.key} style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            {f.label}
+          <label key={f.key} className="md-pill">
+            <span className="md-label">{f.label}</span>
             <select
               value={filterState[f.key] ?? ''}
               onChange={e => setFilterState(s => ({ ...s, [f.key]: e.target.value }))}
-              style={{ background: 'var(--bg-dark)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: '4px', padding: '0.3rem 0.5rem', fontSize: '0.8rem' }}
             >
               {f.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
@@ -313,13 +369,15 @@ function MarketDataTable({
         ))}
 
         {searchableFields.length > 0 && (
-          <input
-            type="text"
-            placeholder={`Search ${searchableFields.join(' / ')}…`}
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            style={{ background: 'var(--bg-dark)', color: 'var(--text-primary)', border: '1px solid var(--border)', borderRadius: '4px', padding: '0.3rem 0.6rem', fontSize: '0.8rem', minWidth: '200px' }}
-          />
+          <label className="md-pill">
+            <span className="md-label">🔍</span>
+            <input
+              type="text"
+              placeholder={`Search ${searchableFields.join(' / ')}…`}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </label>
         )}
 
         <div style={{ flex: 1 }} />
