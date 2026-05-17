@@ -1,56 +1,96 @@
 import { Link, useLocation } from 'react-router-dom';
+import { useState } from 'react';
 import InstrumentSearch from './InstrumentSearch';
+
+// Sublinks under the "Market Data" dropdown. Adding more is a one-liner.
+const MARKET_DATA_LINKS = [
+  { to: '/market-data/fii-dii', label: 'FII / DII Activities', hint: 'Daily institutional cash-market flows with date filter, pagination, CSV export.' },
+];
 
 function Navbar({ onDisconnect }) {
   const location = useLocation();
+  const [marketDataOpen, setMarketDataOpen] = useState(false);
+
+  // Highlight the parent dropdown trigger when the user is on a child page.
+  const onMarketDataPage = location.pathname.startsWith('/market-data');
+
+  const linkStyle = (active) => ({
+    textDecoration: 'none',
+    color: active ? 'white' : 'var(--text-secondary)',
+    fontWeight: active ? 'bold' : 'normal',
+    transition: 'color 0.2s',
+  });
 
   return (
     <nav className="glass-panel" style={{ display: 'flex', gap: '1.5rem', marginBottom: '2rem', padding: '1rem 2rem', alignItems: 'center', position: 'relative', zIndex: 9999 }}>
       <h2 style={{ margin: 0, marginRight: '1rem', color: 'var(--accent)' }}>Kite Analytics</h2>
-      <Link 
-        to="/" 
-        style={{ 
-          textDecoration: 'none', 
-          color: location.pathname === '/' ? 'white' : 'var(--text-secondary)',
-          fontWeight: location.pathname === '/' ? 'bold' : 'normal',
-          transition: 'color 0.2s'
-        }}
+      <Link to="/" style={linkStyle(location.pathname === '/')}>Dashboard</Link>
+      <Link to="/portfolio" style={linkStyle(location.pathname === '/portfolio')}>Portfolio</Link>
+      <Link to="/indices" style={linkStyle(location.pathname === '/indices')}>Indices Performance</Link>
+      <Link to="/vix" style={linkStyle(location.pathname === '/vix')}>VIX Index</Link>
+
+      {/* Market Data dropdown — hover to open, click a child to navigate. */}
+      <div
+        onMouseEnter={() => setMarketDataOpen(true)}
+        onMouseLeave={() => setMarketDataOpen(false)}
+        style={{ position: 'relative' }}
       >
-        Dashboard
-      </Link>
-      <Link 
-        to="/portfolio" 
-        style={{ 
-          textDecoration: 'none', 
-          color: location.pathname === '/portfolio' ? 'white' : 'var(--text-secondary)',
-          fontWeight: location.pathname === '/portfolio' ? 'bold' : 'normal',
-          transition: 'color 0.2s'
-        }}
-      >
-        Portfolio
-      </Link>
-      <Link
-        to="/indices"
-        style={{ 
-          textDecoration: 'none', 
-          color: location.pathname === '/indices' ? 'white' : 'var(--text-secondary)',
-          fontWeight: location.pathname === '/indices' ? 'bold' : 'normal',
-          transition: 'color 0.2s'
-        }}
-      >
-        Indices Performance
-      </Link>
-      <Link
-        to="/vix"
-        style={{
-          textDecoration: 'none',
-          color: location.pathname === '/vix' ? 'white' : 'var(--text-secondary)',
-          fontWeight: location.pathname === '/vix' ? 'bold' : 'normal',
-          transition: 'color 0.2s'
-        }}
-      >
-        VIX Index
-      </Link>
+        <span
+          style={{
+            ...linkStyle(onMarketDataPage),
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.25rem',
+          }}
+        >
+          Market Data
+          <span style={{ fontSize: '0.7rem', transition: 'transform 0.15s', transform: marketDataOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
+        </span>
+        {marketDataOpen && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0,
+              marginTop: '0.5rem',
+              minWidth: '240px',
+              background: 'var(--bg-card, #0f172a)',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              padding: '0.4rem 0',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+              zIndex: 10000,
+            }}
+          >
+            {MARKET_DATA_LINKS.map(l => {
+              const active = location.pathname === l.to;
+              return (
+                <Link
+                  key={l.to}
+                  to={l.to}
+                  title={l.hint}
+                  onClick={() => setMarketDataOpen(false)}
+                  style={{
+                    display: 'block',
+                    padding: '0.55rem 0.9rem',
+                    textDecoration: 'none',
+                    color: active ? 'white' : 'var(--text-secondary)',
+                    background: active ? 'rgba(56,189,248,0.10)' : 'transparent',
+                    fontSize: '0.85rem',
+                    fontWeight: active ? 600 : 500,
+                  }}
+                  onMouseOver={(e) => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
+                  onMouseOut={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  {l.label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <Link
         to="/chat"
         style={{

@@ -9,6 +9,7 @@ import SectorIndices from './pages/SectorIndices'
 import SectorDetail from './pages/SectorDetail'
 import VixIndex from './pages/VixIndex'
 import Chat from './pages/Chat'
+import FiiDii from './pages/marketData/FiiDii'
 import Navbar from './components/Navbar'
 
 function App() {
@@ -135,6 +136,7 @@ function App() {
           <Route path="/indices" element={<SectorIndices />} />
           <Route path="/vix" element={<VixIndex />} />
           <Route path="/chat" element={<Chat />} />
+          <Route path="/market-data/fii-dii" element={<FiiDii />} />
           <Route path="/instrument/:token" element={<Instrument />} />
           <Route path="/sector/:sectorId" element={<SectorDetail />} />
         </Routes>

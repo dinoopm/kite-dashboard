@@ -401,14 +401,21 @@ app.get('/api/fiidii', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
   try {
     // Default to just the latest row (the dashboard widget only renders one).
-    // Callers needing history can pass ?limit=N (capped at 30 to keep payload bounded).
-    const limit = Math.min(parseInt(req.query.limit, 10) || 1, 30);
-    const { data, error } = await supabase
+    // The /market-data/fii-dii page passes ?limit=1000 with optional ?from
+    // and ?to date filters to populate a full historical table. Limit is
+    // capped at 1000 to keep payloads bounded — that's ~4 years of trading
+    // days, plenty for the UI's date-range needs.
+    const limit = Math.min(parseInt(req.query.limit, 10) || 1, 1000);
+    const { from, to } = req.query;
+    let q = supabase
       .from('fii_dii_activity')
       .select('*')
-      .order('trade_date', { ascending: false })
-      .limit(limit);
+      .order('trade_date', { ascending: false });
+    if (from) q = q.gte('trade_date', from);
+    if (to)   q = q.lte('trade_date', to);
+    q = q.limit(limit);
 
+    const { data, error } = await q;
     if (error) throw error;
     res.json(data);
   } catch (err) {
