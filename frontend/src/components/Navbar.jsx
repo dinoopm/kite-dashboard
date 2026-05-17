@@ -1,19 +1,23 @@
 import { Link, useLocation } from 'react-router-dom';
+import { useState } from 'react';
 import InstrumentSearch from './InstrumentSearch';
 
-// Top-level market-data links — flattened out of the previous dropdown.
-// Short labels keep the navbar from overflowing on narrower screens.
+// Sublinks under the "Market Data" dropdown. Adding more is a one-liner.
 const MARKET_DATA_LINKS = [
-  { to: '/market-data/fii-dii',            label: 'FII / DII',       hint: 'Daily institutional cash-market flows.' },
-  { to: '/market-data/large-deals',        label: 'Large Deals',     hint: 'NSE bulk and block deal disclosures.' },
-  { to: '/market-data/52wk-high-low',      label: '52W H/L',         hint: 'Daily snapshot of stocks at their yearly extremes.' },
-  { to: '/market-data/top-gainers-losers', label: 'Top Movers',      hint: 'Daily top gainers and losers by index segment.' },
-  { to: '/market-data/volume-gainers',     label: 'Volume Gainers',  hint: 'Stocks with unusual volume vs 1W/2W averages.' },
-  { to: '/market-data/surveillance',       label: 'Surveillance',    hint: 'NSE ASM/GSM surveillance list.' },
+  { to: '/market-data/fii-dii',             label: 'FII / DII Activities',      hint: 'Daily institutional cash-market flows.' },
+  { to: '/market-data/large-deals',         label: 'Large Deals',               hint: 'NSE bulk and block deal disclosures by named entities.' },
+  { to: '/market-data/52wk-high-low',       label: '52-Week High / Low',        hint: 'Daily snapshot of stocks at or near their yearly extremes.' },
+  { to: '/market-data/top-gainers-losers',  label: 'Top Gainers / Losers',      hint: 'Daily top movers by index segment.' },
+  { to: '/market-data/volume-gainers',      label: 'Volume Gainers',            hint: 'Stocks with unusual volume vs 1W/2W averages.' },
+  { to: '/market-data/surveillance',        label: 'Surveillance (ASM / GSM)',  hint: 'NSE ASM and GSM surveillance list — handle with extra care.' },
 ];
 
 function Navbar({ onDisconnect }) {
   const location = useLocation();
+  const [marketDataOpen, setMarketDataOpen] = useState(false);
+
+  // Highlight the parent trigger when the user is on any child page.
+  const onMarketDataPage = location.pathname.startsWith('/market-data');
 
   const linkStyle = (active) => ({
     textDecoration: 'none',
@@ -24,24 +28,74 @@ function Navbar({ onDisconnect }) {
   });
 
   return (
-    <nav className="glass-panel" style={{ display: 'flex', gap: '1.1rem', marginBottom: '2rem', padding: '1rem 1.5rem', alignItems: 'center', position: 'relative', zIndex: 9999, flexWrap: 'wrap' }}>
-      <h2 style={{ margin: 0, marginRight: '0.8rem', color: 'var(--accent)', whiteSpace: 'nowrap' }}>Kite Analytics</h2>
-
+    <nav className="glass-panel" style={{ display: 'flex', gap: '1.5rem', marginBottom: '2rem', padding: '1rem 2rem', alignItems: 'center', position: 'relative', zIndex: 9999 }}>
+      <h2 style={{ margin: 0, marginRight: '1rem', color: 'var(--accent)' }}>Kite Analytics</h2>
       <Link to="/" style={linkStyle(location.pathname === '/')}>Dashboard</Link>
       <Link to="/portfolio" style={linkStyle(location.pathname === '/portfolio')}>Portfolio</Link>
       <Link to="/indices" style={linkStyle(location.pathname === '/indices')}>Indices</Link>
       <Link to="/vix" style={linkStyle(location.pathname === '/vix')}>VIX</Link>
 
-      {MARKET_DATA_LINKS.map(l => (
-        <Link
-          key={l.to}
-          to={l.to}
-          title={l.hint}
-          style={linkStyle(location.pathname === l.to)}
+      {/* Market Data — hover-open dropdown listing all six sublinks. */}
+      <div
+        onMouseEnter={() => setMarketDataOpen(true)}
+        onMouseLeave={() => setMarketDataOpen(false)}
+        style={{ position: 'relative' }}
+      >
+        <span
+          style={{
+            ...linkStyle(onMarketDataPage),
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.25rem',
+          }}
         >
-          {l.label}
-        </Link>
-      ))}
+          Market Data
+          <span style={{ fontSize: '0.7rem', transition: 'transform 0.15s', transform: marketDataOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
+        </span>
+        {marketDataOpen && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0,
+              marginTop: '0.5rem',
+              minWidth: '260px',
+              background: 'var(--bg-card, #0f172a)',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              padding: '0.4rem 0',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+              zIndex: 10000,
+            }}
+          >
+            {MARKET_DATA_LINKS.map(l => {
+              const active = location.pathname === l.to;
+              return (
+                <Link
+                  key={l.to}
+                  to={l.to}
+                  title={l.hint}
+                  onClick={() => setMarketDataOpen(false)}
+                  style={{
+                    display: 'block',
+                    padding: '0.55rem 0.9rem',
+                    textDecoration: 'none',
+                    color: active ? 'white' : 'var(--text-secondary)',
+                    background: active ? 'rgba(56,189,248,0.10)' : 'transparent',
+                    fontSize: '0.85rem',
+                    fontWeight: active ? 600 : 500,
+                  }}
+                  onMouseOver={(e) => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
+                  onMouseOut={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  {l.label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       <Link
         to="/chat"
