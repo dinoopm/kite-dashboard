@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import InstrumentSearch from './InstrumentSearch';
 
 // Sublinks under the "Market Data" dropdown. Adding more is a one-liner.
@@ -15,6 +15,17 @@ const MARKET_DATA_LINKS = [
 function Navbar({ onDisconnect }) {
   const location = useLocation();
   const [marketDataOpen, setMarketDataOpen] = useState(false);
+  // Small close delay so brief cursor wobbles between trigger and panel
+  // don't immediately dismiss the menu. Cleared on re-entry.
+  const closeTimerRef = useRef(null);
+  const openMenu = () => {
+    if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null; }
+    setMarketDataOpen(true);
+  };
+  const scheduleClose = () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = setTimeout(() => setMarketDataOpen(false), 180);
+  };
 
   // Highlight the parent trigger when the user is on any child page.
   const onMarketDataPage = location.pathname.startsWith('/market-data');
@@ -35,10 +46,11 @@ function Navbar({ onDisconnect }) {
       <Link to="/indices" style={linkStyle(location.pathname === '/indices')}>Indices</Link>
       <Link to="/vix" style={linkStyle(location.pathname === '/vix')}>VIX</Link>
 
-      {/* Market Data — hover-open dropdown listing all six sublinks. */}
+      {/* Market Data dropdown. The outer wrapper keeps cursor-tracking
+          continuous across the trigger and the panel — no inter-element gap. */}
       <div
-        onMouseEnter={() => setMarketDataOpen(true)}
-        onMouseLeave={() => setMarketDataOpen(false)}
+        onMouseEnter={openMenu}
+        onMouseLeave={scheduleClose}
         style={{ position: 'relative' }}
       >
         <span
@@ -54,45 +66,56 @@ function Navbar({ onDisconnect }) {
           <span style={{ fontSize: '0.7rem', transition: 'transform 0.15s', transform: marketDataOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
         </span>
         {marketDataOpen && (
+          // Panel sits FLUSH against the trigger (top: 100%, no marginTop).
+          // A transparent paddingTop creates the visual breathing room while
+          // keeping the hover area continuous so the cursor never crosses
+          // dead space on its way down to the menu items.
           <div
+            onMouseEnter={openMenu}
+            onMouseLeave={scheduleClose}
             style={{
               position: 'absolute',
               top: '100%',
               left: 0,
-              marginTop: '0.5rem',
+              paddingTop: '0.5rem',
               minWidth: '260px',
-              background: 'var(--bg-card, #0f172a)',
-              border: '1px solid var(--border)',
-              borderRadius: '8px',
-              padding: '0.4rem 0',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
               zIndex: 10000,
             }}
           >
-            {MARKET_DATA_LINKS.map(l => {
-              const active = location.pathname === l.to;
-              return (
-                <Link
-                  key={l.to}
-                  to={l.to}
-                  title={l.hint}
-                  onClick={() => setMarketDataOpen(false)}
-                  style={{
-                    display: 'block',
-                    padding: '0.55rem 0.9rem',
-                    textDecoration: 'none',
-                    color: active ? 'white' : 'var(--text-secondary)',
-                    background: active ? 'rgba(56,189,248,0.10)' : 'transparent',
-                    fontSize: '0.85rem',
-                    fontWeight: active ? 600 : 500,
-                  }}
-                  onMouseOver={(e) => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
-                  onMouseOut={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
-                >
-                  {l.label}
-                </Link>
-              );
-            })}
+            <div
+              style={{
+                background: 'var(--bg-card, #0f172a)',
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                padding: '0.4rem 0',
+                boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+              }}
+            >
+              {MARKET_DATA_LINKS.map(l => {
+                const active = location.pathname === l.to;
+                return (
+                  <Link
+                    key={l.to}
+                    to={l.to}
+                    title={l.hint}
+                    onClick={() => setMarketDataOpen(false)}
+                    style={{
+                      display: 'block',
+                      padding: '0.55rem 0.9rem',
+                      textDecoration: 'none',
+                      color: active ? 'white' : 'var(--text-secondary)',
+                      background: active ? 'rgba(56,189,248,0.10)' : 'transparent',
+                      fontSize: '0.85rem',
+                      fontWeight: active ? 600 : 500,
+                    }}
+                    onMouseOver={(e) => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
+                    onMouseOut={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    {l.label}
+                  </Link>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
