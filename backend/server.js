@@ -352,7 +352,7 @@ async function largeDealsHandler(req, res) {
   if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
   try {
     const symbol = req.params.symbol;
-    const { from, to, search } = req.query;
+    const { from, to, search, deal_category } = req.query;
     // Default limit 1000 when no symbol path; preserves rich histories for
     // the /market-data/large-deals page while keeping payloads bounded.
     const limit = Math.min(parseInt(req.query.limit, 10) || (symbol ? 1000 : 1000), 5000);
@@ -363,6 +363,7 @@ async function largeDealsHandler(req, res) {
       .order('trade_date', { ascending: false });
 
     if (symbol) query = query.eq('symbol', symbol.toUpperCase());
+    if (deal_category) query = query.eq('deal_category', deal_category.toUpperCase());
     if (from) query = query.gte('trade_date', from);
     if (to)   query = query.lte('trade_date', to);
     // Search is a substring filter on symbol or client_name (case-insensitive).

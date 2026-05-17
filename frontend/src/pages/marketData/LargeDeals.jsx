@@ -16,10 +16,11 @@ function LargeDeals() {
           key: 'deal_category',
           label: 'Category',
           queryParam: 'deal_category',
+          // Values match what the scraper writes ('BULK'/'BLOCK', uppercase).
           options: [
             { value: '',      label: 'All'   },
-            { value: 'Bulk',  label: 'Bulk'  },
-            { value: 'Block', label: 'Block' },
+            { value: 'BULK',  label: 'Bulk'  },
+            { value: 'BLOCK', label: 'Block' },
           ],
         },
       ]}

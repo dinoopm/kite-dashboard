@@ -69,10 +69,14 @@ async function run() {
             ...blockDeals.map(d => mapDeal(d, 'BLOCK'))
         ];
 
-        // NSE sometimes includes duplicate rows; deduplicate by conflict key before upsert
+        // NSE sometimes includes duplicate rows; deduplicate by the FULL
+        // conflict key (including deal_category) before upsert. Without
+        // deal_category in the dedup key, a BULK + BLOCK with otherwise-
+        // identical (date, symbol, client, type, qty) collapse to one and
+        // the BLOCK row gets silently dropped.
         const seen = new Set();
         const cleanData = allDeals.filter(deal => {
-            const key = `${deal.trade_date}|${deal.symbol}|${deal.client_name}|${deal.deal_type}|${deal.quantity}`;
+            const key = `${deal.trade_date}|${deal.symbol}|${deal.client_name}|${deal.deal_type}|${deal.quantity}|${deal.deal_category}`;
             if (seen.has(key)) return false;
             seen.add(key);
             return true;
@@ -83,11 +87,18 @@ async function run() {
             return;
         }
 
-        console.log(`[LargeDeals] Found ${cleanData.length} deals. Upserting to Supabase...`);
+        // Audit log for the BULK/BLOCK split — makes it obvious when NSE
+        // changes the response shape and the scraper silently zeros out one
+        // side (the only way "block deals not saving" would happen quietly).
+        const splitCounts = cleanData.reduce((acc, d) => {
+            acc[d.deal_category] = (acc[d.deal_category] || 0) + 1;
+            return acc;
+        }, {});
+        console.log(`[LargeDeals] Found ${cleanData.length} deals (split: ${JSON.stringify(splitCounts)}). Upserting...`);
 
         const { error } = await supabase
             .from('large_deals')
-            .upsert(cleanData, { onConflict: 'trade_date, symbol, client_name, deal_type, quantity' });
+            .upsert(cleanData, { onConflict: 'trade_date, symbol, client_name, deal_type, quantity, deal_category' });
 
         if (error) throw error;
         console.log(`✅ Success: Synced ${cleanData.length} large deals.`);
