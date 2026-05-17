@@ -858,12 +858,13 @@ export default function SectorDetail() {
     const breakoutCount = sectorAlerts.filter(s => s.isBreakout).length;
     const superFlipCount = sectorAlerts.filter(s => s.supertrend?.flippedToBull).length;
     // Early movers — any one of: fresh ST flip, bullish RSI divergence,
-    // fresh breakout, heavy buy-side volume. Mirrors the Alerts page rule.
+    // fresh breakout, buy-side volume ≥1.2× on up-day. Mirrors the Alerts
+    // page rule and matches the STRONG BUY volume floor.
     const isEarlyMover = (s) => {
       if (s.supertrend?.flippedToBull) return true;
       if (s.divergence === 'BUY SETUP') return true;
       if (s.isBreakout) return true;
-      if ((s.volSurge ?? 0) >= 1.5 && s.volumeConfirmedSide === 'up') return true;
+      if ((s.volSurge ?? 0) >= 1.2 && s.volumeConfirmedSide === 'up') return true;
       return false;
     };
     const earlyCount = sectorAlerts.filter(isEarlyMover).length;
@@ -970,7 +971,7 @@ export default function SectorDetail() {
               fontWeight: alertFilterEarly ? 600 : 400,
               fontSize: '0.8rem'
             }}
-            title="Early movers: stocks stirring before the full STRONG BUY chain fires. Any one of these trips it — ST just flipped BULL · bullish RSI divergence · fresh breakout · heavy buy-side volume (≥1.5× on up-day)."
+            title="Early movers: stocks stirring before the full STRONG BUY chain fires. Any one of these trips it — ST just flipped BULL · bullish RSI divergence · fresh breakout · buy-side volume ≥1.2× on up-day."
           >
             ✨ Early ({earlyCount})
           </button>

@@ -131,18 +131,14 @@ function Alerts() {
   //   · ST just flipped to BULL on the latest bar (today's reversal)
   //   · Bullish RSI divergence (price made lower low, RSI made higher low)
   //   · Fresh breakout above the most recent resistance window
-  //   · Heavy buy-side volume surge (≥ 1.5× avg on an up-day)
-  //   · ADX has just entered the trending regime (≥ 25) — only when paired
-  //     with a BULL Supertrend, to avoid surfacing bears as "early"
+  //   · Buy-side volume above 1.2× the 20-day average on an up-day
+  // Matches the STRONG BUY rule's volume floor so early candidates align with
+  // what eventually triggers a confirmed entry.
   const isEarlyMover = (s) => {
     if (s.supertrend?.flippedToBull) return true
     if (s.divergence === 'BUY SETUP') return true
     if (s.isBreakout) return true
-    if ((s.volSurge ?? 0) >= 1.5 && s.volumeConfirmedSide === 'up') return true
-    if ((s.adx ?? 0) >= 25 && s.supertrend?.signal === 'BULL' && !s.supertrend?.flippedToBull) {
-      // already trending and bullish — too late to count as "early"; skip
-      return false
-    }
+    if ((s.volSurge ?? 0) >= 1.2 && s.volumeConfirmedSide === 'up') return true
     return false
   }
   const earlyCount = (alerts || []).filter(isEarlyMover).length
@@ -406,7 +402,7 @@ function Alerts() {
             <button
               onClick={() => setFilterEarly(!filterEarly)}
               style={{ fontSize: '0.7rem', fontWeight: filterEarly ? '800' : '500', padding: '0.3rem 0.6rem', background: filterEarly ? 'rgba(168,85,247,0.18)' : 'transparent', color: filterEarly ? '#a855f7' : '#cbd5e1', border: `1px solid ${filterEarly ? '#a855f7' : '#334155'}`, borderRadius: '4px', cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-              title="Early movers: stocks stirring before the full STRONG BUY chain fires. Any one of these trips the filter — ST just flipped BULL · bullish RSI divergence · fresh breakout · heavy buy-side volume (≥1.5× on up-day). Use this to scout candidates before they confirm."
+              title="Early movers: stocks stirring before the full STRONG BUY chain fires. Any one of these trips the filter — ST just flipped BULL · bullish RSI divergence · fresh breakout · buy-side volume ≥1.2× on up-day. Use this to scout candidates before they confirm."
             >
               ✨ Early
               <span style={{
