@@ -28,7 +28,7 @@ function Week52HighLow() {
       initialSort={{ key: 'trade_date', dir: 'desc' }}
       columns={[
         { key: 'trade_date',             label: 'DATE',     fmt: 'date',     bold: true },
-        { key: 'symbol',                 label: 'SYMBOL',   bold: true },
+        { key: 'symbol',                 label: 'SYMBOL',   bold: true, linkable: 'symbol' },
         { key: 'series',                 label: 'SERIES' },
         { key: 'company_name',           label: 'COMPANY' },
         { key: 'adjusted_52_week_high',  label: '52W HIGH', fmt: 'currency', align: 'right', color: '#10b981' },

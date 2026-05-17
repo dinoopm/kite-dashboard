@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 // ─── Formatters ──────────────────────────────────────────────────
 function fmtNumber(v) {
@@ -119,6 +120,37 @@ function MarketDataTable({
   const [pageSize, setPageSize] = useState(defaultPageSize)
   const [sort, setSort] = useState(initialSort || (dateField ? { key: dateField, dir: 'desc' } : null))
   const [search, setSearch] = useState('')
+
+  // ─── Symbol → instrument-token resolution for linkable symbol cells.
+  // Cached in a ref so repeated clicks on the same symbol skip the lookup.
+  const navigate = useNavigate()
+  const tokenCacheRef = useRef(new Map())
+  const handleSymbolClick = async (symbol) => {
+    if (!symbol) return
+    const cached = tokenCacheRef.current.get(symbol)
+    if (cached) {
+      navigate(`/instrument/${cached}?symbol=${encodeURIComponent(symbol)}`)
+      return
+    }
+    try {
+      const r = await fetch(`/api/instrument-info/${encodeURIComponent(symbol)}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const info = await r.json()
+      const token = info?.instrument_token
+      if (!token) {
+        // Soft-fall: open the page anyway, the Instrument component handles
+        // missing token gracefully via the `?symbol=` query param.
+        navigate(`/instrument/0?symbol=${encodeURIComponent(symbol)}`)
+        return
+      }
+      tokenCacheRef.current.set(symbol, token)
+      navigate(`/instrument/${token}?symbol=${encodeURIComponent(symbol)}`)
+    } catch (e) {
+      // Silently fall back to the symbol-only URL — the Instrument page will
+      // still load quote and fundamentals; only the chart requires the token.
+      navigate(`/instrument/0?symbol=${encodeURIComponent(symbol)}`)
+    }
+  }
   // Active value for each filterField, keyed by filterField.key.
   const [filterState, setFilterState] = useState(() => {
     const init = {}
@@ -346,17 +378,24 @@ function MarketDataTable({
                     <tr key={rowKey ? rowKey(r, idx) : idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
                       {columns.map(c => {
                         const value = r[c.key]
+                        const isSymbolLink = c.linkable === 'symbol' && value
                         return (
                           <td
                             key={c.key}
                             style={{
                               padding: '0.55rem 0.9rem',
                               textAlign: c.align || 'left',
-                              color: resolveColor(c, value, r),
+                              color: isSymbolLink ? '#38bdf8' : resolveColor(c, value, r),
                               fontSize: '0.78rem',
                               fontWeight: c.bold ? 700 : 500,
                               whiteSpace: 'nowrap',
+                              cursor: isSymbolLink ? 'pointer' : undefined,
+                              textDecoration: isSymbolLink ? 'none' : undefined,
                             }}
+                            onClick={isSymbolLink ? () => handleSymbolClick(value) : undefined}
+                            onMouseOver={isSymbolLink ? (e) => { e.currentTarget.style.textDecoration = 'underline' } : undefined}
+                            onMouseOut={isSymbolLink ? (e) => { e.currentTarget.style.textDecoration = 'none' } : undefined}
+                            title={isSymbolLink ? `Open ${value} instrument page` : undefined}
                           >
                             {formatCell(value, c.fmt)}
                           </td>

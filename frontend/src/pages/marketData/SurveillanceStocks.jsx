@@ -27,7 +27,7 @@ function SurveillanceStocks() {
       rowKey={(r, i) => `${r.symbol}-${r.measure}-${i}`}
       initialSort={{ key: 'symbol', dir: 'asc' }}
       columns={[
-        { key: 'symbol',  label: 'SYMBOL',  bold: true },
+        { key: 'symbol',  label: 'SYMBOL',  bold: true, linkable: 'symbol' },
         { key: 'measure', label: 'MEASURE',
           color: (v) => v === 'ASM' ? '#fcd34d' : v === 'GSM' ? '#fb7185' : 'var(--text-secondary)' },
         { key: 'stage',   label: 'STAGE' },

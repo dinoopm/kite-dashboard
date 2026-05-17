@@ -737,7 +737,7 @@ app.get('/api/instrument-info/:symbol', async (req, res) => {
       name: "search_instruments",
       arguments: { query: cacheKey, filter_on: "id", limit: 1 }
     }, 8000);
-    let info = { symbol, exchange, name: null, isin: null };
+    let info = { symbol, exchange, name: null, isin: null, instrument_token: null };
     if (result?.content?.[0]?.text) {
       const parsed = JSON.parse(result.content[0].text);
       const row = parsed?.data?.[0];
@@ -748,6 +748,9 @@ app.get('/api/instrument-info/:symbol', async (req, res) => {
           name: row.name || null,
           isin: row.isin || null,
           tradingsymbol: row.tradingsymbol || symbol,
+          // Needed by the Market Data tables to deep-link cells into the
+          // Instrument page (which routes by numeric token, not symbol).
+          instrument_token: row.instrument_token || null,
         };
       }
     }

@@ -42,7 +42,7 @@ function TopGainersLosers() {
       initialSort={{ key: 'pct_change', dir: 'desc' }}
       columns={[
         { key: 'trade_date',      label: 'DATE',       fmt: 'date',     bold: true },
-        { key: 'symbol',          label: 'SYMBOL',     bold: true },
+        { key: 'symbol',          label: 'SYMBOL',     bold: true, linkable: 'symbol' },
         { key: 'series',          label: 'SERIES' },
         { key: 'ltp',             label: 'LTP',        fmt: 'currency', align: 'right' },
         { key: 'prev_price',      label: 'PREV',       fmt: 'currency', align: 'right' },

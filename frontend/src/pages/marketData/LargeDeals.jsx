@@ -27,7 +27,7 @@ function LargeDeals() {
       initialSort={{ key: 'trade_date', dir: 'desc' }}
       columns={[
         { key: 'trade_date',     label: 'DATE',        fmt: 'date',     bold: true },
-        { key: 'symbol',         label: 'SYMBOL',      bold: true },
+        { key: 'symbol',         label: 'SYMBOL',      bold: true, linkable: 'symbol' },
         { key: 'client_name',    label: 'CLIENT' },
         { key: 'deal_type',      label: 'TYPE',
           color: (v) => v === 'BUY' || v === 'Buy' ? '#10b981' : v === 'SELL' || v === 'Sell' ? '#ef4444' : '#cbd5e1' },
