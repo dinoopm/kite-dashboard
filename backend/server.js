@@ -2351,13 +2351,32 @@ app.get('/api/rrg', async (req, res) => {
         return (v / rsSmoothSMA[i]) * 100;
       });
 
-      // RS-Momentum = (RS_Ratio / SMA(RS_Ratio, dynMomSma)) * 100
-      const validRsRatio = rsRatio.map(v => v === null ? 0 : v);
-      const rsRatioSMA = computeSMA(validRsRatio, momSmaWindow);
-      const rsMomentum = validRsRatio.map((v, i) => {
-        if (rsRatioSMA[i] === null || rsRatioSMA[i] === 0 || v === 0) return null;
-        return (v / rsRatioSMA[i]) * 100;
-      });
+      // RS-Momentum = (RS_Ratio / SMA(RS_Ratio, momSmaWindow)) * 100
+      //
+      // Treating early `null` rsRatio values as 0 (the previous logic)
+      // polluted the SMA window with zeros for the entire warmup period.
+      // When real rsRatio values (~100) finally started, the SMA was still
+      // averaging in 25 zeros and 1 real value → SMA ≈ 3.85 → rsMomentum
+      // exploded to ~2600. CHEMICALS hit this hardest because it had fewer
+      // aligned weeks; the user saw rsMomentum = 1300 vs every other
+      // sector's 95-115.
+      //
+      // Fix: compute the SMA only on the valid suffix of rsRatio (from the
+      // first non-null index onward), then map results back to the original
+      // index space. The null prefix produces null rsMomentum, which is
+      // already filtered out by the series builder below.
+      const firstValidIdx = rsRatio.findIndex(v => v !== null && v !== 0);
+      const rsMomentum = rsRatio.map(() => null);
+      if (firstValidIdx >= 0) {
+        const validSlice = rsRatio.slice(firstValidIdx);
+        const validSliceSMA = computeSMA(validSlice, momSmaWindow);
+        for (let i = 0; i < validSlice.length; i++) {
+          const v = validSlice[i];
+          const sma = validSliceSMA[i];
+          if (v == null || v === 0 || sma == null || sma === 0) continue;
+          rsMomentum[firstValidIdx + i] = (v / sma) * 100;
+        }
+      }
 
       // Build the output series — last 52 valid weekly data points
       const series = [];
