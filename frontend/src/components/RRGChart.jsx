@@ -216,18 +216,34 @@ export default function RRGChart({
   const cx100 = scaleX(100);
   const cy100 = scaleY(100);
 
-  const xTicks = [], yTicks = [];
-  const xRange = axisBounds.maxX - axisBounds.minX;
-  const xInterval = xRange > 30 ? 5 : xRange > 15 ? 2 : xRange > 8 ? 1 : 0.5;
-  const startX = Math.floor(axisBounds.minX / xInterval) * xInterval;
-  const endX = Math.ceil(axisBounds.maxX / xInterval) * xInterval;
-  for (let v = startX; v <= endX; v += xInterval) xTicks.push(v);
+  // ─── Tick generation
+  // The previous hardcoded bands (>30→5, >15→2, >8→1, else→0.5) broke when
+  // an outlier sector (e.g. CHEMICALS at y≈105 with the rest clustered at
+  // y≈99-100) pushed the range to ~10. That fell into the "interval = 1"
+  // bucket and produced 10+ labels in a 545 px height, which rendered as
+  // unreadable overlapping text.
+  //
+  // Switch to a "nice number" step that targets ~6–8 ticks regardless of
+  // range, so adding an outlier just widens the spacing instead of stacking
+  // labels.
+  const NICE_STEPS = [0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50];
+  const TARGET_TICKS = 7;
+  const niceStep = (range) => {
+    const raw = range / TARGET_TICKS;
+    return NICE_STEPS.find(s => s >= raw) || Math.ceil(raw / 50) * 50;
+  };
+  const buildTicks = (min, max) => {
+    const step = niceStep(max - min);
+    const start = Math.floor(min / step) * step;
+    const end   = Math.ceil(max / step) * step;
+    const ticks = [];
+    // Round each tick to avoid 99.99999999 from float math.
+    for (let v = start; v <= end + 1e-9; v += step) ticks.push(+v.toFixed(4));
+    return ticks;
+  };
 
-  const yRange = axisBounds.maxY - axisBounds.minY;
-  const yInterval = yRange > 30 ? 5 : yRange > 15 ? 2 : yRange > 8 ? 1 : 0.5;
-  const startY = Math.floor(axisBounds.minY / yInterval) * yInterval;
-  const endY = Math.ceil(axisBounds.maxY / yInterval) * yInterval;
-  for (let v = startY; v <= endY; v += yInterval) yTicks.push(v);
+  const xTicks = buildTicks(axisBounds.minX, axisBounds.maxX);
+  const yTicks = buildTicks(axisBounds.minY, axisBounds.maxY);
 
   const btnStyle = (active, color) => ({
     padding: '0.35rem 0.75rem',
