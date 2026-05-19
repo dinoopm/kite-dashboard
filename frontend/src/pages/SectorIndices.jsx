@@ -583,7 +583,7 @@ function SectorIndices() {
   };
 
   // Trading-days lookbacks for the rank-change toggle.
-  const LOOKBACK_DAYS = { '1D': 1, '1W': 5, '1M': 22 };
+  const LOOKBACK_DAYS = { '1D': 1, '1W': 5 };
 
   // Build the enriched rows (momentum score, RRG columns, market signal) using
   // inputs that may legitimately change: the sector data, the active RRG payload,
@@ -1196,11 +1196,11 @@ function SectorIndices() {
               <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>
                 Rank change vs.
               </span>
-              {['1D', '1W', '1M'].map(k => (
+              {['1D', '1W'].map(k => (
                 <button
                   key={k}
                   onClick={() => setRankLookback(k)}
-                  title={k === '1D' ? 'Compare today vs yesterday' : k === '1W' ? 'Compare today vs 5 trading days ago' : 'Compare today vs ~22 trading days ago'}
+                  title={k === '1D' ? 'Compare today vs yesterday' : 'Compare today vs 5 trading days ago'}
                   style={{
                     padding: '0.22rem 0.6rem',
                     borderRadius: '4px',
