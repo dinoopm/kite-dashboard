@@ -106,6 +106,10 @@ function SectorIndices() {
   // Sorting state
   const [sortConfig, setSortConfig] = useState({ key: 'momentumScore', direction: 'desc' });
 
+  // Momentum-ranking rank-change lookback: how far back to compare today's
+  // sector rank to. Default 1W — sector rotation is naturally a weekly cadence.
+  const [rankLookback, setRankLookback] = useState('1W');
+
   // ─── RRG State ─────────────────────────────────────────────
   const [rrg, setRrg] = useState(null);
   const [rrgBenchmark, setRrgBenchmark] = useState("NSE:NIFTY 50");
@@ -383,16 +387,19 @@ function SectorIndices() {
 
             // Commodity rows + NIFTY 50 (commodity-chart benchmark) retain the
             // full daily series so the Commodities tab can plot a normalized
-            // performance line chart. Other broad/sector rows skip this — they
-            // have far more rows and only need the sparkline.
+            // performance line chart. All other rows keep a compact 120-bar
+            // tail — enough for the momentum ranking's 1M-lookback rank-delta
+            // (needs 3M return + 22-day shift + RSI warmup ≈ 88 bars; 120 is
+            // a comfortable margin without bloating the payload).
             const keepFullHistory = index.category === 'commodity' || index.id === 'NSE:NIFTY 50';
-            const fullHistory = keepFullHistory
+            const TAIL_FOR_RANK_DELTA = 120;
+            const history = keepFullHistory
               ? sorted.map(c => ({ date: c.date, close: c.close }))
-              : undefined;
+              : sorted.slice(-TAIL_FOR_RANK_DELTA).map(c => ({ date: c.date, close: c.close }));
 
             setData(prevData => prevData.map(item =>
               item.id === index.id
-                ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14, ...(fullHistory ? { history: fullHistory } : {}) }
+                ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14, history }
                 : item
             ));
           } else {
@@ -515,6 +522,68 @@ function SectorIndices() {
     if (rsi14 <= 30) return RSI_MULT_OVERSOLD;
     return 1.0;
   };
+
+  // RSI(14) computed through `endIdx` of the history array (Wilder's smoothed
+  // method, same as the fetch-path block at lines 362-378). Returns null when
+  // there aren't enough candles. Used for both today's RSI and the as-of-N-
+  // days-ago RSI consumed by computeScoreMap below.
+  const rsi14At = (history, endIdx) => {
+    if (!history || endIdx < 14) return null;
+    const closes = history.slice(0, endIdx + 1).map(c => c.close);
+    if (closes.length < 15) return null;
+    const changes = closes.slice(1).map((v, i) => v - closes[i]);
+    let avgGain = 0, avgLoss = 0;
+    for (let i = 0; i < 14; i++) {
+      if (changes[i] > 0) avgGain += changes[i];
+      else avgLoss += Math.abs(changes[i]);
+    }
+    avgGain /= 14;
+    avgLoss /= 14;
+    for (let i = 14; i < changes.length; i++) {
+      avgGain = (avgGain * 13 + (changes[i] > 0 ? changes[i] : 0)) / 14;
+      avgLoss = (avgLoss * 13 + (changes[i] < 0 ? Math.abs(changes[i]) : 0)) / 14;
+    }
+    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    return parseFloat((100 - 100 / (1 + rs)).toFixed(1));
+  };
+
+  // Pure scoring helper — re-runs the full momentum-score percentile pipeline
+  // (same as the inline block inside enrichedData) anchored at `latest - asOfShift`
+  // candles back. Used twice: once for "today" (asOfShift=0) and once for the
+  // user-chosen lookback period to produce the rank-change chips on the
+  // Momentum Ranking chart. Returns { [id]: percentileScore }.
+  const computeScoreMap = (rows, asOfShift = 0) => {
+    const W = [5, 22, 66]; // 1W, 1M, 3M in trading days
+    const items = [];
+    for (const r of rows) {
+      const h = r.history;
+      // Need 3M return + the lookback shift + 1 anchor candle of history.
+      if (!h || h.length < 66 + asOfShift + 1) continue;
+      const anchorIdx = h.length - 1 - asOfShift;
+      const anchor = h[anchorIdx]?.close;
+      if (anchor == null) continue;
+      const returns = W.map(w => {
+        const past = h[anchorIdx - w]?.close;
+        return past ? ((anchor - past) / past) * 100 : null;
+      });
+      if (returns.some(v => v === null)) continue;
+      const [r1w, r1m, r3m] = returns;
+      const raw = r1w * W_1W + r1m * W_1M + r3m * W_3M;
+      const adjusted = raw * rsiMultiplierFor(rsi14At(h, anchorIdx));
+      items.push({ id: r.id, adjusted });
+    }
+    if (items.length === 0) return {};
+    const sortedAsc = [...items].sort((a, b) => a.adjusted - b.adjusted);
+    const n = sortedAsc.length;
+    const out = {};
+    sortedAsc.forEach((s, rank) => {
+      out[s.id] = n === 1 ? 50 : Math.round(1 + (rank / (n - 1)) * 99);
+    });
+    return out;
+  };
+
+  // Trading-days lookbacks for the rank-change toggle.
+  const LOOKBACK_DAYS = { '1D': 1, '1W': 5, '1M': 22 };
 
   // Build the enriched rows (momentum score, RRG columns, market signal) using
   // inputs that may legitimately change: the sector data, the active RRG payload,
@@ -1086,9 +1155,30 @@ function SectorIndices() {
         const scored = filteredData.filter(r => r.momentumScore != null);
         if (scored.length === 0) return null;
 
+        // Rank-change deltas vs the chosen lookback. Recompute the percentile
+        // pipeline as-of N trading days ago against the same tab universe, then
+        // diff against the current rank. NEW = couldn't compute past rank
+        // (insufficient history at the anchor date).
+        const tabUniverse = filteredData.filter(r => r.history);
+        const curScoreMap  = computeScoreMap(tabUniverse, 0);
+        const pastScoreMap = computeScoreMap(tabUniverse, LOOKBACK_DAYS[rankLookback]);
+        const rankFromMap = (m) => {
+          const sorted = Object.entries(m).sort((a, b) => b[1] - a[1]);
+          const ranks = {};
+          sorted.forEach(([id], i) => { ranks[id] = i + 1; });
+          return ranks;
+        };
+        const curRanks  = rankFromMap(curScoreMap);
+        const pastRanks = rankFromMap(pastScoreMap);
+
         const rankedData = [...scored]
           .sort((a, b) => b.momentumScore - a.momentumScore)
-          .map(r => ({ name: shortName(r), score: r.momentumScore }));
+          .map(r => {
+            const curRank  = curRanks[r.id] ?? null;
+            const pastRank = pastRanks[r.id] ?? null;
+            const delta    = (curRank != null && pastRank != null) ? pastRank - curRank : null;
+            return { id: r.id, name: shortName(r), score: r.momentumScore, delta, curRank, pastRank };
+          });
 
         const tabLabel = activeTab === 'sector' ? 'Sectors' : 'Indices';
 
@@ -1100,25 +1190,90 @@ function SectorIndices() {
             <p style={{ margin: '0 0 0.75rem 0', color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
               Full pecking order (1W · 1M · 3M weighted, RSI-adjusted) — green = leaders, red = laggards
             </p>
+
+            {/* Rank-change lookback toggle */}
+            <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>
+                Rank change vs.
+              </span>
+              {['1D', '1W', '1M'].map(k => (
+                <button
+                  key={k}
+                  onClick={() => setRankLookback(k)}
+                  title={k === '1D' ? 'Compare today vs yesterday' : k === '1W' ? 'Compare today vs 5 trading days ago' : 'Compare today vs ~22 trading days ago'}
+                  style={{
+                    padding: '0.22rem 0.6rem',
+                    borderRadius: '4px',
+                    fontSize: '0.7rem',
+                    fontWeight: 600,
+                    border: rankLookback === k ? '1px solid #38bdf8' : '1px solid var(--border)',
+                    background: rankLookback === k ? 'rgba(56,189,248,0.12)' : 'transparent',
+                    color: rankLookback === k ? '#38bdf8' : 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {k}
+                </button>
+              ))}
+            </div>
+
             <div style={{ width: '100%', height: Math.max(240, rankedData.length * 32) }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={rankedData} layout="vertical" margin={{ top: 5, right: 40, left: 10, bottom: 5 }}>
+                <BarChart data={rankedData} layout="vertical" margin={{ top: 5, right: 110, left: 10, bottom: 5 }}>
                   <XAxis type="number" domain={[0, 100]} tick={{ fill: 'var(--text-secondary)', fontSize: 12 }} axisLine={{ stroke: 'var(--border)' }} tickLine={false} />
                   <YAxis type="category" dataKey="name" width={140} tick={{ fill: 'var(--text-primary)', fontSize: 12 }} axisLine={false} tickLine={false} />
                   <Tooltip
                     content={({ active, payload }) => {
                       if (!active || !payload || !payload.length) return null;
                       const d = payload[0];
+                      const p = d.payload;
+                      let rankLine = null;
+                      if (p.curRank != null && p.pastRank != null) {
+                        const arrow = p.delta > 0 ? '↑' : p.delta < 0 ? '↓' : '—';
+                        const deltaTxt = p.delta === 0
+                          ? 'unchanged'
+                          : `${arrow} ${Math.abs(p.delta)} place${Math.abs(p.delta) === 1 ? '' : 's'}`;
+                        rankLine = `Rank: #${p.curRank} (was #${p.pastRank}, ${deltaTxt} vs ${rankLookback} ago)`;
+                      } else if (p.curRank != null) {
+                        rankLine = `Rank: #${p.curRank} (new — insufficient history for ${rankLookback} comparison)`;
+                      }
                       return (
                         <div style={{ background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', padding: '0.6rem 1rem', boxShadow: '0 4px 16px rgba(0,0,0,0.4)' }}>
-                          <p style={{ margin: 0, fontWeight: 600, color: '#fff', fontSize: '0.9rem' }}>{d.payload.name}</p>
+                          <p style={{ margin: 0, fontWeight: 600, color: '#fff', fontSize: '0.9rem' }}>{p.name}</p>
                           <p style={{ margin: '0.25rem 0 0', color: getBarColor(d.value), fontWeight: 700, fontSize: '1.1rem' }}>Score: {d.value}</p>
+                          {rankLine && (
+                            <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>{rankLine}</p>
+                          )}
                         </div>
                       );
                     }}
                     cursor={{ fill: 'rgba(255,255,255,0.03)' }}
                   />
-                  <Bar dataKey="score" radius={[0, 6, 6, 0]} barSize={20} label={{ position: 'right', fill: 'var(--text-secondary)', fontSize: 12, fontWeight: 600 }}>
+                  <Bar
+                    dataKey="score"
+                    radius={[0, 6, 6, 0]}
+                    barSize={20}
+                    label={(props) => {
+                      const { x, y, width, height, value, index } = props;
+                      const entry = rankedData[index];
+                      if (!entry) return null;
+                      const baseX = x + width + 8;
+                      const cy = y + height / 2 + 4;
+                      const delta = entry.delta;
+                      let glyph, color;
+                      if (delta == null) { glyph = 'NEW'; color = '#a855f7'; }
+                      else if (delta > 0) { glyph = `↑ +${delta}`; color = '#10b981'; }
+                      else if (delta < 0) { glyph = `↓ ${delta}`; color = '#ef4444'; }
+                      else { glyph = '—'; color = '#94a3b8'; }
+                      return (
+                        <g>
+                          <text x={baseX} y={cy} fill="var(--text-secondary)" fontSize={12} fontWeight={600}>{value}</text>
+                          <text x={baseX + 32} y={cy} fill={color} fontSize={11} fontWeight={700}>{glyph}</text>
+                        </g>
+                      );
+                    }}
+                  >
                     {rankedData.map((entry, index) => (
                       <RechartsCell key={`cell-${index}`} fill={getBarColor(entry.score)} />
                     ))}
