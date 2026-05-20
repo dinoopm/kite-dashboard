@@ -441,7 +441,7 @@ export default function RRGChart({
                           });
                         }}
                         onMouseLeave={() => setRrgTooltip(null)}
-                        onClick={(e) => { e.stopPropagation(); navigate(`/instrument/${sector.token}?symbol=${sector.key.split(':')[1]}`); }}
+                        onClick={(e) => { e.stopPropagation(); navigate(`/instrument/${sector.token}?symbol=${encodeURIComponent(sector.key.split(':')[1])}`); }}
                       />
                     );
                   })}

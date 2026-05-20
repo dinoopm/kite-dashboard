@@ -1430,7 +1430,7 @@ function SectorIndices() {
                     state: { momentumScore: row.momentumScore, rrgQuadrant: row.rrgQuadrant }
                   });
                 } else {
-                  navigate(`/instrument/${row.token}?symbol=${row.id.split(':')[1]}`);
+                  navigate(`/instrument/${row.token}?symbol=${encodeURIComponent(row.id.split(':')[1])}`);
                 }
               };
               const delta = row.rrgMomentumDelta;

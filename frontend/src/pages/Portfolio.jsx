@@ -299,7 +299,7 @@ function Portfolio() {
                 </thead>
                 <tbody>
                   {filteredAndSortedHoldings.map((item, index) => (
-                    <tr key={index} onClick={() => navigate(`/instrument/${item.instrument_token}?symbol=${item.tradingsymbol}`)} style={{cursor: 'pointer'}}>
+                    <tr key={index} onClick={() => navigate(`/instrument/${item.instrument_token}?symbol=${encodeURIComponent(item.tradingsymbol)}`)} style={{cursor: 'pointer'}}>
                       <td><strong>{item.tradingsymbol}</strong></td>
                       <td>{item.displayQuantity}</td>
                       <td>₹{item.average_price}</td>

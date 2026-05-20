@@ -737,7 +737,7 @@ export default function SectorDetail() {
             {sortedStocks.map((s, idx) => (
               <tr
                 key={s.key}
-                onClick={() => s.token && navigate(`/instrument/${s.token}?symbol=${s.symbol}`)}
+                onClick={() => s.token && navigate(`/instrument/${s.token}?symbol=${encodeURIComponent(s.symbol)}`)}
                 style={{ cursor: s.token ? 'pointer' : 'default', borderBottom: idx !== sortedStocks.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none', transition: 'background 0.15s' }}
                 onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
                 onMouseOut={e => e.currentTarget.style.background = 'transparent'}
@@ -1085,7 +1085,7 @@ export default function SectorDetail() {
               {leaders.sort((a, b) => (b.rsVsSector ?? -99) - (a.rsVsSector ?? -99)).map((s, idx) => (
                 <tr
                   key={s.key}
-                  onClick={() => s.token && navigate(`/instrument/${s.token}?symbol=${s.symbol}`)}
+                  onClick={() => s.token && navigate(`/instrument/${s.token}?symbol=${encodeURIComponent(s.symbol)}`)}
                   style={{ cursor: 'pointer', borderBottom: idx !== leaders.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none', transition: 'background 0.15s' }}
                   onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
                   onMouseOut={e => e.currentTarget.style.background = 'transparent'}

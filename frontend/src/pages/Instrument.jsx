@@ -64,7 +64,7 @@ function Instrument() {
     const controller = new AbortController();
     (async () => {
       try {
-        const res = await fetchWithAbort(`/api/instrument-info/${symbol}`, { signal: controller.signal });
+        const res = await fetchWithAbort(`/api/instrument-info/${encodeURIComponent(symbol)}`, { signal: controller.signal });
         const info = await res.json();
         if (info?.name) setKiteName(info.name);
       } catch (e) {
@@ -80,7 +80,7 @@ function Instrument() {
     const controller = new AbortController();
     (async () => {
       try {
-        const res = await fetchWithAbort(`/api/screener-quarterly/${symbol}`, { signal: controller.signal });
+        const res = await fetchWithAbort(`/api/screener-quarterly/${encodeURIComponent(symbol)}`, { signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data?.quarters) && data.quarters.length > 0) {
@@ -106,7 +106,7 @@ function Instrument() {
     const controller = new AbortController();
     (async () => {
       try {
-        const res = await fetchWithAbort(`/api/screener-cashflow/${symbol}`, { signal: controller.signal });
+        const res = await fetchWithAbort(`/api/screener-cashflow/${encodeURIComponent(symbol)}`, { signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data?.years) && data.years.length > 0) {
@@ -164,7 +164,7 @@ function Instrument() {
     const controller = new AbortController();
     (async () => {
       try {
-        const res = await fetchWithAbort(`/api/fundamentals/${symbol}`, { signal: controller.signal });
+        const res = await fetchWithAbort(`/api/fundamentals/${encodeURIComponent(symbol)}`, { signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
           setFundamentals(data);

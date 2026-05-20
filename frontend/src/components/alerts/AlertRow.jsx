@@ -92,7 +92,7 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span style={{ color: dotColor, fontSize: '0.7rem', fontWeight: 800, width: '10px', textAlign: 'center' }}>{dotGlyph}</span>
-            <Link to={`/instrument/${stock.token}?symbol=${stock.symbol}`} style={{ fontSize: '1rem', fontWeight: '800', color: '#f8fafc', textDecoration: 'none', letterSpacing: '0.5px' }}>
+            <Link to={`/instrument/${stock.token}?symbol=${encodeURIComponent(stock.symbol)}`} style={{ fontSize: '1rem', fontWeight: '800', color: '#f8fafc', textDecoration: 'none', letterSpacing: '0.5px' }}>
               {stock.symbol}
             </Link>
             {stock.divergence && (
