@@ -1861,32 +1861,66 @@ const screenerCache = {}; // symbol -> { data, ts } — keeps the parsed quarter
 const screenerHtmlCache = {}; // symbol -> { html, ts } — raw HTML shared across endpoints
 const screenerHtmlInflight = {}; // symbol -> Promise so concurrent requests dedupe
 
+// ─── Screener-slug aliases for Kite ↔ screener.in mismatches ─────
+// A handful of NSE tickers carry an "&" in their symbol on the exchange but
+// Kite normalises them by stripping the suffix (e.g. NSE: GVT&D → Kite: GVT).
+// Screener.in keeps the full ampersand form, so a direct slug lookup 404s
+// for these names. Hardcoded map keeps the path explicit — add an entry as
+// new mismatches surface.
+const SCREENER_SLUG_ALIASES = {
+  'GVT': 'GVT&D',     // GE Vernova T&D India
+  'JK': 'J&KBANK',    // J&K Bank — actual Kite tradingsymbol is J&KBANK,
+                       // but covering the bare prefix in case Kite ever
+                       // normalises it the same way they did GVT.
+};
+
 // Shared HTML fetch. Multiple endpoints scrape the same page; this caches the
 // raw HTML so /api/screener-quarterly and /api/screener-cashflow don't each
 // hit screener.in independently.
+//
+// Lookup strategy:
+//   1. Apply any hardcoded alias (covers Kite → screener slug rewrites).
+//   2. Try the resolved slug.
+//   3. On 404, fall back to the original symbol (in case the alias was wrong).
+//   4. If both 404, propagate the error.
 async function fetchScreenerHTML(symbol) {
   const cached = screenerHtmlCache[symbol];
   if (cached && Date.now() - cached.ts < SCREENER_TTL) return { html: cached.html, hit: true };
   if (screenerHtmlInflight[symbol]) return screenerHtmlInflight[symbol];
 
-  const url = `https://www.screener.in/company/${encodeURIComponent(symbol)}/`;
+  const slugCandidates = [];
+  if (SCREENER_SLUG_ALIASES[symbol]) slugCandidates.push(SCREENER_SLUG_ALIASES[symbol]);
+  slugCandidates.push(symbol);
+
+  const tryFetch = async (slug) => {
+    const url = `https://www.screener.in/company/${encodeURIComponent(slug)}/`;
+    const r = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    return r;
+  };
+
   const p = (async () => {
     try {
-      const r = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      });
-      if (!r.ok) {
-        const err = new Error(`Screener returned ${r.status}`);
-        err.status = r.status;
-        throw err;
+      let lastErr = null;
+      for (const slug of slugCandidates) {
+        const r = await tryFetch(slug);
+        if (r.ok) {
+          const html = await r.text();
+          screenerHtmlCache[symbol] = { html, ts: Date.now() };
+          if (slug !== symbol) {
+            console.log(`[screener] ${symbol} resolved via alias slug "${slug}"`);
+          }
+          return { html, hit: false };
+        }
+        lastErr = new Error(`Screener returned ${r.status} for slug "${slug}"`);
+        lastErr.status = r.status;
       }
-      const html = await r.text();
-      screenerHtmlCache[symbol] = { html, ts: Date.now() };
-      return { html, hit: false };
+      throw lastErr || new Error(`Screener returned 404 for all candidates of ${symbol}`);
     } finally {
       delete screenerHtmlInflight[symbol];
     }
