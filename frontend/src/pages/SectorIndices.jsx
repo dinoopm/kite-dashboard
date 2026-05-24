@@ -621,6 +621,22 @@ function SectorIndices() {
       Object.keys(breakdownById).forEach(id => { breakdownById[id].percentile = scoreMap[id] ?? null; });
     }
 
+    // 1W rank-change: rerun the percentile pipeline anchored 5 trading days back
+    // against the same tab universe, then diff today's rank vs the past rank.
+    // Mirrors the Momentum Ranking chart's logic so the table chip and the bar
+    // chip stay in sync.
+    const tabUniverseWithHistory = tabRows.filter(r => r.history);
+    const curScoreMapTD  = computeScoreMap(tabUniverseWithHistory, 0);
+    const pastScoreMapTD = computeScoreMap(tabUniverseWithHistory, LOOKBACK_DAYS['1W']);
+    const ranksFromMap = (m) => {
+      const sorted = Object.entries(m).sort((a, b) => b[1] - a[1]);
+      const ranks = {};
+      sorted.forEach(([id], i) => { ranks[id] = i + 1; });
+      return ranks;
+    };
+    const curRanks1W  = ranksFromMap(curScoreMapTD);
+    const pastRanks1W = ranksFromMap(pastScoreMapTD);
+
     return tabRows.map(r => {
       const rrgData = rrg && rrg.sectors ? rrg.sectors.find(s => s.key === r.id) : null;
       const series = rrgData?.series || [];
@@ -711,6 +727,10 @@ function SectorIndices() {
         }
       }
 
+      const curRank1W  = curRanks1W[r.id]  ?? null;
+      const pastRank1W = pastRanks1W[r.id] ?? null;
+      const weeklyRankDelta = (curRank1W != null && pastRank1W != null) ? pastRank1W - curRank1W : null;
+
       return {
         ...r,
         momentumScore: kiteScore ?? null,
@@ -721,6 +741,9 @@ function SectorIndices() {
         rrgMomentum: latestRrg ? latestRrg.rsMomentum : null,
         rrgQuadrant: quadrant,
         rrgMomentumDelta: (latestRrg && prevRrg) ? latestRrg.rsMomentum - prevRrg.rsMomentum : null,
+        weeklyRankDelta,
+        weeklyRankCur: curRank1W,
+        weeklyRankPast: pastRank1W,
         marketSignal,
         signalRank: marketSignal.rank
       };
@@ -1414,6 +1437,9 @@ function SectorIndices() {
               <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. Hover the score for a breakdown." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
                 Momentum {renderSortIndicator('momentumScore')}
               </th>
+              <th onClick={() => requestSort('weeklyRankDelta')} title="Change in momentum rank vs 5 trading days ago. ↑ = climbed positions, ↓ = dropped, NEW = no comparable history." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
+                1W Δ {renderSortIndicator('weeklyRankDelta')}
+              </th>
               {activeTab === 'sector' && (
                 <th onClick={() => requestSort('signalRank')} title="Automated intelligence analyzing trend, strength and momentum" style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'center', background: '#0f0f1e' }}>
                   Signal {renderSortIndicator('signalRank')}
@@ -1574,6 +1600,31 @@ function SectorIndices() {
                       </div>
                     </div>
                   )}
+                </td>
+                <td style={{ padding: '0.5rem', textAlign: 'right', whiteSpace: 'nowrap' }}
+                    title={
+                      row.weeklyRankCur != null && row.weeklyRankPast != null
+                        ? `Rank #${row.weeklyRankCur} (was #${row.weeklyRankPast} 1W ago)`
+                        : row.weeklyRankCur != null
+                          ? `Rank #${row.weeklyRankCur} — no comparable history 1W ago`
+                          : 'Insufficient history for rank-change'
+                    }>
+                  {(() => {
+                    const d = row.weeklyRankDelta;
+                    if (row.weeklyRankCur == null && row.weeklyRankPast == null) {
+                      return <span style={{ color: 'var(--text-secondary)' }}>—</span>;
+                    }
+                    if (d == null) {
+                      return <span style={{ color: '#a855f7', fontWeight: 700, fontSize: '0.75rem' }}>NEW</span>;
+                    }
+                    if (d > 0) {
+                      return <span style={{ color: '#10b981', fontWeight: 700 }}>↑ +{d}</span>;
+                    }
+                    if (d < 0) {
+                      return <span style={{ color: '#ef4444', fontWeight: 700 }}>↓ {d}</span>;
+                    }
+                    return <span style={{ color: '#94a3b8' }}>—</span>;
+                  })()}
                 </td>
                 {activeTab === 'sector' && (
                   <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>

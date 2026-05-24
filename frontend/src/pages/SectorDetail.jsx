@@ -391,7 +391,7 @@ export default function SectorDetail() {
           price, '1D': change1D,
           '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null,
           rsi14: null, sma20: null, sma200: null, aboveSma20: null, aboveSma200: null,
-          weeklyHighs: null, histLoaded: false,
+          weeklyHighs: null, pastRawMomentum: null, histLoaded: false,
         };
       });
       setStockData(initial);
@@ -423,9 +423,29 @@ export default function SectorDetail() {
             const lastClose = closes[closes.length - 1];
             const weeklyHighs = resampleToWeeklyHighs(sorted);
 
+            // Past raw momentum, anchored 5 trading days back. Uses trading-day
+            // index lookups (5/22/66) so the 1W rank-change in the table stays
+            // comparable to the SectorIndices "Momentum Ranking" delta logic.
+            const N = sorted.length;
+            const anchorPastIdx = N - 1 - 5;
+            let pastRawMomentum = null;
+            if (anchorPastIdx >= 66) {
+              const anchor = sorted[anchorPastIdx]?.close;
+              const c1w = sorted[anchorPastIdx - 5]?.close;
+              const c1m = sorted[anchorPastIdx - 22]?.close;
+              const c3m = sorted[anchorPastIdx - 66]?.close;
+              if (anchor && c1w && c1m && c3m) {
+                const r1w = ((anchor - c1w) / c1w) * 100;
+                const r1m = ((anchor - c1m) / c1m) * 100;
+                const r3m = ((anchor - c3m) / c3m) * 100;
+                const pastRsi14 = computeRsi14(sorted.slice(0, anchorPastIdx + 1));
+                pastRawMomentum = (r1w * W_1W + r1m * W_1M + r3m * W_3M) * rsiMultiplierFor(pastRsi14);
+              }
+            }
+
             setStockData(prev => prev.map(s =>
               s.key === c.key
-                ? { ...s, ...returns, rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, weeklyHighs, histLoaded: true }
+                ? { ...s, ...returns, rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, weeklyHighs, pastRawMomentum, histLoaded: true }
                 : s
             ));
             setHistLoadedCount(n => n + 1);
@@ -530,12 +550,33 @@ export default function SectorDetail() {
       rankMap[s.key] = Math.round((i / (sorted.length - 1 || 1)) * 99) + 1;
     });
 
-    return withRaw.map(s => ({
-      ...s,
-      momentumScore: rankMap[s.key] ?? null,
-      rsVsSector: s['1M'] != null && sectorReturns?.['1M'] != null ? s['1M'] - sectorReturns['1M'] : null,
-      rsVsNifty: s['1M'] != null && nifty50Returns?.['1M'] != null ? s['1M'] - nifty50Returns['1M'] : null,
-    }));
+    // 1W rank-change: position-rank today vs 5 trading days ago. Both ranks
+    // use the same scoring formula (1W·1M·3M weighted, RSI-adjusted) so the
+    // delta reflects movement, not methodology drift.
+    const rankPositions = (arr, key) => {
+      const sortedDesc = [...arr].sort((a, b) => b[key] - a[key]);
+      const ranks = {};
+      sortedDesc.forEach((s, i) => { ranks[s.key] = i + 1; });
+      return ranks;
+    };
+    const curRanks  = rankPositions(scorable, 'rawMomentum');
+    const pastScorable = withRaw.filter(s => s.pastRawMomentum != null);
+    const pastRanks = rankPositions(pastScorable, 'pastRawMomentum');
+
+    return withRaw.map(s => {
+      const curRank  = curRanks[s.key]  ?? null;
+      const pastRank = pastRanks[s.key] ?? null;
+      const weeklyRankDelta = (curRank != null && pastRank != null) ? pastRank - curRank : null;
+      return {
+        ...s,
+        momentumScore: rankMap[s.key] ?? null,
+        weeklyRankDelta,
+        weeklyRankCur: curRank,
+        weeklyRankPast: pastRank,
+        rsVsSector: s['1M'] != null && sectorReturns?.['1M'] != null ? s['1M'] - sectorReturns['1M'] : null,
+        rsVsNifty: s['1M'] != null && nifty50Returns?.['1M'] != null ? s['1M'] - nifty50Returns['1M'] : null,
+      };
+    });
   }, [stockData, constituents.length, sectorReturns, nifty50Returns]);
 
   const maGaugeData = useMemo(() => {
@@ -729,6 +770,7 @@ export default function SectorDetail() {
               ))}
               <SortTh label="RSI" sortKey="rsi14" sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'right' }} />
               <SortTh label="Score" sortKey="momentumScore" sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'right' }} />
+              <SortTh label="1W Δ" sortKey="weeklyRankDelta" sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'right' }} />
               <SortTh label="SMA 20" sortKey="aboveSma20" sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'center' }} />
               <SortTh label="SMA 200" sortKey="aboveSma200" sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'center' }} />
             </tr>
@@ -762,6 +804,27 @@ export default function SectorDetail() {
                 </td>
                 <td style={{ padding: '0.4rem', textAlign: 'right', fontWeight: 700, color: s.momentumScore >= 60 ? '#22c55e' : s.momentumScore >= 40 ? '#eab308' : s.momentumScore != null ? '#ef4444' : 'var(--text-secondary)' }}>
                   {s.momentumScore != null ? s.momentumScore : '–'}
+                </td>
+                <td style={{ padding: '0.4rem', textAlign: 'right', whiteSpace: 'nowrap' }}
+                    title={
+                      s.weeklyRankCur != null && s.weeklyRankPast != null
+                        ? `Rank #${s.weeklyRankCur} (was #${s.weeklyRankPast} 1W ago)`
+                        : s.weeklyRankCur != null
+                          ? `Rank #${s.weeklyRankCur} — no comparable history 1W ago`
+                          : 'Insufficient history for rank-change'
+                    }>
+                  {(() => {
+                    const d = s.weeklyRankDelta;
+                    if (s.weeklyRankCur == null && s.weeklyRankPast == null) {
+                      return <span style={{ color: 'var(--text-secondary)' }}>–</span>;
+                    }
+                    if (d == null) {
+                      return <span style={{ color: '#a855f7', fontWeight: 700, fontSize: '0.72rem' }}>NEW</span>;
+                    }
+                    if (d > 0) return <span style={{ color: '#22c55e', fontWeight: 700 }}>↑ +{d}</span>;
+                    if (d < 0) return <span style={{ color: '#ef4444', fontWeight: 700 }}>↓ {d}</span>;
+                    return <span style={{ color: '#94a3b8' }}>–</span>;
+                  })()}
                 </td>
                 <SmaCell v={s.aboveSma20} />
                 <SmaCell v={s.aboveSma200} />
