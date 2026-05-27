@@ -85,6 +85,73 @@ const emptyRowFor = (entry) => ({
   sparkline: null, aboveSma50: null, rsi14: null, dist52WHigh: null, rs1M: null,
 });
 
+// HTML overlay that draws end-of-line % pills with an anti-overlap pass. Sits
+// absolutely over the LineChart container so we control y-positioning precisely
+// using an explicit YAxis domain (recharts' Customized in v3 doesn't reliably
+// expose the y-scale).
+function EndLabelsOverlay({
+  items, yMin, yMax,
+  plotTop = 10, plotBottomInset = 30, // bottom inset = XAxis height + bottom margin
+  rightInset = 64,
+}) {
+  const ref = useRef(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    if (!ref.current) return;
+    const update = () => {
+      if (!ref.current) return;
+      setSize({ w: ref.current.clientWidth, h: ref.current.clientHeight });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const pillH = 18;
+  const minGap = pillH + 2;
+  const plotBottom = size.h - plotBottomInset;
+  const plotHeight = plotBottom - plotTop;
+  const plotRight = size.w - rightInset;
+  const span = yMax - yMin || 1;
+
+  const placed = items
+    .map(it => ({ ...it, y: plotTop + ((yMax - it.value) / span) * plotHeight }))
+    .sort((a, b) => a.y - b.y);
+  for (let i = 1; i < placed.length; i++) {
+    if (placed[i].y < placed[i - 1].y + minGap) placed[i].y = placed[i - 1].y + minGap;
+  }
+  const yLimit = plotBottom - pillH / 2;
+  for (let i = placed.length - 1; i > 0; i--) {
+    if (placed[i].y > yLimit) placed[i].y = yLimit;
+    if (placed[i - 1].y > placed[i].y - minGap) placed[i - 1].y = placed[i].y - minGap;
+  }
+
+  return (
+    <div ref={ref} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+      {size.w > 0 && placed.map(it => (
+        <div
+          key={it.id}
+          style={{
+            position: 'absolute',
+            left: plotRight + 4,
+            top: it.y - pillH / 2,
+            height: pillH,
+            padding: '0 6px',
+            borderRadius: 4,
+            background: it.color,
+            color: it.textColor,
+            fontSize: 11,
+            fontWeight: 700,
+            lineHeight: `${pillH}px`,
+            whiteSpace: 'nowrap',
+          }}
+        >{it.text}</div>
+      ))}
+    </div>
+  );
+}
+
 function SectorIndices() {
   const navigate = useNavigate();
   const [data, setData] = useState(() => INDICES.map(emptyRowFor));
@@ -1048,6 +1115,47 @@ function SectorIndices() {
           });
           const chartData = [...seriesMap.values()].sort((a, b) => a.date.localeCompare(b.date));
 
+          // Last valid index per series — drives the end-of-line % label
+          const lastIndexMap = {};
+          rows.forEach(row => {
+            for (let i = chartData.length - 1; i >= 0; i--) {
+              if (chartData[i][row.id] != null) { lastIndexMap[row.id] = i; break; }
+            }
+          });
+
+          // Build pill items for visible rows + explicit Y domain so the
+          // HTML overlay's scale matches recharts' rendered scale exactly.
+          const visibleRows = rows.filter(r => !hiddenCommodityLines.has(r.id));
+          let allMin = Infinity, allMax = -Infinity;
+          visibleRows.forEach(row => {
+            chartData.forEach(d => {
+              const v = d[row.id];
+              if (v != null) {
+                if (v < allMin) allMin = v;
+                if (v > allMax) allMax = v;
+              }
+            });
+          });
+          if (!isFinite(allMin) || !isFinite(allMax)) { allMin = 95; allMax = 105; }
+          const pad = (allMax - allMin) * 0.05 || 1;
+          const yDomain = [allMin - pad, allMax + pad];
+
+          const labelItems = visibleRows.map(row => {
+            const idx = lastIndexMap[row.id];
+            const value = idx != null ? chartData[idx]?.[row.id] : null;
+            if (value == null) return null;
+            const color = COMMODITY_COLORS[row.id] || '#10b981';
+            const change = +(value - 100).toFixed(1);
+            const text = `${change >= 0 ? '+' : ''}${change}%`;
+            const hex = color.replace('#', '');
+            const r = parseInt(hex.slice(0, 2), 16);
+            const g = parseInt(hex.slice(2, 4), 16);
+            const b = parseInt(hex.slice(4, 6), 16);
+            const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+            const textColor = lum > 0.6 ? '#0f172a' : '#fff';
+            return { id: row.id, value, color, text, textColor };
+          }).filter(Boolean);
+
           const fmtDate = (d) => {
             const [y, m, day] = d.split('-');
             return `${day}/${m}/${y.slice(2)}`;
@@ -1081,9 +1189,9 @@ function SectorIndices() {
                   ))}
                 </div>
               </div>
-              <div style={{ width: '100%', height: 360, marginTop: '0.75rem' }}>
+              <div style={{ width: '100%', height: 360, marginTop: '0.75rem', position: 'relative' }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
+                  <LineChart data={chartData} margin={{ top: 10, right: 64, left: 0, bottom: 5 }}>
                     <XAxis
                       dataKey="date"
                       tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
@@ -1096,7 +1204,8 @@ function SectorIndices() {
                       tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
                       axisLine={{ stroke: 'var(--border)' }}
                       tickLine={false}
-                      domain={['auto', 'auto']}
+                      domain={yDomain}
+                      width={50}
                       tickFormatter={(v) => v.toFixed(0)}
                     />
                     <Tooltip
@@ -1119,7 +1228,7 @@ function SectorIndices() {
                       }}
                       cursor={{ stroke: 'rgba(255,255,255,0.15)', strokeWidth: 1 }}
                     />
-                    {rows.filter(row => !hiddenCommodityLines.has(row.id)).map(row => (
+                    {visibleRows.map(row => (
                       <Line
                         key={row.id}
                         type="monotone"
@@ -1134,6 +1243,12 @@ function SectorIndices() {
                     ))}
                   </LineChart>
                 </ResponsiveContainer>
+                <EndLabelsOverlay
+                  items={labelItems}
+                  yMin={yDomain[0]}
+                  yMax={yDomain[1]}
+                  rightInset={64}
+                />
               </div>
               <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
                 {rows.map(row => {
