@@ -3,6 +3,9 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { format, parseISO } from 'date-fns'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
+import AlertRow from '../components/alerts/AlertRow'
+import ConvictionModal from '../components/alerts/ConvictionModal'
+import TradePlanModal from '../components/alerts/TradePlanModal'
 
 // Two-panel shareholding view: left selects a quarter and shows horizontal
 // % bars per category; right selects a category and shows a vertical bar
@@ -267,6 +270,13 @@ function Instrument() {
   // Quarterly shareholding pattern (Promoters / FIIs / DIIs / Public / Govt / Others).
   const [screenerShareholding, setScreenerShareholding] = useState(null)
   const [screenerShareholdingError, setScreenerShareholdingError] = useState(null)
+  // Single-instrument technical alert (mirrors Alerts page rows)
+  const [instrumentAlert, setInstrumentAlert] = useState(null)
+  const [instrumentAlertError, setInstrumentAlertError] = useState(null)
+  const [instrumentAlertLoading, setInstrumentAlertLoading] = useState(false)
+  // Modals reused from Alerts page
+  const [convictionStock, setConvictionStock] = useState(null)
+  const [tradePlanStock, setTradePlanStock] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
@@ -417,6 +427,37 @@ function Instrument() {
     })();
     return () => controller.abort();
   }, [symbol])
+
+  // Fetch per-instrument technical alert. Only when the Alerts tab is opened
+  // so we don't hit the MCP quote service on every page load.
+  useEffect(() => {
+    if (!symbol || !token) return;
+    if (activeTab !== 'technicals') return;
+    if (instrumentAlert || instrumentAlertError) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        setInstrumentAlertLoading(true);
+        const res = await fetchWithAbort(
+          `/api/instrument-alert/${encodeURIComponent(token)}?symbol=${encodeURIComponent(symbol)}`,
+          { signal: controller.signal }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setInstrumentAlert(data);
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setInstrumentAlertError(err.error || `Alert fetch failed (${res.status})`);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        setInstrumentAlertError(e.message);
+      } finally {
+        setInstrumentAlertLoading(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [symbol, token, activeTab, instrumentAlert, instrumentAlertError])
 
   // Fetch indicators
   useEffect(() => {
@@ -751,6 +792,38 @@ function Instrument() {
 
       {activeTab === 'technicals' && (
         <>
+          {/* Per-instrument technical alert — same AlertRow used on the
+              Holdings Alerts page and Sector Drilldown. Holdings fields are
+              hidden because this stock may not be in the user's portfolio. */}
+          <section className="glass-panel terminal-alerts" style={{ marginBottom: '1rem', padding: '1.25rem' }}>
+            <div style={{ marginBottom: '0.85rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1rem' }}>Technical Alerts</h3>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                Live signal stack · ADX, SuperTrend, RSI, VWAP, volume surge, trade plan
+              </span>
+            </div>
+            {instrumentAlertLoading && !instrumentAlert ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '1.25rem' }}>
+                <div className="loader"></div>
+              </div>
+            ) : instrumentAlertError ? (
+              <p style={{ margin: 0, color: 'var(--danger)', fontFamily: "'JetBrains Mono', monospace", fontSize: '0.85rem' }}>
+                Alert unavailable: {instrumentAlertError}
+              </p>
+            ) : !instrumentAlert?.alert ? (
+              <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                {instrumentAlert?.reason || 'No actionable signals on the latest bar.'}
+              </p>
+            ) : (
+              <AlertRow
+                stock={instrumentAlert.alert}
+                showHoldingsFields={false}
+                onOpenConviction={() => setConvictionStock(instrumentAlert.alert)}
+                onOpenTradePlan={() => setTradePlanStock(instrumentAlert.alert)}
+              />
+            )}
+          </section>
+
           {/* Period stats */}
           {!loading && !error && data.length > 0 && timeframe !== '1D' && (
             <section className="grid" style={{ marginBottom: '1rem' }}>
@@ -1529,7 +1602,7 @@ function Instrument() {
           { key: 'borrowings',        label: 'Borrowings',         group: 'liab' },
           { key: 'deposits',          label: 'Deposits',           group: 'liab' },
           { key: 'otherLiabilities',  label: 'Other Liabilities',  group: 'liab' },
-          { key: 'totalLiabilities',  label: 'Total Liabilities',  group: 'liab', emphasis: true },
+          { key: 'totalLiabilities',  label: 'Total Equity & Liabilities',  group: 'liab', emphasis: true },
           { key: 'fixedAssets',       label: 'Fixed Assets',       group: 'asset' },
           { key: 'cwip',              label: 'CWIP',               group: 'asset' },
           { key: 'investments',       label: 'Investments',        group: 'asset' },
@@ -1611,7 +1684,7 @@ function Instrument() {
                   </tbody>
                 </table>
                 <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.75rem', marginBottom: 0 }}>
-                  Net Worth = Equity Capital + Reserves. Banks/NBFCs may report Deposits and Loans instead of Borrowings. Empty cells (—) mean the field wasn't disclosed for that year.
+                  Net Worth = Equity Capital + Reserves. Total Equity &amp; Liabilities always equals Total Assets — that's the accounting identity, not a bug. Banks/NBFCs may report Deposits and Loans instead of Borrowings. Empty cells (—) mean the field wasn't disclosed for that year.
                 </p>
               </div>
             )}
@@ -1625,6 +1698,9 @@ function Instrument() {
           error={screenerShareholdingError}
         />
       )}
+
+      <ConvictionModal stock={convictionStock} onClose={() => setConvictionStock(null)} />
+      <TradePlanModal stock={tradePlanStock} onClose={() => setTradePlanStock(null)} />
     </div>
   )
 }

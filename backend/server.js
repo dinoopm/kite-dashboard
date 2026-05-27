@@ -1784,6 +1784,71 @@ app.get('/api/alerts', async (req, res) => {
   }
 });
 
+// Single-instrument technical alert. Used by the Instrument page's
+// "Technical Alerts" tab — same computeStockAlert pipeline as /api/alerts but
+// scoped to one token, with no `holding` context (so the trade-plan tweaks
+// like "ADD if owned" / "TRIM if +25%" don't fire). The live quote drives
+// lastPrice + previousClose so day-change / volSurge match the rest of the
+// page.
+app.get('/api/instrument-alert/:token', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
+  const { token } = req.params;
+  const symbol = (req.query.symbol || '').toString().toUpperCase();
+  if (!symbol) return res.status(400).json({ error: "symbol query param required" });
+
+  try {
+    // Ensure candles are cached. /api/indicators populates historyCache
+    // already, but a direct hit on this endpoint shouldn't fail just because
+    // the user hasn't loaded the technicals tab yet.
+    let candles = historyCache[token];
+    if (!candles || candles.length === 0) {
+      const toDate = new Date();
+      const fromDate = new Date();
+      fromDate.setDate(toDate.getDate() - 365);
+      const data = await fetchHistorical(parseInt(token, 10), fromDate, toDate, 'day');
+      if (Array.isArray(data) && data.length > 0) {
+        historyCache[token] = data;
+        candles = data;
+      }
+    }
+    if (!candles || candles.length < 15) {
+      return res.status(404).json({ error: "Insufficient historical data to compute alerts" });
+    }
+
+    // Refresh today's bar so VWAP / day-change / volSurge reflect live state.
+    await refreshTodayCandle(token);
+    candles = historyCache[token] || candles;
+
+    // Fetch live quote so we have lastPrice + previousClose without trusting
+    // stale cached values.
+    let lastPrice = null;
+    let previousClose = null;
+    try {
+      const key = `NSE:${symbol}`;
+      const qr = await callWithTimeout({ name: 'get_quotes', arguments: { instruments: [key] } });
+      if (qr?.content?.[0]?.text) {
+        const parsed = JSON.parse(qr.content[0].text);
+        const q = parsed[key];
+        if (q) {
+          lastPrice = q.last_price ?? null;
+          previousClose = q.ohlc?.close ?? null;
+        }
+      }
+    } catch (e) {
+      console.warn(`[instrument-alert] quote fetch failed for ${symbol}: ${e.message}`);
+    }
+
+    const alert = await computeStockAlert({ symbol, token, lastPrice, previousClose, candles });
+    if (!alert) {
+      return res.json({ alert: null, reason: 'No actionable signals on the latest bar.' });
+    }
+    res.json({ alert });
+  } catch (err) {
+    console.error(`[instrument-alert] ${symbol}:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/fundamentals/:symbol', async (req, res) => {
   try {
     const symbol = req.params.symbol;
