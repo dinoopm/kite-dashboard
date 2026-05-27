@@ -302,7 +302,7 @@ function Portfolio() {
                     <tr key={index} onClick={() => navigate(`/instrument/${item.instrument_token}?symbol=${encodeURIComponent(item.tradingsymbol)}`)} style={{cursor: 'pointer'}}>
                       <td><strong>{item.tradingsymbol}</strong></td>
                       <td>{item.displayQuantity}</td>
-                      <td>₹{item.average_price}</td>
+                      <td>₹{Number(item.average_price).toFixed(2)}</td>
                       <td>₹{item.last_price}</td>
                       <td className={item.dayChange >= 0 ? 'positive' : 'negative'}>
                         {item.dayChange >= 0 ? '+' : ''}{item.dayChange.toFixed(2)} ({item.dayChangePct.toFixed(2)}%)
@@ -383,7 +383,7 @@ function Portfolio() {
                         <div style={{ fontSize: '0.75rem', opacity: 0.6 }}>{item.tradingsymbol}</div>
                       </td>
                       <td>{item.displayQuantity}</td>
-                      <td>₹{item.average_price}</td>
+                      <td>₹{Number(item.average_price).toFixed(2)}</td>
                       <td>₹{item.last_price}</td>
                       <td>₹{item.investment.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                       <td>₹{item.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>

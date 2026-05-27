@@ -621,20 +621,20 @@ function SectorIndices() {
       Object.keys(breakdownById).forEach(id => { breakdownById[id].percentile = scoreMap[id] ?? null; });
     }
 
-    // 1W rank-change: rerun the percentile pipeline anchored 5 trading days back
-    // against the same tab universe, then diff today's rank vs the past rank.
-    // Mirrors the Momentum Ranking chart's logic so the table chip and the bar
-    // chip stay in sync.
-    const tabUniverseWithHistory = tabRows.filter(r => r.history);
-    const curScoreMapTD  = computeScoreMap(tabUniverseWithHistory, 0);
-    const pastScoreMapTD = computeScoreMap(tabUniverseWithHistory, LOOKBACK_DAYS['1W']);
+    // 1W rank-change: current rank is derived from `scoreMap` (the same map
+    // driving the Momentum column) so the rank in the tooltip always matches
+    // what the user sees when sorting by Momentum. Past rank uses
+    // `computeScoreMap` against history (no cached 1-week-ago returns to lean
+    // on) — small methodology drift between the two, but the visible rank
+    // stays consistent with the table.
+    const pastScoreMapTD = computeScoreMap(tabRows.filter(r => r.history), LOOKBACK_DAYS['1W']);
     const ranksFromMap = (m) => {
       const sorted = Object.entries(m).sort((a, b) => b[1] - a[1]);
       const ranks = {};
       sorted.forEach(([id], i) => { ranks[id] = i + 1; });
       return ranks;
     };
-    const curRanks1W  = ranksFromMap(curScoreMapTD);
+    const curRanks1W  = ranksFromMap(scoreMap);
     const pastRanks1W = ranksFromMap(pastScoreMapTD);
 
     return tabRows.map(r => {

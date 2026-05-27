@@ -191,7 +191,7 @@ function SortTh({ label, sortKey, sortConfig, onSort, style }) {
   return (
     <th
       onClick={() => onSort(sortKey)}
-      style={{ cursor: 'pointer', padding: '0.5rem', whiteSpace: 'nowrap', userSelect: 'none', color: active ? 'var(--accent)' : 'var(--text-secondary)', ...style }}
+      style={{ cursor: 'pointer', padding: '0.5rem', whiteSpace: 'nowrap', userSelect: 'none', position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5, color: active ? 'var(--accent)' : 'var(--text-secondary)', ...style }}
     >
       {label} {active ? (sortConfig.direction === 'desc' ? '▼' : '▲') : '↕'}
     </th>
@@ -759,12 +759,12 @@ export default function SectorDetail() {
           )}
         </div>
       </div>
-      <div style={{ overflowX: 'auto' }}>
+      <div style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
-          <thead>
+          <thead style={{ position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5 }}>
             <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-              <th style={{ textAlign: 'left', padding: '0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Name</th>
-              <th style={{ textAlign: 'right', padding: '0.5rem', color: 'var(--text-secondary)' }}>Price</th>
+              <th style={{ textAlign: 'left', padding: '0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5 }}>Name</th>
+              <th style={{ textAlign: 'right', padding: '0.5rem', color: 'var(--text-secondary)', position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5 }}>Price</th>
               {['1D','1W','1M','3M','6M','1Y','2Y','3Y'].map(k => (
                 <SortTh key={k} label={k} sortKey={k} sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'right' }} />
               ))}
