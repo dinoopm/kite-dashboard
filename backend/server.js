@@ -2314,7 +2314,15 @@ function parseScreenerShareholding(html) {
   table.find('tbody tr').each((_, tr) => {
     const tds = $(tr).find('td').toArray();
     if (tds.length === 0) return;
-    const rawLabel = $(tds[0]).text().trim().replace(/\s*\+\s*$/, '').replace(/\s+/g, ' ');
+    // Screener wraps the "+" expand hint in a sub-element and frequently
+    // uses non-breaking spaces ( ) inside cells. Normalise both before
+    // matching against SCREENER_SHARE_ROW_MAP, otherwise rows like
+    // "Promoters +" silently fail to match the "Promoters" key.
+    const rawLabel = $(tds[0]).text()
+      .replace(/ /g, ' ')
+      .trim()
+      .replace(/\s*\+\s*$/, '')
+      .replace(/\s+/g, ' ');
     const field = SCREENER_SHARE_ROW_MAP[rawLabel];
     if (!field) return;
     tds.slice(1).forEach((td, i) => {

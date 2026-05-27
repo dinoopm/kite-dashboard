@@ -30,8 +30,12 @@ function ShareholdingPanel({ payload, error }) {
   const hasMF = enriched.some(q => q.mutualFunds != null && q.mutualFunds > 0);
   const hasODI = enriched.some(q => q.otherDIIs != null && q.otherDIIs > 0);
 
+  // `alwaysShow` keeps core categories visible even when screener reports
+  // them as 0 (e.g. HDFC Bank post-merger has 0% promoter holding — without
+  // this flag the row silently disappears). Optional categories like
+  // Government still get filtered out when uniformly zero to avoid clutter.
   const CATEGORIES = [
-    { key: 'promoters',          label: 'Total Promoter Holding', color: '#4f8df9' },
+    { key: 'promoters',          label: 'Total Promoter Holding', color: '#4f8df9', alwaysShow: true },
     ...(hasMF
       ? [{ key: 'mutualFunds',         label: 'Mutual Funds',                color: '#4f8df9' }]
       : []),
@@ -41,10 +45,10 @@ function ShareholdingPanel({ payload, error }) {
     ...(!hasMF && !hasODI
       ? [{ key: 'diis',               label: 'Domestic Institutions',        color: '#4f8df9' }]
       : []),
-    { key: 'fiis',               label: 'Foreign Institutions',  color: '#4f8df9' },
+    { key: 'fiis',               label: 'Foreign Institutions',  color: '#4f8df9', alwaysShow: true },
     { key: 'government',         label: 'Government',            color: '#bfdcff' },
-    { key: 'retailAndOthers',    label: 'Retail and Others',     color: '#4f8df9' },
-  ].filter(c => enriched.some(q => q[c.key] != null && q[c.key] > 0));
+    { key: 'retailAndOthers',    label: 'Retail and Others',     color: '#4f8df9', alwaysShow: true },
+  ].filter(c => c.alwaysShow || enriched.some(q => q[c.key] != null && q[c.key] > 0));
 
   // Selection state. `null` means "use default" — resolved below by looking
   // up the latest quarter / preferred category at render time, so we don't
@@ -428,8 +432,16 @@ function Instrument() {
     return () => controller.abort();
   }, [symbol])
 
-  // Fetch per-instrument technical alert. Only when the Alerts tab is opened
-  // so we don't hit the MCP quote service on every page load.
+  // Reset alert state whenever the instrument changes so the next fetch
+  // doesn't get blocked by the dedup guard below and stale data from the
+  // previous symbol doesn't flash on the screen.
+  useEffect(() => {
+    setInstrumentAlert(null);
+    setInstrumentAlertError(null);
+  }, [symbol, token])
+
+  // Fetch per-instrument technical alert. Only when the Technicals tab is
+  // active so we don't hit the MCP quote service on every page load.
   useEffect(() => {
     if (!symbol || !token) return;
     if (activeTab !== 'technicals') return;
@@ -1625,6 +1637,84 @@ function Instrument() {
           return ((curr - prev) / Math.abs(prev)) * 100;
         };
 
+        // ── Balance Sheet Snapshot — programmatic insights ─────────────
+        // Derives leverage, capital-structure trend, capex signal, and any
+        // cautionary flags from the multi-year series. No LLM, just arithmetic
+        // over the parsed numbers so the conclusions match the visible data.
+        const bsSnapshot = (() => {
+          if (years.length < 2) return null;
+          const latest = years[years.length - 1];
+          const prior = years[years.length - 2];
+          const earliest = years[0];
+
+          // Leverage: prefer borrowings (corp) but fall back to deposits (bank)
+          const debtField = latest.borrowings != null ? 'borrowings' : (latest.deposits != null ? 'deposits' : null);
+          const debt = debtField ? latest[debtField] : null;
+          const debtPrior = debtField ? prior[debtField] : null;
+
+          const de = (debt != null && latest.netWorth != null && latest.netWorth !== 0)
+            ? debt / latest.netWorth
+            : null;
+          const debtYoY = (debt != null && debtPrior != null && debtPrior !== 0)
+            ? ((debt - debtPrior) / Math.abs(debtPrior)) * 100
+            : null;
+
+          // Net Worth CAGR over the visible range
+          const nwCAGR = (() => {
+            if (latest.netWorth == null || earliest.netWorth == null || earliest.netWorth <= 0) return null;
+            const yrs = latest.fy - earliest.fy;
+            if (yrs <= 0) return null;
+            return (Math.pow(latest.netWorth / earliest.netWorth, 1 / yrs) - 1) * 100;
+          })();
+
+          // Total Assets YoY (latest)
+          const assetsYoY = (latest.totalAssets != null && prior.totalAssets != null && prior.totalAssets !== 0)
+            ? ((latest.totalAssets - prior.totalAssets) / Math.abs(prior.totalAssets)) * 100
+            : null;
+
+          // CWIP YoY — large jumps signal an active capex cycle
+          const cwipYoY = (latest.cwip != null && prior.cwip != null && prior.cwip > 0)
+            ? ((latest.cwip - prior.cwip) / Math.abs(prior.cwip)) * 100
+            : null;
+
+          // ── Cautionary flags ─────────────────────────────────────────
+          const flags = [];
+          if (latest.netWorth != null && latest.netWorth < 0) {
+            flags.push(`Negative net worth of ₹${Math.abs(latest.netWorth).toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr — solvency risk`);
+          }
+          if (de != null && de > 2) {
+            flags.push(`High leverage — D/E of ${de.toFixed(2)}× (debt ₹${debt.toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr vs net worth ₹${latest.netWorth.toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr)`);
+          }
+          if (debtYoY != null && debtYoY > 30) {
+            flags.push(`${debtField === 'borrowings' ? 'Borrowings' : 'Deposits'} jumped +${debtYoY.toFixed(0)}% in ${latest.fyLabel}`);
+          }
+          // Net worth declining for 2+ consecutive years
+          if (years.length >= 3) {
+            const a = years[years.length - 3].netWorth;
+            const b = prior.netWorth;
+            const c = latest.netWorth;
+            if (a != null && b != null && c != null && c < b && b < a) {
+              flags.push(`Net worth declining for 2+ consecutive years (${years[years.length - 3].fyLabel} → ${latest.fyLabel})`);
+            }
+          }
+          if (cwipYoY != null && cwipYoY > 100) {
+            flags.push(`CWIP ballooned +${cwipYoY.toFixed(0)}% — large capex cycle in progress, watch for execution risk`);
+          }
+
+          return { latest, debtField, debt, de, debtYoY, nwCAGR, assetsYoY, cwipYoY, flags };
+        })();
+
+        const trendColor = (v, band = 0) => {
+          if (v == null) return 'var(--text-secondary)';
+          if (Math.abs(v) <= band) return 'var(--text-secondary)';
+          return v > 0 ? '#10b981' : '#ef4444';
+        };
+        const arrow = (v, band = 0) => {
+          if (v == null) return '·';
+          if (Math.abs(v) <= band) return '→';
+          return v > 0 ? '↑' : '↓';
+        };
+
         return (
           <section className="glass-panel" style={{ marginTop: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -1648,6 +1738,104 @@ function Instrument() {
                   : screenerBalanceSheet == null ? 'Loading from Screener.in…' : 'Balance sheet data is not available for this instrument.'}
               </p>
             ) : (
+              <>
+                {bsSnapshot && (
+                  <div style={{
+                    marginBottom: '1.25rem',
+                    padding: '1rem 1.1rem',
+                    borderRadius: '10px',
+                    background: 'rgba(56,189,248,0.04)',
+                    border: '1px solid rgba(56,189,248,0.18)',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                        Balance Sheet Snapshot
+                      </span>
+                      {bsSnapshot.latest?.fyLabel && (
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                          · latest {bsSnapshot.latest.fyLabel}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
+                      {/* Leverage */}
+                      <div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Debt-to-Equity</div>
+                        <div style={{
+                          fontSize: '1.05rem', fontWeight: 700, marginTop: '0.2rem',
+                          color: bsSnapshot.de == null ? 'var(--text-secondary)'
+                            : bsSnapshot.de > 2 ? '#ef4444'
+                            : bsSnapshot.de > 1 ? '#f59e0b'
+                            : '#10b981',
+                        }}>
+                          {bsSnapshot.de == null ? '—' : `${bsSnapshot.de.toFixed(2)}×`}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                          {bsSnapshot.debt != null && bsSnapshot.latest.netWorth != null
+                            ? `₹${bsSnapshot.debt.toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr ${bsSnapshot.debtField === 'borrowings' ? 'debt' : 'deposits'} / ₹${bsSnapshot.latest.netWorth.toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr net worth`
+                            : 'Insufficient data'}
+                        </div>
+                      </div>
+
+                      {/* Net Worth CAGR */}
+                      <div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Net Worth CAGR</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(bsSnapshot.nwCAGR, 0.5), marginTop: '0.2rem' }}>
+                          {arrow(bsSnapshot.nwCAGR, 0.5)} {bsSnapshot.nwCAGR == null ? '—' : `${bsSnapshot.nwCAGR >= 0 ? '+' : ''}${bsSnapshot.nwCAGR.toFixed(1)}% /yr`}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                          {bsSnapshot.nwCAGR != null
+                            ? `${years[0].fyLabel} → ${bsSnapshot.latest.fyLabel}`
+                            : 'Needs ≥ 2 years'}
+                        </div>
+                      </div>
+
+                      {/* Debt trend */}
+                      <div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{bsSnapshot.debtField === 'deposits' ? 'Deposits' : 'Debt'} YoY</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(bsSnapshot.debtYoY == null ? null : -bsSnapshot.debtYoY, 2), marginTop: '0.2rem' }}>
+                          {arrow(bsSnapshot.debtYoY, 0)} {bsSnapshot.debtYoY == null ? '—' : `${bsSnapshot.debtYoY >= 0 ? '+' : ''}${bsSnapshot.debtYoY.toFixed(1)}%`}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                          {bsSnapshot.debtYoY == null
+                            ? 'Insufficient data'
+                            : bsSnapshot.debtYoY > 0 ? 'Adding leverage' : 'Deleveraging'}
+                        </div>
+                      </div>
+
+                      {/* Total Assets growth */}
+                      <div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Assets YoY</div>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(bsSnapshot.assetsYoY, 0.5), marginTop: '0.2rem' }}>
+                          {arrow(bsSnapshot.assetsYoY, 0.5)} {bsSnapshot.assetsYoY == null ? '—' : `${bsSnapshot.assetsYoY >= 0 ? '+' : ''}${bsSnapshot.assetsYoY.toFixed(1)}%`}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                          {bsSnapshot.cwipYoY != null && Math.abs(bsSnapshot.cwipYoY) > 10
+                            ? `CWIP ${bsSnapshot.cwipYoY >= 0 ? '+' : ''}${bsSnapshot.cwipYoY.toFixed(0)}% — capex signal`
+                            : 'Balance sheet expansion'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {bsSnapshot.flags.length > 0 && (
+                      <div style={{ marginTop: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                        {bsSnapshot.flags.map((f, i) => (
+                          <div key={i} style={{
+                            fontSize: '0.75rem',
+                            color: '#fca5a5',
+                            background: 'rgba(239,68,68,0.08)',
+                            border: '1px solid rgba(239,68,68,0.22)',
+                            padding: '0.3rem 0.55rem',
+                            borderRadius: '6px',
+                          }}>
+                            ⚠ {f}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
               <div style={{ overflowX: 'auto' }}>
                 <table className="interactive-table" style={{ minWidth: '100%' }}>
                   <thead>
@@ -1687,6 +1875,7 @@ function Instrument() {
                   Net Worth = Equity Capital + Reserves. Total Equity &amp; Liabilities always equals Total Assets — that's the accounting identity, not a bug. Banks/NBFCs may report Deposits and Loans instead of Borrowings. Empty cells (—) mean the field wasn't disclosed for that year.
                 </p>
               </div>
+              </>
             )}
           </section>
         );
