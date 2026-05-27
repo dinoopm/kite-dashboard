@@ -158,7 +158,7 @@ function Navbar({ onDisconnect }) {
         onMouseOver={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
         onMouseOut={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
       >
-        Disconnect
+        Sign Out
       </button>
     </nav>
   );
