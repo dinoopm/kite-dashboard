@@ -142,6 +142,67 @@ function Portfolio() {
 
   const filteredAndSortedMFs = getFilteredAndSortedMFs();
 
+  const csvEscape = (v) => {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const downloadCSV = (filename, headers, rows) => {
+    const lines = [headers.map(csvEscape).join(',')];
+    rows.forEach(r => lines.push(r.map(csvEscape).join(',')));
+    // BOM so Excel reads UTF-8 ₹ and other glyphs correctly
+    const blob = new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const exportCSV = () => {
+    const ts = new Date().toISOString().slice(0, 10);
+    const num = (v, d = 2) => (v == null || isNaN(v) ? '' : Number(v).toFixed(d));
+    if (activeTab === 'equity') {
+      const headers = ['Instrument', 'Quantity', 'Avg Cost', 'LTP', 'Day Change', 'Day Change %', 'Invested', 'Current Value', 'P&L', 'Net Change %', 'Allocation %'];
+      const rows = filteredAndSortedHoldings.map(h => [
+        h.tradingsymbol,
+        h.displayQuantity,
+        num(h.average_price),
+        num(h.last_price),
+        num(h.dayChange),
+        num(h.dayChangePct),
+        num(h.investment),
+        num(h.currentValue),
+        num(h.itemPL),
+        num(h.itemPLPercent),
+        num(h.allocation),
+      ]);
+      downloadCSV(`equity-holdings-${ts}.csv`, headers, rows);
+    } else {
+      const headers = ['Fund', 'Symbol', 'Quantity', 'Avg Cost', 'NAV (LTP)', 'Invested', 'Current Value', 'P&L', 'Net Change %'];
+      const rows = filteredAndSortedMFs.map(h => [
+        h.fund || h.tradingsymbol,
+        h.tradingsymbol,
+        h.displayQuantity,
+        num(h.average_price),
+        num(h.last_price),
+        num(h.investment),
+        num(h.currentValue),
+        num(h.itemPL),
+        num(h.itemPLPercent),
+      ]);
+      downloadCSV(`mf-holdings-${ts}.csv`, headers, rows);
+    }
+  };
+
+  const exportDisabled = activeTab === 'equity'
+    ? filteredAndSortedHoldings.length === 0
+    : filteredAndSortedMFs.length === 0;
+
   return (
     <div className="dashboard-layout">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
@@ -180,21 +241,42 @@ function Portfolio() {
           </button>
         </div>
 
-        <input
-          type="text"
-          placeholder={`Search ${activeTab === 'equity' ? 'symbols' : 'funds'}...`}
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          style={{
-            padding: '0.6rem 1rem',
-            borderRadius: '8px',
-            border: '1px solid var(--border)',
-            background: 'var(--bg-dark)',
-            color: 'var(--text-primary)',
-            width: '300px',
-            outline: 'none'
-          }}
-        />
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <input
+            type="text"
+            placeholder={`Search ${activeTab === 'equity' ? 'symbols' : 'funds'}...`}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{
+              padding: '0.6rem 1rem',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-dark)',
+              color: 'var(--text-primary)',
+              width: '300px',
+              outline: 'none'
+            }}
+          />
+          <button
+            onClick={exportCSV}
+            disabled={exportDisabled}
+            title={exportDisabled ? 'Nothing to export' : `Export ${activeTab === 'equity' ? 'equity' : 'mutual fund'} holdings as CSV`}
+            style={{
+              padding: '0.6rem 1rem',
+              borderRadius: '8px',
+              border: '1px solid rgba(56,189,248,0.25)',
+              background: 'rgba(56,189,248,0.08)',
+              color: 'var(--accent)',
+              fontWeight: 700,
+              fontSize: '0.85rem',
+              cursor: exportDisabled ? 'not-allowed' : 'pointer',
+              opacity: exportDisabled ? 0.5 : 1,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            ⤓ Export CSV
+          </button>
+        </div>
       </div>
 
       {activeTab === 'equity' ? (
