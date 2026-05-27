@@ -1883,17 +1883,21 @@ const SCREENER_SLUG_ALIASES = {
 //   2. Try the resolved slug.
 //   3. On 404, fall back to the original symbol (in case the alias was wrong).
 //   4. If both 404, propagate the error.
-async function fetchScreenerHTML(symbol) {
-  const cached = screenerHtmlCache[symbol];
+async function fetchScreenerHTML(symbol, { consolidated = false } = {}) {
+  // Consolidated and standalone are different pages on screener.in. Cache them
+  // independently so a request for one doesn't poison the other.
+  const cacheKey = consolidated ? `${symbol}::consolidated` : symbol;
+  const cached = screenerHtmlCache[cacheKey];
   if (cached && Date.now() - cached.ts < SCREENER_TTL) return { html: cached.html, hit: true };
-  if (screenerHtmlInflight[symbol]) return screenerHtmlInflight[symbol];
+  if (screenerHtmlInflight[cacheKey]) return screenerHtmlInflight[cacheKey];
 
   const slugCandidates = [];
   if (SCREENER_SLUG_ALIASES[symbol]) slugCandidates.push(SCREENER_SLUG_ALIASES[symbol]);
   slugCandidates.push(symbol);
 
   const tryFetch = async (slug) => {
-    const url = `https://www.screener.in/company/${encodeURIComponent(slug)}/`;
+    const suffix = consolidated ? 'consolidated/' : '';
+    const url = `https://www.screener.in/company/${encodeURIComponent(slug)}/${suffix}`;
     const r = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -1911,9 +1915,9 @@ async function fetchScreenerHTML(symbol) {
         const r = await tryFetch(slug);
         if (r.ok) {
           const html = await r.text();
-          screenerHtmlCache[symbol] = { html, ts: Date.now() };
+          screenerHtmlCache[cacheKey] = { html, ts: Date.now() };
           if (slug !== symbol) {
-            console.log(`[screener] ${symbol} resolved via alias slug "${slug}"`);
+            console.log(`[screener] ${symbol} resolved via alias slug "${slug}" (${consolidated ? 'consolidated' : 'standalone'})`);
           }
           return { html, hit: false };
         }
@@ -1922,10 +1926,10 @@ async function fetchScreenerHTML(symbol) {
       }
       throw lastErr || new Error(`Screener returned 404 for all candidates of ${symbol}`);
     } finally {
-      delete screenerHtmlInflight[symbol];
+      delete screenerHtmlInflight[cacheKey];
     }
   })();
-  screenerHtmlInflight[symbol] = p;
+  screenerHtmlInflight[cacheKey] = p;
   return p;
 }
 
@@ -2093,6 +2097,202 @@ app.get('/api/screener-cashflow/:symbol', async (req, res) => {
     console.error(`[screener-cashflow] ${symbol}:`, err.message);
     res.status(err.status === 404 ? 404 : (err.status ? 502 : 500))
       .json({ error: err.message, fallback: 'yahoo' });
+  }
+});
+
+// ─── Screener balance sheet (annual) ─────────────────────────────
+// Annual balance sheet rebuilt from the same screener page. Consolidated by
+// default to match group-level reporting; falls back to standalone if the
+// consolidated page 404s (small companies don't always publish consolidated).
+const SCREENER_BS_ROW_MAP = {
+  'Equity Capital': 'equityCapital',
+  'Reserves': 'reserves',
+  'Borrowings': 'borrowings',
+  'Other Liabilities': 'otherLiabilities',
+  'Total Liabilities': 'totalLiabilities',
+  'Fixed Assets': 'fixedAssets',
+  'CWIP': 'cwip',
+  'Investments': 'investments',
+  'Other Assets': 'otherAssets',
+  'Total Assets': 'totalAssets',
+  // NBFC / bank variants — screener sometimes uses these
+  'Deposits': 'deposits',
+  'Loans': 'loans',
+};
+
+function parseScreenerBalanceSheet(html) {
+  const $ = cheerio.load(html);
+  const section = $('section#balance-sheet');
+  if (section.length === 0) throw new Error('Balance sheet section not found on screener page');
+  const table = section.find('table.data-table').first();
+  if (table.length === 0) throw new Error('Balance sheet table not found');
+
+  const headerCells = table.find('thead th').toArray();
+  const columns = headerCells.slice(1).map(el => {
+    const parsed = parseScreenerHeader($(el).text());
+    if (!parsed) return null;
+    return { ...parsed, fyLabel: `FY${String(parsed.fy).slice(-2)}` };
+  }).filter(Boolean);
+  if (columns.length === 0) throw new Error('No balance sheet year columns parsed');
+
+  table.find('tbody tr').each((_, tr) => {
+    const tds = $(tr).find('td').toArray();
+    if (tds.length === 0) return;
+    const rawLabel = $(tds[0]).text().trim().replace(/\s*\+\s*$/, '').replace(/\s+/g, ' ');
+    const field = SCREENER_BS_ROW_MAP[rawLabel];
+    if (!field) return;
+    tds.slice(1).forEach((td, i) => {
+      if (i >= columns.length) return;
+      columns[i][field] = parseNumberCell($(td).text());
+    });
+  });
+
+  // Derive net worth (equity capital + reserves) when both are present —
+  // simpler for the UI than recomputing per row.
+  columns.forEach(c => {
+    if (c.equityCapital != null && c.reserves != null) {
+      c.netWorth = +(c.equityCapital + c.reserves).toFixed(2);
+    }
+  });
+
+  return columns;
+}
+
+const screenerBalanceSheetCache = {};
+
+app.get('/api/screener-balance-sheet/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  // Default consolidated=true (matches user request); allow ?consolidated=0 to
+  // force standalone.
+  const consolidated = req.query.consolidated !== '0' && req.query.consolidated !== 'false';
+  const cacheKey = `${symbol}::${consolidated ? 'consolidated' : 'standalone'}`;
+  const cached = screenerBalanceSheetCache[cacheKey];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) {
+    return res.json({ ...cached.data, cached: true });
+  }
+  try {
+    let usedBasis = consolidated ? 'consolidated' : 'standalone';
+    let html;
+    try {
+      ({ html } = await fetchScreenerHTML(symbol, { consolidated }));
+    } catch (err) {
+      // Fall back to the other basis if the requested page is missing — many
+      // small caps file standalone only, while large groups often only publish
+      // a meaningful consolidated set.
+      if (consolidated && err.status === 404) {
+        console.log(`[screener-balance-sheet] ${symbol} consolidated 404 — falling back to standalone`);
+        ({ html } = await fetchScreenerHTML(symbol, { consolidated: false }));
+        usedBasis = 'standalone';
+      } else {
+        throw err;
+      }
+    }
+    const years = parseScreenerBalanceSheet(html);
+    if (years.length === 0) {
+      return res.status(502).json({ error: 'No balance sheet data parsed' });
+    }
+    const payload = { source: 'screener.in', symbol, period: 'annual', basis: usedBasis, years };
+    screenerBalanceSheetCache[cacheKey] = { data: payload, ts: Date.now() };
+    res.json({ ...payload, cached: false });
+  } catch (err) {
+    console.error(`[screener-balance-sheet] ${symbol}:`, err.message);
+    res.status(err.status === 404 ? 404 : (err.status ? 502 : 500))
+      .json({ error: err.message });
+  }
+});
+
+// ─── Screener shareholding pattern (quarterly) ───────────────────
+// Rendered as `section#shareholding` with two sub-tables: quarterly and
+// yearly. We parse only the quarterly table (richer cadence — useful for
+// spotting promoter pledging or FII rotation in real time). Values are
+// percentages of total equity.
+const SCREENER_SHARE_ROW_MAP = {
+  // Top-level categories
+  'Promoters': 'promoters',
+  'FIIs': 'fiis',
+  'Foreign Institutions': 'fiis',
+  'DIIs': 'diis',
+  'Domestic Institutions': 'diis',
+  'Government': 'government',
+  'Public': 'public',
+  'Others': 'others',
+  // DII sub-rows (only present after the "+" expansion is rendered into the
+  // HTML — screener usually inlines them, so worth parsing).
+  'Mutual Funds': 'mutualFunds',
+  'Other Domestic Institutions': 'otherDIIs',
+  'Insurance Companies': 'insurance',
+  // Shareholder count — not a %.
+  'Shareholders': 'shareholders',
+  'No. of Shareholders': 'shareholders',
+};
+
+function parseScreenerShareholding(html) {
+  const $ = cheerio.load(html);
+  const section = $('section#shareholding');
+  if (section.length === 0) throw new Error('Shareholding section not found on screener page');
+  // Screener shows quarterly + yearly tabs. Quarterly table sits inside a
+  // div with id ending in "quarterly-shp"; fall back to the first table if
+  // that markup changes.
+  let table = section.find('div[id$="quarterly-shp"] table.data-table').first();
+  if (table.length === 0) table = section.find('table.data-table').first();
+  if (table.length === 0) throw new Error('Shareholding table not found');
+
+  // Column headers are dates like "Mar 2024", "Jun 2024", etc.
+  const headerCells = table.find('thead th').toArray();
+  const columns = headerCells.slice(1).map(el => {
+    const parsed = parseScreenerHeader($(el).text());
+    if (!parsed) return null;
+    return { ...parsed, label: `Q${parsed.q} FY${String(parsed.fy).slice(-2)}` };
+  }).filter(Boolean);
+  if (columns.length === 0) throw new Error('No shareholding columns parsed');
+
+  table.find('tbody tr').each((_, tr) => {
+    const tds = $(tr).find('td').toArray();
+    if (tds.length === 0) return;
+    const rawLabel = $(tds[0]).text().trim().replace(/\s*\+\s*$/, '').replace(/\s+/g, ' ');
+    const field = SCREENER_SHARE_ROW_MAP[rawLabel];
+    if (!field) return;
+    tds.slice(1).forEach((td, i) => {
+      if (i >= columns.length) return;
+      columns[i][field] = parseNumberCell($(td).text());
+    });
+  });
+
+  return columns;
+}
+
+const screenerShareholdingCache = {};
+
+app.get('/api/screener-shareholding/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const consolidated = req.query.consolidated !== '0' && req.query.consolidated !== 'false';
+  const cacheKey = `${symbol}::${consolidated ? 'consolidated' : 'standalone'}`;
+  const cached = screenerShareholdingCache[cacheKey];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) {
+    return res.json({ ...cached.data, cached: true });
+  }
+  try {
+    let html;
+    try {
+      ({ html } = await fetchScreenerHTML(symbol, { consolidated }));
+    } catch (err) {
+      if (consolidated && err.status === 404) {
+        ({ html } = await fetchScreenerHTML(symbol, { consolidated: false }));
+      } else {
+        throw err;
+      }
+    }
+    const quarters = parseScreenerShareholding(html);
+    if (quarters.length === 0) {
+      return res.status(502).json({ error: 'No shareholding data parsed' });
+    }
+    const payload = { source: 'screener.in', symbol, period: 'quarterly', quarters };
+    screenerShareholdingCache[cacheKey] = { data: payload, ts: Date.now() };
+    res.json({ ...payload, cached: false });
+  } catch (err) {
+    console.error(`[screener-shareholding] ${symbol}:`, err.message);
+    res.status(err.status === 404 ? 404 : (err.status ? 502 : 500))
+      .json({ error: err.message });
   }
 });
 

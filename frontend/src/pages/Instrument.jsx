@@ -4,6 +4,239 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 import { format, parseISO } from 'date-fns'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 
+// Two-panel shareholding view: left selects a quarter and shows horizontal
+// % bars per category; right selects a category and shows a vertical bar
+// history across all available quarters.
+function ShareholdingPanel({ payload, error }) {
+  const quarters = Array.isArray(payload?.quarters)
+    ? [...payload.quarters].sort((a, b) => a.sortKey - b.sortKey)
+    : [];
+
+  // Derive "Retail and Others" as Public + Others so the breakdown matches
+  // the conventional Indian disclosure (retail investors + small bucket).
+  const enriched = quarters.map(q => ({
+    ...q,
+    retailAndOthers: (q.public != null || q.others != null)
+      ? +(((q.public || 0) + (q.others || 0)).toFixed(2))
+      : null,
+  }));
+
+  // Display order + colors mirror the reference layout. Sub-rows like
+  // Mutual Funds / Other Domestic Institutions are preferred when available;
+  // we fall back to the parent DII total otherwise.
+  const hasMF = enriched.some(q => q.mutualFunds != null && q.mutualFunds > 0);
+  const hasODI = enriched.some(q => q.otherDIIs != null && q.otherDIIs > 0);
+
+  const CATEGORIES = [
+    { key: 'promoters',          label: 'Total Promoter Holding', color: '#4f8df9' },
+    ...(hasMF
+      ? [{ key: 'mutualFunds',         label: 'Mutual Funds',                color: '#4f8df9' }]
+      : []),
+    ...(hasODI
+      ? [{ key: 'otherDIIs',           label: 'Other Domestic Institutions', color: '#bfdcff' }]
+      : []),
+    ...(!hasMF && !hasODI
+      ? [{ key: 'diis',               label: 'Domestic Institutions',        color: '#4f8df9' }]
+      : []),
+    { key: 'fiis',               label: 'Foreign Institutions',  color: '#4f8df9' },
+    { key: 'government',         label: 'Government',            color: '#bfdcff' },
+    { key: 'retailAndOthers',    label: 'Retail and Others',     color: '#4f8df9' },
+  ].filter(c => enriched.some(q => q[c.key] != null && q[c.key] > 0));
+
+  // Selection state. `null` means "use default" — resolved below by looking
+  // up the latest quarter / preferred category at render time, so we don't
+  // need an effect to seed defaults after payload arrives.
+  const [selectedQuarterKey, setSelectedQuarterKey] = useState(null);
+  const [selectedCategoryKey, setSelectedCategoryKey] = useState(null);
+
+  if (quarters.length === 0) {
+    return (
+      <section className="glass-panel" style={{ marginTop: '1rem', padding: '1.5rem' }}>
+        <h2 style={{ margin: '0 0 0.5rem 0' }}>Shareholding</h2>
+        <p style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '1rem' }}>
+          {error
+            ? `Shareholding unavailable: ${error}`
+            : payload == null ? 'Loading from Screener.in…' : 'Shareholding data is not available for this instrument.'}
+        </p>
+      </section>
+    );
+  }
+
+  // Quarter tab labels: show "Mon YYYY" (e.g. "Mar 2026") for the last 4 quarters
+  const monthName = (m) => ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m - 1];
+  const lastFourQuarters = enriched.slice(-4);
+  const selectedQuarter = (selectedQuarterKey != null && enriched.find(q => q.sortKey === selectedQuarterKey))
+    || enriched[enriched.length - 1];
+
+  // Max % across visible categories in the selected quarter — for bar scaling
+  const maxPct = Math.max(...CATEGORIES.map(c => selectedQuarter[c.key] || 0), 10);
+
+  // Default to FIIs if present (matches reference layout), else first available
+  const selectedCategory = (selectedCategoryKey != null && CATEGORIES.find(c => c.key === selectedCategoryKey))
+    || CATEGORIES.find(c => c.key === 'fiis')
+    || CATEGORIES[0];
+  const historyData = enriched.map(q => ({
+    label: `${monthName(q.month)} ${String(q.year).slice(-2)}`,
+    fullLabel: `${monthName(q.month)} ${q.year}`,
+    value: q[selectedCategory.key],
+  }));
+
+  return (
+    <section className="glass-panel" style={{ marginTop: '1rem', padding: '1.5rem' }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+        gap: '1.5rem',
+      }}>
+        {/* ── Left: snapshot for selected quarter ─────────────────── */}
+        <div>
+          <h3 style={{ margin: '0 0 0.85rem 0', fontSize: '1.1rem' }}>Shareholding Pattern</h3>
+
+          {/* Quarter selector tabs */}
+          <div style={{
+            display: 'flex',
+            gap: 0,
+            padding: '4px',
+            background: 'rgba(255,255,255,0.03)',
+            border: '1px solid var(--border)',
+            borderRadius: '8px',
+            marginBottom: '1rem',
+            flexWrap: 'wrap',
+          }}>
+            {lastFourQuarters.map(q => {
+              const isSelected = q.sortKey === selectedQuarter.sortKey;
+              return (
+                <button
+                  key={q.sortKey}
+                  onClick={() => setSelectedQuarterKey(q.sortKey)}
+                  style={{
+                    flex: '1 1 auto',
+                    padding: '0.5rem 0.75rem',
+                    background: isSelected ? 'var(--text-primary)' : 'transparent',
+                    color: isSelected ? 'var(--bg-dark)' : 'var(--text-secondary)',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '0.8rem',
+                    fontWeight: isSelected ? 700 : 500,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {monthName(q.month)} {q.year}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Horizontal % bars per category */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+            {CATEGORIES.map(c => {
+              const v = selectedQuarter[c.key];
+              const pctOfMax = v == null ? 0 : (v / maxPct) * 100;
+              return (
+                <div key={c.key}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: 600, marginBottom: '0.3rem' }}>
+                    {c.label}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                    <div style={{
+                      flex: 1,
+                      height: '12px',
+                      background: 'rgba(255,255,255,0.04)',
+                      borderRadius: '3px',
+                      overflow: 'hidden',
+                    }}>
+                      <div style={{
+                        width: `${pctOfMax}%`,
+                        height: '100%',
+                        background: c.color,
+                        transition: 'width 0.3s',
+                      }} />
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-primary)', fontWeight: 600, minWidth: '52px', textAlign: 'right' }}>
+                      {v == null ? '—' : `${v.toFixed(2)}%`}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ── Right: history of selected category ─────────────────── */}
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Shareholding History</h3>
+          </div>
+
+          {/* Category selector dropdown */}
+          <div style={{ marginBottom: '1rem' }}>
+            <select
+              value={selectedCategory.key}
+              onChange={(e) => setSelectedCategoryKey(e.target.value)}
+              style={{
+                padding: '0.55rem 0.75rem',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid var(--border)',
+                borderRadius: '8px',
+                color: 'var(--text-primary)',
+                fontSize: '0.85rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                outline: 'none',
+                minWidth: '220px',
+              }}
+            >
+              {CATEGORIES.map(c => (
+                <option key={c.key} value={c.key} style={{ background: 'var(--bg-dark)' }}>{c.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Vertical bar chart of selected category over time */}
+          <div style={{ width: '100%', height: 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={historyData} margin={{ top: 24, right: 8, left: 0, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fill: 'var(--text-secondary)', fontSize: 11 }}
+                  axisLine={{ stroke: 'var(--border)' }}
+                  tickLine={false}
+                />
+                <YAxis
+                  hide
+                  domain={[0, (dataMax) => Math.max(dataMax * 1.18, 1)]}
+                />
+                <Tooltip
+                  contentStyle={{ backgroundColor: 'var(--bg-dark)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+                  formatter={(value) => [value == null ? '—' : `${Number(value).toFixed(2)}%`, selectedCategory.label]}
+                  labelFormatter={(_, payload) => payload?.[0]?.payload?.fullLabel || ''}
+                  cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                />
+                <Bar
+                  dataKey="value"
+                  fill="#34d3a4"
+                  radius={[2, 2, 0, 0]}
+                  isAnimationActive={false}
+                  label={{
+                    position: 'top',
+                    fill: 'var(--text-primary)',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    formatter: (v) => v == null ? '' : `${Number(v).toFixed(2)}%`,
+                  }}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Instrument() {
   const { token } = useParams()
   const [searchParams] = useSearchParams()
@@ -27,6 +260,13 @@ function Instrument() {
   // annual cashflow in standalone disclosures anyway.
   const [screenerCashflow, setScreenerCashflow] = useState(null)
   const [screenerCashflowError, setScreenerCashflowError] = useState(null)
+  // Annual balance sheet — consolidated by default, server falls back to
+  // standalone on 404 (small caps).
+  const [screenerBalanceSheet, setScreenerBalanceSheet] = useState(null)
+  const [screenerBalanceSheetError, setScreenerBalanceSheetError] = useState(null)
+  // Quarterly shareholding pattern (Promoters / FIIs / DIIs / Public / Govt / Others).
+  const [screenerShareholding, setScreenerShareholding] = useState(null)
+  const [screenerShareholdingError, setScreenerShareholdingError] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
@@ -121,6 +361,58 @@ function Instrument() {
       } catch (e) {
         if (e.name === 'AbortError') return;
         setScreenerCashflowError(e.message);
+      }
+    })();
+    return () => controller.abort();
+  }, [symbol])
+
+  // Fetch annual consolidated balance sheet from screener.in.
+  useEffect(() => {
+    if (!symbol) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetchWithAbort(`/api/screener-balance-sheet/${encodeURIComponent(symbol)}`, { signal: controller.signal });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data?.years) && data.years.length > 0) {
+            setScreenerBalanceSheet(data);
+          } else {
+            setScreenerBalanceSheetError('Screener returned no balance sheet rows');
+          }
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setScreenerBalanceSheetError(err.error || `Screener fetch failed (${res.status})`);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        setScreenerBalanceSheetError(e.message);
+      }
+    })();
+    return () => controller.abort();
+  }, [symbol])
+
+  // Fetch quarterly shareholding pattern from screener.in.
+  useEffect(() => {
+    if (!symbol) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetchWithAbort(`/api/screener-shareholding/${encodeURIComponent(symbol)}`, { signal: controller.signal });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data?.quarters) && data.quarters.length > 0) {
+            setScreenerShareholding(data);
+          } else {
+            setScreenerShareholdingError('Screener returned no shareholding rows');
+          }
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setScreenerShareholdingError(err.error || `Screener fetch failed (${res.status})`);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        setScreenerShareholdingError(e.message);
       }
     })();
     return () => controller.abort();
@@ -422,6 +714,38 @@ function Instrument() {
           }}
         >
           Cashflow Chart
+        </button>
+        <button
+          onClick={() => setActiveTab('balanceSheet')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'balanceSheet' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'balanceSheet' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '0.5rem 1rem',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'balanceSheet' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+            fontSize: '1rem'
+          }}
+        >
+          Balance Sheet
+        </button>
+        <button
+          onClick={() => setActiveTab('shareholding')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'shareholding' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'shareholding' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '0.5rem 1rem',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'shareholding' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+            fontSize: '1rem'
+          }}
+        >
+          Shareholding
         </button>
       </div>
 
@@ -846,6 +1170,98 @@ function Instrument() {
           );
         };
 
+        // ── Quarterly Snapshot — auto-generated trend insights ─────────
+        // Programmatic summary (no LLM): YoY hit-rate, margin trajectory,
+        // profit direction, and any cautionary flags derived from the last
+        // 4–8 quarters of screener data.
+        const snapshot = (() => {
+          if (quarters.length < 2) return null;
+          const last4 = quarters.slice(-4);
+          const prev4 = quarters.slice(-8, -4);
+
+          // YoY hit-rate for sales over the last 4 quarters
+          let salesYoYWins = 0, salesYoYConsidered = 0, latestSalesYoY = null;
+          last4.forEach((q, i) => {
+            const py = byLabel[labelFromQFy(q.q, q.fy - 1)];
+            if (py && py.totalIncome != null && q.totalIncome != null && py.totalIncome !== 0) {
+              salesYoYConsidered += 1;
+              const pct = ((q.totalIncome - py.totalIncome) / Math.abs(py.totalIncome)) * 100;
+              if (pct > 0) salesYoYWins += 1;
+              if (i === last4.length - 1) latestSalesYoY = pct;
+            }
+          });
+
+          // OPM trajectory — avg of last 4 vs avg of prior 4 (percentage points)
+          const avg = (arr) => {
+            const v = arr.filter(x => x != null);
+            return v.length === 0 ? null : v.reduce((a, b) => a + b, 0) / v.length;
+          };
+          const opmLast = avg(last4.map(opMarginOf));
+          const opmPrev = avg(prev4.map(opMarginOf));
+          const opmDelta = (opmLast != null && opmPrev != null) ? opmLast - opmPrev : null;
+
+          // Net Profit YoY hit-rate + latest YoY
+          let npYoYWins = 0, npYoYConsidered = 0, latestNpYoY = null;
+          last4.forEach((q, i) => {
+            const py = byLabel[labelFromQFy(q.q, q.fy - 1)];
+            if (py && py.netProfit != null && q.netProfit != null && py.netProfit !== 0) {
+              npYoYConsidered += 1;
+              const pct = ((q.netProfit - py.netProfit) / Math.abs(py.netProfit)) * 100;
+              if (pct > 0) npYoYWins += 1;
+              if (i === last4.length - 1) latestNpYoY = pct;
+            }
+          });
+
+          // Cautionary flags
+          const flags = [];
+          // Two consecutive YoY revenue declines
+          if (last4.length >= 2) {
+            const tail = last4.slice(-2);
+            const declines = tail.filter(q => {
+              const py = byLabel[labelFromQFy(q.q, q.fy - 1)];
+              return py && py.totalIncome != null && q.totalIncome != null && q.totalIncome < py.totalIncome;
+            }).length;
+            if (declines === 2) flags.push('Revenue declined YoY in the last 2 quarters');
+          }
+          // Margin compression > 3pp
+          if (opmDelta != null && opmDelta < -3) {
+            flags.push(`Operating margin compressed by ${Math.abs(opmDelta).toFixed(1)}pp vs prior 4 quarters`);
+          }
+          // Net loss in latest quarter
+          const latest = last4[last4.length - 1];
+          if (latest?.netProfit != null && latest.netProfit < 0) {
+            flags.push(`Net loss of ₹${Math.abs(latest.netProfit).toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr in ${latest.label}`);
+          }
+          // Sharp interest-cost rise (>30% YoY) — debt-service signal
+          if (latest?.interest != null) {
+            const py = byLabel[labelFromQFy(latest.q, latest.fy - 1)];
+            if (py?.interest != null && py.interest > 0) {
+              const intYoY = ((latest.interest - py.interest) / Math.abs(py.interest)) * 100;
+              if (intYoY > 30) flags.push(`Interest cost up ${intYoY.toFixed(0)}% YoY in ${latest.label}`);
+            }
+          }
+
+          return {
+            salesYoY: { wins: salesYoYWins, considered: salesYoYConsidered, latest: latestSalesYoY },
+            opm: { last: opmLast, prev: opmPrev, delta: opmDelta },
+            np: { wins: npYoYWins, considered: npYoYConsidered, latest: latestNpYoY },
+            flags,
+            latestLabel: latest?.label,
+          };
+        })();
+
+        // Visual helpers for the snapshot cards
+        const trendColor = (v, neutralBand = 0) => {
+          if (v == null) return 'var(--text-secondary)';
+          if (Math.abs(v) <= neutralBand) return 'var(--text-secondary)';
+          return v > 0 ? '#10b981' : '#ef4444';
+        };
+        const arrow = (v, neutralBand = 0) => {
+          if (v == null) return '·';
+          if (Math.abs(v) <= neutralBand) return '→';
+          return v > 0 ? '↑' : '↓';
+        };
+
         return (
           <section className="glass-panel" style={{ marginTop: '1rem', padding: '1.5rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -861,6 +1277,84 @@ function Instrument() {
                 </span>
               )}
             </div>
+
+            {snapshot && (
+              <div style={{
+                marginBottom: '1.25rem',
+                padding: '1rem 1.1rem',
+                borderRadius: '10px',
+                background: 'rgba(56,189,248,0.04)',
+                border: '1px solid rgba(56,189,248,0.18)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Quarterly Snapshot
+                  </span>
+                  {snapshot.latestLabel && (
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                      · latest {snapshot.latestLabel}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
+                  {/* Sales trend */}
+                  <div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sales YoY</div>
+                    <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snapshot.salesYoY.latest), marginTop: '0.2rem' }}>
+                      {arrow(snapshot.salesYoY.latest)} {snapshot.salesYoY.latest == null ? '—' : `${snapshot.salesYoY.latest >= 0 ? '+' : ''}${snapshot.salesYoY.latest.toFixed(1)}%`}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                      {snapshot.salesYoY.considered > 0
+                        ? `Grew in ${snapshot.salesYoY.wins} of last ${snapshot.salesYoY.considered} quarters`
+                        : 'Insufficient YoY history'}
+                    </div>
+                  </div>
+
+                  {/* Operating margin trajectory */}
+                  <div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>OPM Trajectory</div>
+                    <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snapshot.opm.delta, 0.5), marginTop: '0.2rem' }}>
+                      {arrow(snapshot.opm.delta, 0.5)} {snapshot.opm.delta == null ? '—' : `${snapshot.opm.delta >= 0 ? '+' : ''}${snapshot.opm.delta.toFixed(1)} pp`}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                      {snapshot.opm.last != null && snapshot.opm.prev != null
+                        ? `${snapshot.opm.last.toFixed(1)}% vs ${snapshot.opm.prev.toFixed(1)}% (prior 4Q avg)`
+                        : 'Needs ≥ 8 quarters'}
+                    </div>
+                  </div>
+
+                  {/* Net Profit trend */}
+                  <div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Net Profit YoY</div>
+                    <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snapshot.np.latest), marginTop: '0.2rem' }}>
+                      {arrow(snapshot.np.latest)} {snapshot.np.latest == null ? '—' : `${snapshot.np.latest >= 0 ? '+' : ''}${snapshot.np.latest.toFixed(1)}%`}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                      {snapshot.np.considered > 0
+                        ? `Grew in ${snapshot.np.wins} of last ${snapshot.np.considered} quarters`
+                        : 'Insufficient YoY history'}
+                    </div>
+                  </div>
+                </div>
+
+                {snapshot.flags.length > 0 && (
+                  <div style={{ marginTop: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                    {snapshot.flags.map((f, i) => (
+                      <div key={i} style={{
+                        fontSize: '0.75rem',
+                        color: '#fca5a5',
+                        background: 'rgba(239,68,68,0.08)',
+                        border: '1px solid rgba(239,68,68,0.22)',
+                        padding: '0.3rem 0.55rem',
+                        borderRadius: '6px',
+                      }}>
+                        ⚠ {f}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {!isReady || columns.length === 0 ? (
               <p style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '1.5rem' }}>
@@ -1015,6 +1509,122 @@ function Instrument() {
           </section>
         );
       })()}
+
+      {activeTab === 'balanceSheet' && (() => {
+        // ── Annual balance sheet — screener.in-backed (consolidated) ────
+        // Server defaults to /company/<SLUG>/consolidated/ and falls back to
+        // standalone when consolidated is missing. Latest year is rightmost
+        // so the eye reads left → right as oldest → newest.
+        const years = Array.isArray(screenerBalanceSheet?.years)
+          ? [...screenerBalanceSheet.years].sort((a, b) => a.sortKey - b.sortKey)
+          : [];
+        const basis = screenerBalanceSheet?.basis;
+
+        // Rows to display in order. Each row is { key, label, group } where
+        // group is 'liab' / 'asset' / 'derived' for sectioning.
+        const ROWS = [
+          { key: 'equityCapital',     label: 'Equity Capital',     group: 'liab' },
+          { key: 'reserves',          label: 'Reserves',           group: 'liab' },
+          { key: 'netWorth',          label: 'Net Worth',          group: 'liab', emphasis: true },
+          { key: 'borrowings',        label: 'Borrowings',         group: 'liab' },
+          { key: 'deposits',          label: 'Deposits',           group: 'liab' },
+          { key: 'otherLiabilities',  label: 'Other Liabilities',  group: 'liab' },
+          { key: 'totalLiabilities',  label: 'Total Liabilities',  group: 'liab', emphasis: true },
+          { key: 'fixedAssets',       label: 'Fixed Assets',       group: 'asset' },
+          { key: 'cwip',              label: 'CWIP',               group: 'asset' },
+          { key: 'investments',       label: 'Investments',        group: 'asset' },
+          { key: 'loans',             label: 'Loans',              group: 'asset' },
+          { key: 'otherAssets',       label: 'Other Assets',       group: 'asset' },
+          { key: 'totalAssets',       label: 'Total Assets',       group: 'asset', emphasis: true },
+        ];
+
+        const hasAnyValue = (key) => years.some(y => y[key] != null);
+        const visibleRows = ROWS.filter(r => hasAnyValue(r.key));
+
+        const fmt = (v) => v == null
+          ? <span style={{ color: 'var(--text-secondary)' }}>—</span>
+          : v.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+        // YoY % change vs prior column. Shown as a small badge under the value
+        // for emphasised rows (Net Worth, Total Liabilities, Total Assets).
+        const yoy = (curr, prev) => {
+          if (curr == null || prev == null || prev === 0) return null;
+          return ((curr - prev) / Math.abs(prev)) * 100;
+        };
+
+        return (
+          <section className="glass-panel" style={{ marginTop: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Balance Sheet</h2>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  Annual · Screener.in{basis ? ` (${basis}` : ''}{basis ? ', ₹ Cr)' : ' (₹ Cr)'}
+                </span>
+              </div>
+              {years.length > 0 && (
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  {years[0].fyLabel} → {years[years.length - 1].fyLabel}
+                </span>
+              )}
+            </div>
+
+            {years.length === 0 ? (
+              <p style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
+                {screenerBalanceSheetError
+                  ? `Balance sheet unavailable: ${screenerBalanceSheetError}`
+                  : screenerBalanceSheet == null ? 'Loading from Screener.in…' : 'Balance sheet data is not available for this instrument.'}
+              </p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="interactive-table" style={{ minWidth: '100%' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: 'left', position: 'sticky', left: 0, background: 'var(--bg-card)', zIndex: 1 }}>Metric</th>
+                      {years.map(y => (
+                        <th key={y.sortKey} style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{y.fyLabel}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleRows.map(row => (
+                      <tr key={row.key} style={row.emphasis ? { background: 'rgba(56,189,248,0.04)', fontWeight: 700 } : undefined}>
+                        <td style={{ position: 'sticky', left: 0, background: row.emphasis ? 'rgba(56,189,248,0.04)' : 'var(--bg-card)', zIndex: 1, fontWeight: row.emphasis ? 700 : 500 }}>
+                          {row.label}
+                        </td>
+                        {years.map((y, i) => {
+                          const v = y[row.key];
+                          const prev = i > 0 ? years[i - 1][row.key] : null;
+                          const delta = row.emphasis ? yoy(v, prev) : null;
+                          return (
+                            <td key={y.sortKey} style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                              <div>{fmt(v)}</div>
+                              {delta != null && (
+                                <div className={delta >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.7rem', fontWeight: 500 }}>
+                                  {delta >= 0 ? '+' : ''}{delta.toFixed(1)}%
+                                </div>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.75rem', marginBottom: 0 }}>
+                  Net Worth = Equity Capital + Reserves. Banks/NBFCs may report Deposits and Loans instead of Borrowings. Empty cells (—) mean the field wasn't disclosed for that year.
+                </p>
+              </div>
+            )}
+          </section>
+        );
+      })()}
+
+      {activeTab === 'shareholding' && (
+        <ShareholdingPanel
+          payload={screenerShareholding}
+          error={screenerShareholdingError}
+        />
+      )}
     </div>
   )
 }
