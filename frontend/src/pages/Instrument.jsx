@@ -1659,13 +1659,23 @@ function Instrument() {
             ? ((debt - debtPrior) / Math.abs(debtPrior)) * 100
             : null;
 
-          // Net Worth CAGR over the visible range
+          // Net Worth CAGR over the visible range. Both endpoints must be
+          // positive — CAGR is undefined when net worth crosses zero (you
+          // can't compound from positive into negative), and Math.pow() of a
+          // negative ratio to a fractional power returns NaN. The Vodafone
+          // Idea case (₹23k Cr → -₹35k Cr) triggered exactly this. Caller
+          // surfaces a "Turned negative" hint below when this returns null.
           const nwCAGR = (() => {
-            if (latest.netWorth == null || earliest.netWorth == null || earliest.netWorth <= 0) return null;
+            if (latest.netWorth == null || earliest.netWorth == null) return null;
+            if (earliest.netWorth <= 0 || latest.netWorth <= 0) return null;
             const yrs = latest.fy - earliest.fy;
             if (yrs <= 0) return null;
             return (Math.pow(latest.netWorth / earliest.netWorth, 1 / yrs) - 1) * 100;
           })();
+          const nwTurnedNegative = (
+            earliest.netWorth != null && latest.netWorth != null
+            && earliest.netWorth > 0 && latest.netWorth <= 0
+          );
 
           // Total Assets YoY (latest)
           const assetsYoY = (latest.totalAssets != null && prior.totalAssets != null && prior.totalAssets !== 0)
@@ -1701,7 +1711,7 @@ function Instrument() {
             flags.push(`CWIP ballooned +${cwipYoY.toFixed(0)}% — large capex cycle in progress, watch for execution risk`);
           }
 
-          return { latest, debtField, debt, de, debtYoY, nwCAGR, assetsYoY, cwipYoY, flags };
+          return { latest, debtField, debt, de, debtYoY, nwCAGR, nwTurnedNegative, assetsYoY, cwipYoY, flags };
         })();
 
         const trendColor = (v, band = 0) => {
@@ -1780,13 +1790,22 @@ function Instrument() {
                       {/* Net Worth CAGR */}
                       <div>
                         <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Net Worth CAGR</div>
-                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(bsSnapshot.nwCAGR, 0.5), marginTop: '0.2rem' }}>
-                          {arrow(bsSnapshot.nwCAGR, 0.5)} {bsSnapshot.nwCAGR == null ? '—' : `${bsSnapshot.nwCAGR >= 0 ? '+' : ''}${bsSnapshot.nwCAGR.toFixed(1)}% /yr`}
+                        <div style={{
+                          fontSize: '1.05rem', fontWeight: 700, marginTop: '0.2rem',
+                          color: bsSnapshot.nwTurnedNegative ? '#ef4444' : trendColor(bsSnapshot.nwCAGR, 0.5),
+                        }}>
+                          {bsSnapshot.nwTurnedNegative
+                            ? '↓ n/a'
+                            : bsSnapshot.nwCAGR == null
+                              ? '—'
+                              : `${arrow(bsSnapshot.nwCAGR, 0.5)} ${bsSnapshot.nwCAGR >= 0 ? '+' : ''}${bsSnapshot.nwCAGR.toFixed(1)}% /yr`}
                         </div>
                         <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
-                          {bsSnapshot.nwCAGR != null
-                            ? `${years[0].fyLabel} → ${bsSnapshot.latest.fyLabel}`
-                            : 'Needs ≥ 2 years'}
+                          {bsSnapshot.nwTurnedNegative
+                            ? `Turned negative by ${bsSnapshot.latest.fyLabel}`
+                            : bsSnapshot.nwCAGR != null
+                              ? `${years[0].fyLabel} → ${bsSnapshot.latest.fyLabel}`
+                              : 'Needs ≥ 2 years'}
                         </div>
                       </div>
 
