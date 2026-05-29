@@ -494,70 +494,52 @@ function SectorIndices() {
     }
   };
 
+  // Trading-day lookbacks. Match the Commodities chart's RANGE_DAYS exactly
+  // (1M = 22, 3M = 66, ...) so the table's "+11.19%" and the chart's
+  // end-of-line "+8.3%" badge can't disagree on the same anchor date.
+  // Calendar-day lookbacks drifted by 1–3 trading days vs the chart's
+  // bar-count slice, which over volatile runs caused visible mismatches.
+  const LOOKBACK_TRADING_DAYS = {
+    '1W': 5, '1M': 22, '3M': 66, '6M': 132, '1Y': 252, '2Y': 504, '3Y': 756,
+  };
+
   const calculateHistoricalReturns = (series, currentPrice) => {
-    // series is already sorted by date ascending.
-    // Anchor the "today" reference to midnight IST (Asia/Kolkata) regardless of the
-    // host machine's timezone. Using Intl.DateTimeFormat avoids the common bug of
-    // double-applying getTimezoneOffset().
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
-    }).formatToParts(new Date());
-    const y = parts.find(p => p.type === 'year').value;
-    const m = parts.find(p => p.type === 'month').value;
-    const d = parts.find(p => p.type === 'day').value;
-    const nowIST = new Date(`${y}-${m}-${d}T00:00:00Z`); // midnight IST rendered as UTC
-    
-    // Pre-parse dates once for binary search
-    const dates = series.map(c => new Date(c.date).getTime());
-    
-    // Binary search for nearest date
-    const getPriceAtDate = (targetDate) => {
-      if (dates.length === 0) return 0;
-      const target = targetDate.getTime();
-      let lo = 0, hi = dates.length - 1;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (dates[mid] < target) lo = mid + 1;
-        else hi = mid;
-      }
-      // lo is the first date >= target; check if lo-1 is closer
-      if (lo > 0 && Math.abs(dates[lo - 1] - target) <= Math.abs(dates[lo] - target)) {
-        return series[lo - 1].close;
-      }
-      return series[lo].close;
+    // series is already sorted by date ascending. Last element = latest bar.
+    if (!Array.isArray(series) || series.length === 0) {
+      return { '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null, dist52WHigh: 0 };
+    }
+
+    // Anchor price = `series[length - n]`, matching the chart's slice(-n)[0]
+    // convention. Returns null when the series is shorter than n bars so
+    // we don't fabricate a return from clipped history.
+    const anchorPrice = (n) => {
+      const idx = series.length - n;
+      if (idx < 0) return null;
+      return series[idx].close;
     };
 
-    const d1W = new Date(nowIST); d1W.setDate(nowIST.getDate() - 7);
-    const d1M = new Date(nowIST); d1M.setMonth(nowIST.getMonth() - 1);
-    const d3M = new Date(nowIST); d3M.setMonth(nowIST.getMonth() - 3);
-    const d6M = new Date(nowIST); d6M.setMonth(nowIST.getMonth() - 6);
-    const d1Y = new Date(nowIST); d1Y.setFullYear(nowIST.getFullYear() - 1);
-    const d2Y = new Date(nowIST); d2Y.setFullYear(nowIST.getFullYear() - 2);
-    const d3Y = new Date(nowIST); d3Y.setFullYear(nowIST.getFullYear() - 3);
-
     const calcPct = (oldPrice) => {
-      if (!oldPrice || oldPrice === 0) return 0;
+      if (oldPrice == null || oldPrice === 0) return null;
       return ((currentPrice - oldPrice) / oldPrice) * 100;
     };
 
-    const target1Y = d1Y.getTime();
+    // 52-week high = max close over the trailing 252 bars (industry standard).
+    const window52W = series.slice(-LOOKBACK_TRADING_DAYS['1Y']);
     let maxClose52W = currentPrice;
-    for (let i = 0; i < series.length; i++) {
-      if (dates[i] >= target1Y && series[i].close > maxClose52W) {
-        maxClose52W = series[i].close;
-      }
+    for (let i = 0; i < window52W.length; i++) {
+      if (window52W[i].close > maxClose52W) maxClose52W = window52W[i].close;
     }
     const dist52WHigh = maxClose52W > 0 ? ((currentPrice - maxClose52W) / maxClose52W) * 100 : 0;
 
     return {
-      '1W': calcPct(getPriceAtDate(d1W)),
-      '1M': calcPct(getPriceAtDate(d1M)),
-      '3M': calcPct(getPriceAtDate(d3M)),
-      '6M': calcPct(getPriceAtDate(d6M)),
-      '1Y': calcPct(getPriceAtDate(d1Y)),
-      '2Y': calcPct(getPriceAtDate(d2Y)),
-      '3Y': calcPct(getPriceAtDate(d3Y)),
-      dist52WHigh
+      '1W': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['1W'])),
+      '1M': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['1M'])),
+      '3M': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['3M'])),
+      '6M': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['6M'])),
+      '1Y': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['1Y'])),
+      '2Y': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['2Y'])),
+      '3Y': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['3Y'])),
+      dist52WHigh,
     };
   };
 

@@ -671,7 +671,11 @@ async function getOrFetchFullHistory(token) {
   if (historicalFullPromises[token]) {
     return { data: await historicalFullPromises[token], cached: false };
   }
-  historicalFullPromises[token] = fetchHistoricalMultiYear(token, 3)
+  // Fetch 4 calendar years (not 3): the 3Y table column anchors at 756 trading
+  // days back, but 3 calendar years of NSE sessions is only ~745–750 bars, so a
+  // 3-year fetch left the 3Y column permanently blank. The extra year guarantees
+  // >756 bars without affecting shorter lookbacks.
+  historicalFullPromises[token] = fetchHistoricalMultiYear(token, 4)
     .then(data => {
       if (Array.isArray(data) && data.length > 0) {
         historicalFullCache[token] = { data, timestamp: Date.now() };
@@ -2376,9 +2380,9 @@ app.get('/api/historical-full/:token', async (req, res) => {
     const { token } = req.params;
     const isCacheHit = !!(historicalFullCache[token] && (Date.now() - historicalFullCache[token].timestamp < HISTORICAL_FULL_TTL));
     if (isCacheHit) {
-      console.log(`📊 Serving cached 3Y history for token ${token} (${historicalFullCache[token].data.length} candles)`);
+      console.log(`📊 Serving cached 4Y history for token ${token} (${historicalFullCache[token].data.length} candles)`);
     } else if (!historicalFullPromises[token]) {
-      console.log(`📊 Fetching full 3Y history for token ${token}...`);
+      console.log(`📊 Fetching full 4Y history for token ${token}...`);
     } else {
       console.log(`⏳ Coalescing /api/historical-full call for token ${token} into in-flight fetch...`);
     }
