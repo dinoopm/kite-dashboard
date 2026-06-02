@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { format, parseISO } from 'date-fns'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 import AlertRow from '../components/alerts/AlertRow'
@@ -86,6 +86,7 @@ function ShareholdingPanel({ payload, error }) {
     label: `${monthName(q.month)} ${String(q.year).slice(-2)}`,
     fullLabel: `${monthName(q.month)} ${q.year}`,
     value: q[selectedCategory.key],
+    sortKey: q.sortKey,
   }));
 
   return (
@@ -224,9 +225,10 @@ function ShareholdingPanel({ payload, error }) {
                 />
                 <Bar
                   dataKey="value"
-                  fill="#34d3a4"
                   radius={[2, 2, 0, 0]}
                   isAnimationActive={false}
+                  cursor="pointer"
+                  onClick={(d) => d?.sortKey != null && setSelectedQuarterKey(d.sortKey)}
                   label={{
                     position: 'top',
                     fill: 'var(--text-primary)',
@@ -234,7 +236,14 @@ function ShareholdingPanel({ payload, error }) {
                     fontWeight: 600,
                     formatter: (v) => v == null ? '' : `${Number(v).toFixed(2)}%`,
                   }}
-                />
+                >
+                  {historyData.map((d) => (
+                    <Cell
+                      key={d.sortKey}
+                      fill={d.sortKey === selectedQuarter.sortKey ? '#34d3a4' : 'rgba(52,211,164,0.28)'}
+                    />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -789,7 +798,7 @@ function Instrument() {
             fontSize: '1rem'
           }}
         >
-          Results
+          P&L
         </button>
         <button
           onClick={() => setActiveTab('cashflow')}
