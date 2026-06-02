@@ -262,6 +262,11 @@ function Instrument() {
   // Indian tickers — no gaps, 13 quarters of history typically).
   const [screenerQuarterly, setScreenerQuarterly] = useState(null)
   const [screenerError, setScreenerError] = useState(null)
+  // Annual P&L from the same screener page — fetched lazily when the user
+  // toggles the Results view from Quarterly to Yearly.
+  const [screenerAnnual, setScreenerAnnual] = useState(null)
+  const [screenerAnnualError, setScreenerAnnualError] = useState(null)
+  const [resultPeriod, setResultPeriod] = useState('quarterly') // 'quarterly' | 'yearly'
   // Annual cashflow scraped from the same screener page (separate cache entry).
   // Yahoo's quarterly cashflow was synthesised; Indian companies only file
   // annual cashflow in standalone disclosures anyway.
@@ -353,6 +358,40 @@ function Instrument() {
     })();
     return () => controller.abort();
   }, [symbol])
+
+  // Reset annual P&L whenever the symbol changes so a stale previous-symbol
+  // series never flashes before the lazy fetch below resolves.
+  useEffect(() => {
+    setScreenerAnnual(null);
+    setScreenerAnnualError(null);
+  }, [symbol])
+
+  // Fetch annual P&L lazily — only once the user switches to the yearly view
+  // (same screener page the quarterly call already warmed, so it's cheap).
+  useEffect(() => {
+    if (!symbol || resultPeriod !== 'yearly') return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetchWithAbort(`/api/screener-annual/${encodeURIComponent(symbol)}`, { signal: controller.signal });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data?.years) && data.years.length > 0) {
+            setScreenerAnnual(data);
+          } else {
+            setScreenerAnnualError('Screener returned no annual rows');
+          }
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setScreenerAnnualError(err.error || `Screener fetch failed (${res.status})`);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        setScreenerAnnualError(e.message);
+      }
+    })();
+    return () => controller.abort();
+  }, [symbol, resultPeriod])
 
   // Fetch annual cashflow from screener.in (same page, separate parser).
   useEffect(() => {
@@ -750,7 +789,7 @@ function Instrument() {
             fontSize: '1rem'
           }}
         >
-          Quarterly Results
+          Results
         </button>
         <button
           onClick={() => setActiveTab('cashflow')}
@@ -1131,22 +1170,43 @@ function Instrument() {
         // consecutive quarters with no gaps (Yahoo's fundamentalsTimeSeries
         // randomly misses quarters for some Indian tickers — JIOFIN/HINDZINC
         // were both showing a missing Q2 FY26). Values arrive already in ₹ Cr.
-        const isReady = Array.isArray(screenerQuarterly?.quarters);
-        const quarters = isReady ? [...screenerQuarterly.quarters].sort((a, b) => a.sortKey - b.sortKey) : [];
+        // Quarterly ↔ Yearly toggle. Both come from the same screener page;
+        // yearly rows live under a different parser (`years`, FY-labelled).
+        const isYearly = resultPeriod === 'yearly';
+        const activeData = isYearly ? screenerAnnual : screenerQuarterly;
+        const activeRows = isYearly ? activeData?.years : activeData?.quarters;
+        const activeError = isYearly ? screenerAnnualError : screenerError;
+        const periodNoun = isYearly ? 'years' : 'quarters';
+        // Yearly gets a slightly longer window (5 FYs) than quarterly (4 Qs).
+        const windowSize = isYearly ? 5 : 4;
+
+        const isReady = Array.isArray(activeRows);
+        const quarters = isReady ? [...activeRows].sort((a, b) => a.sortKey - b.sortKey) : [];
 
         const labelFromQFy = (q, fy) => `Q${q} FY${String(fy).slice(-2)}`;
-        const prevYearQuarter = (q, fy) => ({ q, fy: fy - 1 });
 
-        // Build a label → quarter-row map. Screener rows already carry q/fy/label.
+        // Build label → row and label → index maps. Screener rows carry their
+        // own label (e.g. "Q3 FY26" or "FY26").
         const byLabel = {};
-        for (const row of quarters) byLabel[row.label] = row;
+        const idxByLabel = {};
+        quarters.forEach((row, i) => { byLabel[row.label] = row; idxByLabel[row.label] = i; });
 
-        // Last 4 quarters that screener actually reports. Building synthetic
-        // consecutive labels here would render empty columns for companies with
-        // sparse screener history (recent IPOs like AEQUS, or stocks whose
-        // latest filing hasn't been parsed yet). The YoY pill below still does
-        // a same-quarter-previous-year lookup, so gaps elsewhere stay handled.
-        const columns = quarters.slice(-4);
+        // Primary growth comparison base for a given period column:
+        //  • quarterly → same quarter, previous year (handles gaps via label lookup)
+        //  • yearly    → the immediately preceding fiscal year (prior column)
+        const yoyBaseOf = (period) => {
+          if (!period) return null;
+          if (isYearly) {
+            const i = idxByLabel[period.label];
+            return (i != null && i > 0) ? quarters[i - 1] : null;
+          }
+          return byLabel[labelFromQFy(period.q, period.fy - 1)] || null;
+        };
+
+        // Visible window — the most recent `windowSize` periods screener reports.
+        // YoY lookups below reach outside this window via byLabel/idxByLabel, so
+        // sparse history elsewhere stays handled.
+        const columns = quarters.slice(-windowSize);
 
         // Operating Margin: screener exposes OPM directly as `opm` (percent
         // already). Fall back to computed margin if absent.
@@ -1261,13 +1321,13 @@ function Instrument() {
         // 4–8 quarters of screener data.
         const snapshot = (() => {
           if (quarters.length < 2) return null;
-          const last4 = quarters.slice(-4);
-          const prev4 = quarters.slice(-8, -4);
+          const last4 = quarters.slice(-windowSize);
+          const prev4 = quarters.slice(-2 * windowSize, -windowSize);
 
-          // YoY hit-rate for sales over the last 4 quarters
+          // YoY hit-rate for sales over the visible window
           let salesYoYWins = 0, salesYoYConsidered = 0, latestSalesYoY = null;
           last4.forEach((q, i) => {
-            const py = byLabel[labelFromQFy(q.q, q.fy - 1)];
+            const py = yoyBaseOf(q);
             if (py && py.totalIncome != null && q.totalIncome != null && py.totalIncome !== 0) {
               salesYoYConsidered += 1;
               const pct = ((q.totalIncome - py.totalIncome) / Math.abs(py.totalIncome)) * 100;
@@ -1276,19 +1336,26 @@ function Instrument() {
             }
           });
 
-          // OPM trajectory — avg of last 4 vs avg of prior 4 (percentage points)
+          // OPM trajectory — two distinct comparisons kept separate:
+          //  • card → latest quarter's OPM vs the trailing-4Q average, so the
+          //           headline value matches the latest column in the grid below
+          //           (component sync) instead of showing the 4Q mean itself.
+          //  • flag → trailing-4Q average vs prior-4Q average (a smoother
+          //           TTM-vs-TTM signal) used only for the compression warning.
           const avg = (arr) => {
             const v = arr.filter(x => x != null);
             return v.length === 0 ? null : v.reduce((a, b) => a + b, 0) / v.length;
           };
-          const opmLast = avg(last4.map(opMarginOf));
-          const opmPrev = avg(prev4.map(opMarginOf));
-          const opmDelta = (opmLast != null && opmPrev != null) ? opmLast - opmPrev : null;
+          const opm4qAvg = avg(last4.map(opMarginOf));
+          const opmPrev4qAvg = avg(prev4.map(opMarginOf));
+          const opmTtmDelta = (opm4qAvg != null && opmPrev4qAvg != null) ? opm4qAvg - opmPrev4qAvg : null;
+          const latestOpm = opMarginOf(last4[last4.length - 1]);
+          const opmCardDelta = (latestOpm != null && opm4qAvg != null) ? latestOpm - opm4qAvg : null;
 
           // Net Profit YoY hit-rate + latest YoY
           let npYoYWins = 0, npYoYConsidered = 0, latestNpYoY = null;
           last4.forEach((q, i) => {
-            const py = byLabel[labelFromQFy(q.q, q.fy - 1)];
+            const py = yoyBaseOf(q);
             if (py && py.netProfit != null && q.netProfit != null && py.netProfit !== 0) {
               npYoYConsidered += 1;
               const pct = ((q.netProfit - py.netProfit) / Math.abs(py.netProfit)) * 100;
@@ -1303,32 +1370,50 @@ function Instrument() {
           if (last4.length >= 2) {
             const tail = last4.slice(-2);
             const declines = tail.filter(q => {
-              const py = byLabel[labelFromQFy(q.q, q.fy - 1)];
+              const py = yoyBaseOf(q);
               return py && py.totalIncome != null && q.totalIncome != null && q.totalIncome < py.totalIncome;
             }).length;
-            if (declines === 2) flags.push('Revenue declined YoY in the last 2 quarters');
+            if (declines === 2) flags.push(`Revenue declined YoY in the last 2 ${periodNoun}`);
           }
-          // Margin compression > 3pp
-          if (opmDelta != null && opmDelta < -3) {
-            flags.push(`Operating margin compressed by ${Math.abs(opmDelta).toFixed(1)}pp vs prior 4 quarters`);
+          // Margin compression > 3pp (trailing-window avg vs prior-window avg)
+          if (opmTtmDelta != null && opmTtmDelta < -3) {
+            flags.push(`Operating margin compressed by ${Math.abs(opmTtmDelta).toFixed(1)}pp vs prior ${windowSize} ${periodNoun}`);
           }
-          // Net loss in latest quarter
+          // Net loss in latest period
           const latest = last4[last4.length - 1];
           if (latest?.netProfit != null && latest.netProfit < 0) {
             flags.push(`Net loss of ₹${Math.abs(latest.netProfit).toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr in ${latest.label}`);
           }
           // Sharp interest-cost rise (>30% YoY) — debt-service signal
           if (latest?.interest != null) {
-            const py = byLabel[labelFromQFy(latest.q, latest.fy - 1)];
+            const py = yoyBaseOf(latest);
             if (py?.interest != null && py.interest > 0) {
               const intYoY = ((latest.interest - py.interest) / Math.abs(py.interest)) * 100;
               if (intYoY > 30) flags.push(`Interest cost up ${intYoY.toFixed(0)}% YoY in ${latest.label}`);
             }
           }
+          // EPS integrity — the implied share count (net profit ÷ EPS) should be
+          // roughly stable quarter to quarter. A sharp jump usually means a
+          // split/bonus changed the equity base, which screener's as-reported
+          // EPS row may not retro-adjust — distorting the EPS trendline/sparkline.
+          // We have no corporate-actions feed, so we DETECT and caveat rather than
+          // silently restate (fabricating an adjustment factor would be worse).
+          const impliedShares = (row) => {
+            if (!row || row.eps == null || row.eps === 0 || row.netProfit == null) return null;
+            return (row.netProfit * 1e7) / row.eps; // netProfit ₹Cr, eps ₹/share
+          };
+          const shareCounts = last4.map(impliedShares).filter(x => x != null && x > 0);
+          if (shareCounts.length >= 2) {
+            const maxSh = Math.max(...shareCounts);
+            const minSh = Math.min(...shareCounts);
+            if (maxSh / minSh > 1.2) {
+              flags.push(`EPS may not be split/bonus-adjusted across these ${periodNoun} — the implied share base shifted; verify the EPS trend against exchange filings`);
+            }
+          }
 
           return {
             salesYoY: { wins: salesYoYWins, considered: salesYoYConsidered, latest: latestSalesYoY },
-            opm: { last: opmLast, prev: opmPrev, delta: opmDelta },
+            opm: { latest: latestOpm, avg4q: opm4qAvg, prevAvg4q: opmPrev4qAvg, cardDelta: opmCardDelta, ttmDelta: opmTtmDelta },
             np: { wins: npYoYWins, considered: npYoYConsidered, latest: latestNpYoY },
             flags,
             latestLabel: latest?.label,
@@ -1349,18 +1434,48 @@ function Instrument() {
 
         return (
           <section className="glass-panel" style={{ marginTop: '1rem', padding: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
               <div>
-                <h2 style={{ margin: 0 }}>Quarterly Results</h2>
+                <h2 style={{ margin: 0 }}>{isYearly ? 'Annual Results' : 'Quarterly Results'}</h2>
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  Last 4 consecutive quarters · YoY · QoQ · Screener.in (standalone)
+                  {isYearly
+                    ? `Last ${windowSize} fiscal years · YoY · Screener.in (standalone)`
+                    : `Last ${windowSize} consecutive quarters · YoY · QoQ · Screener.in (standalone)`}
                 </span>
               </div>
-              {columns.length > 0 && (
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  {columns[0].label} → {columns[columns.length - 1].label}
-                </span>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                {/* Quarterly ↔ Yearly toggle */}
+                <div role="tablist" aria-label="Results period" style={{ display: 'inline-flex', borderRadius: '8px', border: '1px solid var(--border)', overflow: 'hidden' }}>
+                  {[['quarterly', 'Quarterly'], ['yearly', 'Yearly']].map(([key, label]) => {
+                    const active = resultPeriod === key;
+                    return (
+                      <button
+                        key={key}
+                        role="tab"
+                        aria-selected={active}
+                        onClick={() => setResultPeriod(key)}
+                        style={{
+                          background: active ? 'var(--accent)' : 'transparent',
+                          color: active ? '#04141f' : 'var(--text-secondary)',
+                          border: 'none',
+                          padding: '0.35rem 0.9rem',
+                          cursor: 'pointer',
+                          fontSize: '0.78rem',
+                          fontWeight: active ? 700 : 500,
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {columns.length > 0 && (
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    {columns[0].label} → {columns[columns.length - 1].label}
+                  </span>
+                )}
+              </div>
             </div>
 
             {snapshot && (
@@ -1373,7 +1488,7 @@ function Instrument() {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
                   <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                    Quarterly Snapshot
+                    {isYearly ? 'Annual Snapshot' : 'Quarterly Snapshot'}
                   </span>
                   {snapshot.latestLabel && (
                     <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
@@ -1390,7 +1505,7 @@ function Instrument() {
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
                       {snapshot.salesYoY.considered > 0
-                        ? `Grew in ${snapshot.salesYoY.wins} of last ${snapshot.salesYoY.considered} quarters`
+                        ? `Grew in ${snapshot.salesYoY.wins} of last ${snapshot.salesYoY.considered} ${periodNoun}`
                         : 'Insufficient YoY history'}
                     </div>
                   </div>
@@ -1398,13 +1513,13 @@ function Instrument() {
                   {/* Operating margin trajectory */}
                   <div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>OPM Trajectory</div>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snapshot.opm.delta, 0.5), marginTop: '0.2rem' }}>
-                      {arrow(snapshot.opm.delta, 0.5)} {snapshot.opm.delta == null ? '—' : `${snapshot.opm.delta >= 0 ? '+' : ''}${snapshot.opm.delta.toFixed(1)} pp`}
+                    <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snapshot.opm.cardDelta, 0.5), marginTop: '0.2rem' }}>
+                      {arrow(snapshot.opm.cardDelta, 0.5)} {snapshot.opm.cardDelta == null ? '—' : `${snapshot.opm.cardDelta >= 0 ? '+' : ''}${snapshot.opm.cardDelta.toFixed(1)} pp`}
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
-                      {snapshot.opm.last != null && snapshot.opm.prev != null
-                        ? `${snapshot.opm.last.toFixed(1)}% vs ${snapshot.opm.prev.toFixed(1)}% (prior 4Q avg)`
-                        : 'Needs ≥ 8 quarters'}
+                      {snapshot.opm.latest != null && snapshot.opm.avg4q != null
+                        ? `${snapshot.opm.latest.toFixed(1)}% latest vs ${snapshot.opm.avg4q.toFixed(1)}% (${windowSize}${isYearly ? 'Y' : 'Q'} avg)`
+                        : `Needs ≥ ${windowSize} ${periodNoun}`}
                     </div>
                   </div>
 
@@ -1416,7 +1531,7 @@ function Instrument() {
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
                       {snapshot.np.considered > 0
-                        ? `Grew in ${snapshot.np.wins} of last ${snapshot.np.considered} quarters`
+                        ? `Grew in ${snapshot.np.wins} of last ${snapshot.np.considered} ${periodNoun}`
                         : 'Insufficient YoY history'}
                     </div>
                   </div>
@@ -1443,11 +1558,11 @@ function Instrument() {
 
             {!isReady || columns.length === 0 ? (
               <p style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '1.5rem' }}>
-                {screenerError
-                  ? `Screener.in data unavailable: ${screenerError}`
-                  : screenerQuarterly == null
+                {activeError
+                  ? `Screener.in data unavailable: ${activeError}`
+                  : activeData == null
                     ? 'Loading from Screener.in…'
-                    : 'Quarterly comparison data is not available for this instrument.'}
+                    : `${isYearly ? 'Annual' : 'Quarterly'} comparison data is not available for this instrument.`}
               </p>
             ) : (
               <div style={{ overflowX: 'auto' }}>
@@ -1478,14 +1593,16 @@ function Instrument() {
                           {columns.map((col, idx) => {
                             const currRow = byLabel[col.label];
                             const value = row.get(currRow);
-                            // QoQ → prior column in the visible 4-window
+                            // QoQ → prior column in the visible window (quarterly only)
                             const qoqCol = idx > 0 ? columns[idx - 1] : null;
                             const qoqValue = qoqCol ? row.get(byLabel[qoqCol.label]) : undefined;
-                            // YoY → same-quarter previous year (looked up regardless of visibility)
-                            const yoy = prevYearQuarter(col.q, col.fy);
-                            const yoyValue = row.get(byLabel[labelFromQFy(yoy.q, yoy.fy)]);
+                            // YoY → quarterly: same quarter previous year; yearly:
+                            // the preceding fiscal year. Looked up regardless of visibility.
+                            const yoyValue = row.get(yoyBaseOf(col));
                             const yoyPill = row.pill(value, yoyValue);
-                            const qoqPill = qoqValue !== undefined ? row.pill(value, qoqValue) : null;
+                            // Yearly's YoY already IS the sequential change, so the
+                            // QoQ pill is dropped to avoid a redundant second figure.
+                            const qoqPill = (!isYearly && qoqValue !== undefined) ? row.pill(value, qoqValue) : null;
 
                             return (
                               <td key={col.label} style={{ textAlign: 'right', padding: '0.85rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.04)', verticalAlign: 'top' }}>
@@ -1501,14 +1618,14 @@ function Instrument() {
                                   ) : (
                                     <span style={{ color: 'var(--text-secondary)' }}>YoY —</span>
                                   )}
-                                  {qoqPill ? (
+                                  {!isYearly && (qoqPill ? (
                                     <span title="Quarter-on-Quarter" style={{ color: qoqPill.color, fontWeight: qoqPill.weight }}>
                                       <span style={{ color: 'var(--text-secondary)', fontWeight: 500, marginRight: '3px' }}>QoQ</span>
                                       {qoqPill.label}
                                     </span>
                                   ) : (
                                     idx > 0 && <span style={{ color: 'var(--text-secondary)' }}>QoQ —</span>
-                                  )}
+                                  ))}
                                 </div>
                               </td>
                             );
@@ -1524,7 +1641,7 @@ function Instrument() {
                   </tbody>
                 </table>
                 <div style={{ marginTop: '0.75rem', fontSize: '0.7rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                  Source: screener.in (standalone, ₹ Cr). Operating Margin uses percentage-point change. Quarterly results refresh once every 12 hours.
+                  Source: screener.in (standalone, ₹ Cr). Operating Margin uses percentage-point change. {isYearly ? 'Annual figures show completed fiscal years (TTM column excluded).' : ''} Results refresh once every 12 hours.
                 </div>
               </div>
             )}

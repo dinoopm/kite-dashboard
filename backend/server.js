@@ -2100,6 +2100,68 @@ app.get('/api/screener-quarterly/:symbol', async (req, res) => {
   }
 });
 
+// ─── Screener annual P&L (yearly results) ────────────────────────
+// Same row labels as the quarterly table (Sales / Expenses / Operating Profit /
+// OPM % / Net Profit / EPS), but `section#profit-loss` carries one column per
+// fiscal year. Standalone, to match the quarterly view. Screener's rightmost
+// "TTM" column has no parseable month header, so parseScreenerHeader returns
+// null for it and it's filtered out — the yearly view shows completed fiscal
+// years only (cleaner than mixing a trailing-12m column into a per-FY series).
+function parseScreenerAnnualPL(html) {
+  const $ = cheerio.load(html);
+  const section = $('section#profit-loss');
+  if (section.length === 0) throw new Error('Profit & Loss section not found on screener page');
+  const table = section.find('table.data-table').first();
+  if (table.length === 0) throw new Error('Profit & Loss table not found');
+
+  const headerCells = table.find('thead th').toArray();
+  const columns = headerCells.slice(1).map(el => {
+    const parsed = parseScreenerHeader($(el).text());
+    if (!parsed) return null;
+    // Annual columns are fiscal-year ends — relabel FYxx and sort by year.
+    return { ...parsed, label: `FY${String(parsed.fy).slice(-2)}`, sortKey: parsed.fy };
+  }).filter(Boolean);
+  if (columns.length === 0) throw new Error('No P&L year columns parsed');
+
+  table.find('tbody tr').each((_, tr) => {
+    const tds = $(tr).find('td').toArray();
+    if (tds.length === 0) return;
+    const rawLabel = $(tds[0]).text().trim().replace(/\s*\+\s*$/, '').replace(/\s+/g, ' ');
+    const field = SCREENER_ROW_MAP[rawLabel];
+    if (!field) return;
+    tds.slice(1).forEach((td, i) => {
+      if (i >= columns.length) return;
+      columns[i][field] = parseNumberCell($(td).text());
+    });
+  });
+
+  return columns;
+}
+
+const screenerAnnualCache = {};
+
+app.get('/api/screener-annual/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const cached = screenerAnnualCache[symbol];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) {
+    return res.json({ ...cached.data, cached: true });
+  }
+  try {
+    const { html } = await fetchScreenerHTML(symbol);
+    const years = parseScreenerAnnualPL(html);
+    if (years.length === 0) {
+      return res.status(502).json({ error: 'No annual P&L data parsed', fallback: 'yahoo' });
+    }
+    const payload = { source: 'screener.in', symbol, period: 'annual', years };
+    screenerAnnualCache[symbol] = { data: payload, ts: Date.now() };
+    res.json({ ...payload, cached: false });
+  } catch (err) {
+    console.error(`[screener-annual] ${symbol}:`, err.message);
+    res.status(err.status === 404 ? 404 : (err.status ? 502 : 500))
+      .json({ error: err.message, fallback: 'yahoo' });
+  }
+});
+
 // ─── Screener cashflow (annual) ──────────────────────────────────
 // Indian companies don't file quarterly cashflow statements in their
 // standalone disclosures, so screener only carries annual cashflow. Returns
