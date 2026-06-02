@@ -2234,7 +2234,9 @@ app.get('/api/screener-cashflow/:symbol', async (req, res) => {
 // ─── Screener balance sheet (annual) ─────────────────────────────
 // Annual balance sheet rebuilt from the same screener page. Consolidated by
 // default to match group-level reporting; falls back to standalone if the
-// consolidated page 404s (small companies don't always publish consolidated).
+// consolidated page is unusable — either a 404 (small caps that don't publish
+// consolidated) or a 200 "shell" page whose financial tables are empty
+// (single-entity companies like NMDC Steel that file standalone only).
 const SCREENER_BS_ROW_MAP = {
   'Equity Capital': 'equityCapital',
   'Reserves': 'reserves',
@@ -2302,23 +2304,29 @@ app.get('/api/screener-balance-sheet/:symbol', async (req, res) => {
     return res.json({ ...cached.data, cached: true });
   }
   try {
+    // Fetch + parse a given basis in one step so the fallback can react to a
+    // failed *parse* (empty consolidated shell), not just a failed fetch (404).
+    const parseBasis = async (useConsolidated) => {
+      const { html } = await fetchScreenerHTML(symbol, { consolidated: useConsolidated });
+      return parseScreenerBalanceSheet(html);
+    };
+
     let usedBasis = consolidated ? 'consolidated' : 'standalone';
-    let html;
-    try {
-      ({ html } = await fetchScreenerHTML(symbol, { consolidated }));
-    } catch (err) {
-      // Fall back to the other basis if the requested page is missing — many
-      // small caps file standalone only, while large groups often only publish
-      // a meaningful consolidated set.
-      if (consolidated && err.status === 404) {
-        console.log(`[screener-balance-sheet] ${symbol} consolidated 404 — falling back to standalone`);
-        ({ html } = await fetchScreenerHTML(symbol, { consolidated: false }));
+    let years;
+    if (consolidated) {
+      try {
+        years = await parseBasis(true);
+      } catch (err) {
+        // Consolidated unusable — page missing (404) OR present but empty
+        // (200 shell, no balance-sheet table, e.g. NMDC Steel). Retry standalone
+        // before giving up; many companies only file standalone anyway.
+        console.log(`[screener-balance-sheet] ${symbol} consolidated unusable (${err.message}) — falling back to standalone`);
+        years = await parseBasis(false);
         usedBasis = 'standalone';
-      } else {
-        throw err;
       }
+    } else {
+      years = await parseBasis(false);
     }
-    const years = parseScreenerBalanceSheet(html);
     if (years.length === 0) {
       return res.status(502).json({ error: 'No balance sheet data parsed' });
     }
