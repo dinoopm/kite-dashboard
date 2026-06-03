@@ -1121,7 +1121,43 @@ function Instrument() {
               <div className="grid" style={{ gap: '0.75rem' }}>
                 <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
                   <span className="label" style={{ fontSize: '0.85rem' }}>Market Cap</span>
-                  <span className="value" style={{ fontSize: '1.25rem' }}>{fundamentals.summaryDetail?.marketCap ? `₹${(fundamentals.summaryDetail.marketCap / 10000000).toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr` : '—'}</span>
+                  {(() => {
+                    const mc = fundamentals.summaryDetail?.marketCap;
+                    if (!mc) return <span className="value" style={{ fontSize: '1.25rem' }}>—</span>;
+                    const cr = mc / 10000000;
+                    // SEBI/AMFI basis: top 100 by market cap = Large, 101–250 = Mid,
+                    // rest = Small. Approximated by ₹-cr cut-offs (the official list
+                    // is rank-based and re-cut every 6 months, so these drift).
+                    const cap = cr >= 85000
+                      ? { label: 'Large Cap', color: '#34d3a4' }
+                      : cr >= 35000
+                        ? { label: 'Mid Cap', color: '#f5a623' }
+                        : { label: 'Small Cap', color: '#7aa2f7' };
+                    return (
+                      <>
+                        <span className="value" style={{ fontSize: '1.25rem' }}>
+                          ₹{cr.toLocaleString('en-IN', { maximumFractionDigits: 2 })} Cr
+                        </span>
+                        <span
+                          title="SEBI/AMFI basis: top 100 by market cap = Large, 101–250 = Mid, rest = Small (₹-cr thresholds approximate)"
+                          style={{
+                            alignSelf: 'flex-start',
+                            marginTop: '0.4rem',
+                            padding: '0.1rem 0.55rem',
+                            fontSize: '0.7rem',
+                            fontWeight: 700,
+                            letterSpacing: '0.02em',
+                            borderRadius: '999px',
+                            color: cap.color,
+                            background: `${cap.color}1f`,
+                            border: `1px solid ${cap.color}55`,
+                          }}
+                        >
+                          {cap.label}
+                        </span>
+                      </>
+                    );
+                  })()}
                 </div>
 
                 <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
@@ -1360,6 +1396,14 @@ function Instrument() {
           const opmTtmDelta = (opm4qAvg != null && opmPrev4qAvg != null) ? opm4qAvg - opmPrev4qAvg : null;
           const latestOpm = opMarginOf(last4[last4.length - 1]);
           const opmCardDelta = (latestOpm != null && opm4qAvg != null) ? latestOpm - opm4qAvg : null;
+          // Latest *sequential* OPM move (QoQ for quarterly, prior-FY step for
+          // yearly). The card headline above is "latest vs trailing-avg", which can
+          // read green while the most recent move was down — we surface this so the
+          // overview acknowledges a sequential dip instead of masking it.
+          const prevPeriodRow = quarters.length >= 2 ? quarters[quarters.length - 2] : null;
+          const prevPeriodOpm = opMarginOf(prevPeriodRow);
+          const opmSeqDelta = (latestOpm != null && prevPeriodOpm != null) ? latestOpm - prevPeriodOpm : null;
+          const opmSeqLabel = prevPeriodRow?.label || null;
 
           // Net Profit YoY hit-rate + latest YoY
           let npYoYWins = 0, npYoYConsidered = 0, latestNpYoY = null;
@@ -1422,7 +1466,7 @@ function Instrument() {
 
           return {
             salesYoY: { wins: salesYoYWins, considered: salesYoYConsidered, latest: latestSalesYoY },
-            opm: { latest: latestOpm, avg4q: opm4qAvg, prevAvg4q: opmPrev4qAvg, cardDelta: opmCardDelta, ttmDelta: opmTtmDelta },
+            opm: { latest: latestOpm, avg4q: opm4qAvg, prevAvg4q: opmPrev4qAvg, cardDelta: opmCardDelta, ttmDelta: opmTtmDelta, seqDelta: opmSeqDelta, seqLabel: opmSeqLabel },
             np: { wins: npYoYWins, considered: npYoYConsidered, latest: latestNpYoY },
             flags,
             latestLabel: latest?.label,
@@ -1530,6 +1574,22 @@ function Instrument() {
                         ? `${snapshot.opm.latest.toFixed(1)}% latest vs ${snapshot.opm.avg4q.toFixed(1)}% (${windowSize}${isYearly ? 'Y' : 'Q'} avg)`
                         : `Needs ≥ ${windowSize} ${periodNoun}`}
                     </div>
+                    {/* Acknowledge a sequential move that contradicts the headline
+                        (e.g. card reads "above average / green" but the latest
+                        quarter actually slipped vs the prior one). */}
+                    {snapshot.opm.seqDelta != null && snapshot.opm.cardDelta != null
+                      && Math.abs(snapshot.opm.seqDelta) >= 0.5
+                      && Math.sign(snapshot.opm.seqDelta) !== Math.sign(snapshot.opm.cardDelta) && (
+                      <div style={{ fontSize: '0.68rem', color: '#fbbf24', marginTop: '0.2rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <span>{snapshot.opm.seqDelta < 0 ? '↓' : '↑'}</span>
+                        <span>
+                          {`${Math.abs(snapshot.opm.seqDelta).toFixed(1)} pp ${isYearly ? 'YoY' : 'QoQ'}`}
+                          {snapshot.latestLabel ? ` in ${snapshot.latestLabel}` : ''}
+                          {snapshot.opm.seqDelta < 0 ? ' — latest cooled vs prior' : ' — latest improved vs prior'}
+                          {snapshot.opm.seqLabel ? ` (${snapshot.opm.seqLabel})` : ''}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Net Profit trend */}
