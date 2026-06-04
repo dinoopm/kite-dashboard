@@ -740,12 +740,19 @@ app.get('/api/instrument-info/:symbol', async (req, res) => {
   try {
     const result = await callWithTimeout({
       name: "search_instruments",
-      arguments: { query: cacheKey, filter_on: "id", limit: 1 }
+      arguments: { query: cacheKey, filter_on: "id", limit: 20 }
     }, 8000);
     let info = { symbol, exchange, name: null, isin: null, instrument_token: null };
     if (result?.content?.[0]?.text) {
       const parsed = JSON.parse(result.content[0].text);
-      const row = parsed?.data?.[0];
+      // Kite's id search is a PREFIX match — querying "NSE:NTPC" also returns
+      // "NSE:NTPCGREEN" and can rank it first, so taking data[0] resolved NTPC
+      // to NTPC GREEN ENERGY. Pick the EXACT id (or exchange+tradingsymbol)
+      // match; only fall back to the first result when nothing matches exactly.
+      const rows = parsed?.data || [];
+      const row = rows.find(r => r.id === cacheKey)
+        || rows.find(r => (r.tradingsymbol || '').toUpperCase() === symbol && (r.exchange || '').toUpperCase() === exchange)
+        || rows[0];
       if (row) {
         info = {
           symbol,
