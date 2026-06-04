@@ -2840,6 +2840,38 @@ app.post('/api/quotes', async (req, res) => {
 const sectorConstituentsCache = {}; // { sectorKey: { data, timestamp } }
 const SECTOR_CONSTITUENTS_TTL = 30 * 60 * 1000; // 30 min
 
+// Instrument tokens are static, but we normally read them off the live quote.
+// A constituent that isn't quoting (trading halt, special session, corporate
+// action — e.g. PFOCUS) is absent from get_quotes and so arrives token-less,
+// which makes the FE skip its entire 3Y history + indicators. Recover the token
+// from the instruments master, keyed by ISIN (unambiguous) then NSE:symbol id.
+// Cached for the process lifetime since tokens never change.
+const masterTokenCache = {}; // { 'NSE:SYMBOL': '3454977' }
+
+async function resolveTokenFromMaster(isin, key) {
+  if (masterTokenCache[key]) return masterTokenCache[key];
+  const attempts = [];
+  if (isin) attempts.push({ query: isin, filter_on: 'isin' });
+  attempts.push({ query: key, filter_on: 'id' });
+  for (const args of attempts) {
+    try {
+      const result = await callWithTimeout({ name: 'search_instruments', arguments: { ...args, limit: 5 } }, 8000);
+      const parsed = parseMcpText(result);
+      const list = Array.isArray(parsed) ? parsed : (parsed?.data || []);
+      // Prefer the exact NSE equity row; fall back to the id match, then first.
+      const row = list.find(r => r.exchange === 'NSE' && r.instrument_type === 'EQ')
+        || list.find(r => r.id === key)
+        || list[0];
+      if (row?.instrument_token) {
+        const tok = String(row.instrument_token);
+        masterTokenCache[key] = tok;
+        return tok;
+      }
+    } catch (e) { /* try next strategy */ }
+  }
+  return null;
+}
+
 // Resolves a sector's constituent list with cached instrument tokens + live
 // last_price. Returns { sector, constituents: [{ symbol, name, isin, key,
 // token, lastPrice }] }. The `payload` returned by /api/sector-constituents
@@ -2890,6 +2922,38 @@ async function resolveSectorConstituents(sectorKey) {
       previousClose: q?.ohlc?.close ?? null,
     };
   });
+
+  // Backfill any constituent the NSE quote didn't cover. A stock can go dark on
+  // NSE (trading suspension, special session) while still trading normally on
+  // BSE under the same ISIN — e.g. PFOCUS. So first try the BSE listing, which
+  // usually still has a live quote + full history; adopt its token/price so the
+  // row populates. If BSE is dark too, fall back to the static NSE token from
+  // the instruments master so history can load the moment NSE data returns.
+  const missing = constituents.filter(c => !c.token);
+  if (missing.length) {
+    let bseQuotes = {};
+    try {
+      const bseKeys = missing.map(c => `BSE:${c.symbol}`);
+      const bseResult = await callWithTimeout({ name: 'get_quotes', arguments: { instruments: bseKeys } });
+      bseQuotes = parseMcpText(bseResult) || {};
+    } catch (e) { /* fall through to master resolution */ }
+
+    await Promise.all(missing.map(async (c) => {
+      const bq = bseQuotes[`BSE:${c.symbol}`];
+      if (bq?.instrument_token) {
+        c.token = String(bq.instrument_token);
+        c.lastPrice = bq.last_price ?? c.lastPrice;
+        c.previousClose = bq.ohlc?.close ?? c.previousClose;
+        rrgTokenCache[c.key] = c.token;
+        return;
+      }
+      const token = await resolveTokenFromMaster(c.isin, c.key);
+      if (token) {
+        c.token = token;
+        rrgTokenCache[c.key] = token;
+      }
+    }));
+  }
 
   return { sector: sectorKey, constituents };
 }

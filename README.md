@@ -228,4 +228,5 @@ kite-dashboard/
 - The alerts engine caches daily candles once per boot and refreshes only today's partial bar on demand (60s cooldown per token).
 - All NSE market data (FII/DII, OI, gainers, volume spurts) is ingested by GitHub Actions into Supabase. The app reads from Supabase at request time — these features require the daily sync to be running.
 - Volume gainers data comes from NSE's `/api/live-analysis-volume-gainers` endpoint, showing stocks with unusual volume vs their 1-week and 2-week averages.
+- If a sector constituent is dark on NSE (e.g. a trading suspension) but still trades on BSE under the same ISIN, the Sector Detail *Stocks* tab falls back to the BSE listing — resolving the instrument token from the instruments master and deriving price, 1D, and multi-year history from BSE — so the row still loads instead of showing a blank dash. Such rows have no live NSE tick, so their price and 1D come from the last (and prior) daily closes rather than real-time.
 - Small discrepancies vs other platforms are expected due to different data sources and price adjustments.

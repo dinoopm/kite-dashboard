@@ -421,6 +421,7 @@ export default function SectorDetail() {
             const sma20 = computeSMA(closes, 20);
             const sma200 = computeSMA(closes, 200);
             const lastClose = closes[closes.length - 1];
+            const prevDayClose = sorted[sorted.length - 2]?.close;
             const weeklyHighs = resampleToWeeklyHighs(sorted);
 
             // Past raw momentum, anchored 5 trading days back. Uses trading-day
@@ -445,7 +446,12 @@ export default function SectorDetail() {
 
             setStockData(prev => prev.map(s =>
               s.key === c.key
-                ? { ...s, ...returns, rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, weeklyHighs, pastRawMomentum, histLoaded: true }
+                // When the live quote was missing (price 0 — e.g. a stock dark on
+                // NSE but served from BSE history), recover both the price and the
+                // 1D from the history series so the row isn't a blank dash / flat
+                // 0.00%. 1D uses the last two daily closes, matching how 1W–3Y are
+                // derived. A real live price keeps its real-time price and 1D.
+                ? { ...s, ...returns, price: s.price || price, '1D': (!s.price && prevDayClose) ? ((price - prevDayClose) / prevDayClose) * 100 : s['1D'], rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, weeklyHighs, pastRawMomentum, histLoaded: true }
                 : s
             ));
             setHistLoadedCount(n => n + 1);
