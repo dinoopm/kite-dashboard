@@ -1801,27 +1801,25 @@ app.get('/api/instrument-alert/:token', async (req, res) => {
   if (!symbol) return res.status(400).json({ error: "symbol query param required" });
 
   try {
-    // Ensure candles are cached. /api/indicators populates historyCache
-    // already, but a direct hit on this endpoint shouldn't fail just because
-    // the user hasn't loaded the technicals tab yet.
-    let candles = historyCache[token];
-    if (!candles || candles.length === 0) {
-      const toDate = new Date();
-      const fromDate = new Date();
-      fromDate.setDate(toDate.getDate() - 365);
-      const data = await fetchHistorical(parseInt(token, 10), fromDate, toDate, 'day');
-      if (Array.isArray(data) && data.length > 0) {
-        historyCache[token] = data;
-        candles = data;
-      }
+    // Use the full multi-year history (same depth the Portfolio Alerts page
+    // warms) instead of the 1-year indicator cache, so the breakout-window scan
+    // spans the real 1Y/2Y/3Y ranges. With only ~1yr of bars the 2Y/3Y windows
+    // collapsed onto a single year, mislabeling a 1-year high as a "3Y breakout".
+    let candles;
+    try {
+      const full = await getOrFetchFullHistory(token);
+      candles = full?.data;
+    } catch (e) {
+      console.warn(`[instrument-alert] full history fetch failed for ${symbol}: ${e.message}`);
     }
     if (!candles || candles.length < 15) {
       return res.status(404).json({ error: "Insufficient historical data to compute alerts" });
     }
 
-    // Refresh today's bar so VWAP / day-change / volSurge reflect live state.
-    await refreshTodayCandle(token);
-    candles = historyCache[token] || candles;
+    // Refresh today's bar on the full-history cache so VWAP / day-change /
+    // volSurge reflect live state.
+    await refreshTodayCandle_FullHistory(token);
+    candles = historicalFullCache[token]?.data || candles;
 
     // Fetch live quote so we have lastPrice + previousClose without trusting
     // stale cached values.
