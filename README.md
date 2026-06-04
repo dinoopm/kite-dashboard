@@ -156,20 +156,6 @@ kite-dashboard/
 
 ---
 
-## Supabase Tables
-
-| Table | Source | Conflict Key |
-|-------|--------|--------------|
-| `fii_dii_activity` | NSE FII/DII archive | `trade_date` |
-| `participant_oi` | NSE archives CSV | `trade_date, client_type` |
-| `large_deals` | NSE bulk/block deals | `trade_date, symbol, client_name, deal_type, quantity` |
-| `top_gainers_losers` | NSE live analysis | `trade_date, symbol, index_name, category` |
-| `volume_gainers` | NSE volume spurts | `trade_date, symbol` |
-| `nse_52_week_high_low` | NSE 52-week H/L archive CSV | `trade_date, symbol, series` |
-| `surveillance` | NSE ASM/GSM list | — |
-
----
-
 ## API Endpoints
 
 ### Core (Kite-backed)
@@ -209,15 +195,6 @@ kite-dashboard/
 | `POST /api/reconnect` | Re-establish MCP session after disconnect |
 | `POST /api/disconnect` | Clear session & caches |
 | `GET /api/cache-status` | Inspect instrument-cache warmup state |
-
----
-
-## Automation Schedule
-
-| Workflow | Schedule | Steps |
-|----------|----------|-------|
-| `fii_dii_sync.yml` | Mon–Fri at 7 PM & 8 PM IST | FII/DII → Participant OI → Large Deals → Top Gainers/Losers → Volume Gainers → 52-Week High/Low |
-| `surveillance_sync.yml` | Every Saturday at 5:30 AM IST | ASM/GSM list refresh |
 
 ---
 
