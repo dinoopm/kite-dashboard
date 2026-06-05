@@ -133,6 +133,32 @@ tbody tr:hover {
   background-color: rgba(255, 255, 255, 0.05);
 }
 
+/* Interactive holdings tables (Portfolio, Instrument) — right-aligned tabular
+   numbers, compact uppercase headers, a bold left-aligned name column, and a
+   clearer accent hover. Makes the numeric columns line up and scan easily. */
+.interactive-table { font-size: 0.9rem; }
+.interactive-table th {
+  text-align: right;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  padding: 0.65rem 0.9rem;
+  white-space: nowrap;
+}
+.interactive-table td {
+  text-align: right;
+  padding: 0.7rem 0.9rem;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+}
+.interactive-table th:first-child,
+.interactive-table td:first-child { text-align: left; }
+.interactive-table td:first-child strong { color: var(--text-primary); font-weight: 700; }
+.interactive-table tbody tr:hover { background-color: rgba(56, 189, 248, 0.07); }
+
 .loader {
   border: 3px solid rgba(255, 255, 255, 0.1);
   border-top: 3px solid var(--accent);

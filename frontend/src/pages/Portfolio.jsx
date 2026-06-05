@@ -167,33 +167,33 @@ function Portfolio() {
     const ts = new Date().toISOString().slice(0, 10);
     const num = (v, d = 2) => (v == null || isNaN(v) ? '' : Number(v).toFixed(d));
     if (activeTab === 'equity') {
-      const headers = ['Instrument', 'Quantity', 'Avg Cost', 'LTP', 'Day Change', 'Day Change %', 'Invested', 'Current Value', 'P&L', 'Net Change %', 'Allocation %'];
+      const headers = ['Instrument', 'Avg Cost', 'LTP', 'Quantity', 'Invested', 'Current Value', 'Net Change %', 'P&L', 'Day Change', 'Day Change %', 'Allocation %'];
       const rows = filteredAndSortedHoldings.map(h => [
         h.tradingsymbol,
-        h.displayQuantity,
         num(h.average_price),
         num(h.last_price),
-        num(h.dayChange),
-        num(h.dayChangePct),
+        h.displayQuantity,
         num(h.investment),
         num(h.currentValue),
-        num(h.itemPL),
         num(h.itemPLPercent),
+        num(h.itemPL),
+        num(h.dayChange),
+        num(h.dayChangePct),
         num(h.allocation),
       ]);
       downloadCSV(`equity-holdings-${ts}.csv`, headers, rows);
     } else {
-      const headers = ['Fund', 'Symbol', 'Quantity', 'Avg Cost', 'NAV (LTP)', 'Invested', 'Current Value', 'P&L', 'Net Change %'];
+      const headers = ['Fund', 'Symbol', 'Avg Cost', 'NAV (LTP)', 'Quantity', 'Invested', 'Current Value', 'Net Change %', 'P&L'];
       const rows = filteredAndSortedMFs.map(h => [
         h.fund || h.tradingsymbol,
         h.tradingsymbol,
-        h.displayQuantity,
         num(h.average_price),
         num(h.last_price),
+        h.displayQuantity,
         num(h.investment),
         num(h.currentValue),
-        num(h.itemPL),
         num(h.itemPLPercent),
+        num(h.itemPL),
       ]);
       downloadCSV(`mf-holdings-${ts}.csv`, headers, rows);
     }
@@ -368,14 +368,14 @@ function Portfolio() {
                 <thead>
                   <tr>
                     <th onClick={() => handleSort('tradingsymbol')} style={{cursor: 'pointer'}}>Instrument <SortIcon field="tradingsymbol"/></th>
-                    <th onClick={() => handleSort('quantity')} style={{cursor: 'pointer'}}>Qty. <SortIcon field="quantity"/></th>
                     <th onClick={() => handleSort('average_price')} style={{cursor: 'pointer'}}>Avg. Cost <SortIcon field="average_price"/></th>
                     <th onClick={() => handleSort('last_price')} style={{cursor: 'pointer'}}>LTP <SortIcon field="last_price"/></th>
-                    <th onClick={() => handleSort('dayChangePct')} style={{cursor: 'pointer'}}>Day Chg. <SortIcon field="dayChangePct"/></th>
+                    <th onClick={() => handleSort('quantity')} style={{cursor: 'pointer'}}>Qty. <SortIcon field="quantity"/></th>
                     <th onClick={() => handleSort('investment')} style={{cursor: 'pointer'}}>Invested <SortIcon field="investment"/></th>
                     <th onClick={() => handleSort('currentValue')} style={{cursor: 'pointer'}}>Cur. Value <SortIcon field="currentValue"/></th>
-                    <th onClick={() => handleSort('itemPL')} style={{cursor: 'pointer'}}>P&L <SortIcon field="itemPL"/></th>
                     <th onClick={() => handleSort('itemPLPercent')} style={{cursor: 'pointer'}}>Net Chg. <SortIcon field="itemPLPercent"/></th>
+                    <th onClick={() => handleSort('itemPL')} style={{cursor: 'pointer'}}>P&L <SortIcon field="itemPL"/></th>
+                    <th onClick={() => handleSort('dayChangePct')} style={{cursor: 'pointer'}}>Day Chg. <SortIcon field="dayChangePct"/></th>
                     <th onClick={() => handleSort('allocation')} style={{cursor: 'pointer'}}>Allocation <SortIcon field="allocation"/></th>
                   </tr>
                 </thead>
@@ -383,19 +383,26 @@ function Portfolio() {
                   {filteredAndSortedHoldings.map((item, index) => (
                     <tr key={index} onClick={() => navigate(`/instrument/${item.instrument_token}?symbol=${encodeURIComponent(item.tradingsymbol)}`)} style={{cursor: 'pointer'}}>
                       <td><strong>{item.tradingsymbol}</strong></td>
-                      <td>{item.displayQuantity}</td>
                       <td>₹{Number(item.average_price).toFixed(2)}</td>
                       <td>₹{item.last_price}</td>
-                      <td className={item.dayChange >= 0 ? 'positive' : 'negative'}>
-                        {item.dayChange >= 0 ? '+' : ''}{item.dayChange.toFixed(2)} ({item.dayChangePct.toFixed(2)}%)
-                      </td>
+                      <td>{item.displayQuantity}</td>
                       <td>₹{item.investment.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                       <td>₹{item.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                      <td className={item.itemPL >= 0 ? 'positive' : 'negative'}>{item.itemPLPercent.toFixed(2)}%</td>
                       <td className={item.itemPL >= 0 ? 'positive' : 'negative'}>
                         {item.itemPL > 0 ? '+' : ''}{item.itemPL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                       </td>
-                      <td className={item.itemPL >= 0 ? 'positive' : 'negative'}>{item.itemPLPercent.toFixed(2)}%</td>
-                      <td>{item.allocation.toFixed(2)}%</td>
+                      <td className={item.dayChange >= 0 ? 'positive' : 'negative'}>
+                        {item.dayChange >= 0 ? '+' : ''}{item.dayChange.toFixed(2)} ({item.dayChangePct.toFixed(2)}%)
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                          <div style={{ width: '48px', height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                            <div style={{ width: `${Math.min(item.allocation, 100)}%`, height: '100%', background: 'var(--accent)' }} />
+                          </div>
+                          <span style={{ minWidth: '46px', textAlign: 'right' }}>{item.allocation.toFixed(2)}%</span>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -448,13 +455,13 @@ function Portfolio() {
                 <thead>
                   <tr>
                     <th onClick={() => handleSort('tradingsymbol')} style={{cursor: 'pointer'}}>Fund <SortIcon field="tradingsymbol"/></th>
-                    <th onClick={() => handleSort('quantity')} style={{cursor: 'pointer'}}>Qty. <SortIcon field="quantity"/></th>
                     <th onClick={() => handleSort('average_price')} style={{cursor: 'pointer'}}>Avg. Cost <SortIcon field="average_price"/></th>
                     <th onClick={() => handleSort('last_price')} style={{cursor: 'pointer'}}>NAV (LTP) <SortIcon field="last_price"/></th>
+                    <th onClick={() => handleSort('quantity')} style={{cursor: 'pointer'}}>Qty. <SortIcon field="quantity"/></th>
                     <th onClick={() => handleSort('investment')} style={{cursor: 'pointer'}}>Invested <SortIcon field="investment"/></th>
                     <th onClick={() => handleSort('currentValue')} style={{cursor: 'pointer'}}>Cur. Value <SortIcon field="currentValue"/></th>
-                    <th onClick={() => handleSort('itemPL')} style={{cursor: 'pointer'}}>P&L <SortIcon field="itemPL"/></th>
                     <th onClick={() => handleSort('itemPLPercent')} style={{cursor: 'pointer'}}>Net Chg. <SortIcon field="itemPLPercent"/></th>
+                    <th onClick={() => handleSort('itemPL')} style={{cursor: 'pointer'}}>P&L <SortIcon field="itemPL"/></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -464,15 +471,15 @@ function Portfolio() {
                         <strong>{item.fund || item.tradingsymbol}</strong>
                         <div style={{ fontSize: '0.75rem', opacity: 0.6 }}>{item.tradingsymbol}</div>
                       </td>
-                      <td>{item.displayQuantity}</td>
                       <td>₹{Number(item.average_price).toFixed(2)}</td>
                       <td>₹{item.last_price}</td>
+                      <td>{item.displayQuantity}</td>
                       <td>₹{item.investment.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                       <td>₹{item.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                      <td className={item.itemPL >= 0 ? 'positive' : 'negative'}>{item.itemPLPercent.toFixed(2)}%</td>
                       <td className={item.itemPL >= 0 ? 'positive' : 'negative'}>
                         {item.itemPL > 0 ? '+' : ''}{item.itemPL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                       </td>
-                      <td className={item.itemPL >= 0 ? 'positive' : 'negative'}>{item.itemPLPercent.toFixed(2)}%</td>
                     </tr>
                   ))}
                 </tbody>
