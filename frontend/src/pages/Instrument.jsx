@@ -641,7 +641,7 @@ function Instrument() {
     return () => controller.abort();
   }, [token, timeframe])
 
-  const tfOptions = ['1D', '1W', '1M', '3M', '6M', '1Y', '5Y'];
+  const tfOptions = ['1D', '1W', '1M', '3M', '6M', '1Y', '2Y', '3Y', '5Y'];
 
   const todayChange = quote ? (quote.last_price - quote.ohlc.close) : null;
   const todayChangePct = quote && quote.ohlc.close ? ((todayChange / quote.ohlc.close) * 100).toFixed(2) : null;

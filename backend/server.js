@@ -937,6 +937,8 @@ app.get('/api/historical/:token', async (req, res) => {
       else if (tf === '3M') daysBack = 90;
       else if (tf === '6M') daysBack = 180;
       else if (tf === '1Y') daysBack = 365;
+      else if (tf === '2Y') daysBack = 730;
+      else if (tf === '3Y') daysBack = 1095;
       else if (tf === '5Y') daysBack = 1825;
 
       const cutoff = new Date();
@@ -968,6 +970,8 @@ app.get('/api/historical/:token', async (req, res) => {
     else if (tf === '3M') daysBack = 90;
     else if (tf === '6M') daysBack = 180;
     else if (tf === '1Y') daysBack = 365;
+    else if (tf === '2Y') daysBack = 730;
+    else if (tf === '3Y') daysBack = 1095;
     else if (tf === '5Y') daysBack = 365 * 5;
     // For cache miss, fetch more data to compute SMAs (add 70 days)
     fromDate.setDate(toDate.getDate() - (daysBack + 70));
@@ -1008,6 +1012,8 @@ app.get('/api/historical/:token', async (req, res) => {
       else if (tf === '3M') daysBack = 90;
       else if (tf === '6M') daysBack = 180;
       else if (tf === '1Y') daysBack = 365;
+      else if (tf === '2Y') daysBack = 730;
+      else if (tf === '3Y') daysBack = 1095;
       else if (tf === '5Y') daysBack = 1825;
 
       const cutoff = new Date();
