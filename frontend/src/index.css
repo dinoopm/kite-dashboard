@@ -228,6 +228,30 @@ tbody tr:hover {
   padding: 1.5rem;
 }
 
+/* AlertRow card — shared by the Alerts page, sector drill-down and theme
+   baskets. Lives here (global) so each alert row is boxed on every page, not
+   only where a page-scoped <style> happens to define it. */
+.quant-row {
+  position: relative;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+  transition: background 0.15s, border-color 0.15s;
+  overflow: visible;
+}
+.quant-row:hover { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.1); }
+
+/* AlertRow / alerts-panel utility classes — also global so they apply wherever
+   AlertRow is used, not only on the Alerts page. */
+.sort-header { cursor: pointer; user-select: none; transition: color 0.2s; display: flex; align-items: center; gap: 0.3rem; }
+.sort-header:hover { color: #f8fafc; }
+.info-icon { opacity: 0.6; font-size: 0.8rem; cursor: help; }
+.info-icon:hover { opacity: 1; }
+.dotted-underline { border-bottom: 1px dotted rgba(255,255,255,0.4); text-decoration: none; cursor: help; }
+.conviction-click { cursor: pointer; transition: transform 0.15s, filter 0.15s; }
+.conviction-click:hover { transform: scale(1.08); filter: brightness(1.2); }
+
 .conv-row {
   display: grid;
   grid-template-columns: 1fr 50px 1fr;

@@ -2883,33 +2883,13 @@ async function resolveTokenFromMaster(isin, key) {
   return null;
 }
 
-// Resolves a sector's constituent list with cached instrument tokens + live
-// last_price. Returns { sector, constituents: [{ symbol, name, isin, key,
-// token, lastPrice }] }. The `payload` returned by /api/sector-constituents
-// omits lastPrice for back-compat; that's stripped at the call site.
-async function resolveSectorConstituents(sectorKey) {
-  if (!supabase) throw new Error('Supabase not configured');
-
-  let rows;
-  const cached = sectorConstituentsCache[sectorKey];
-  if (cached && Date.now() - cached.timestamp < SECTOR_CONSTITUENTS_TTL) {
-    rows = cached.data;
-  } else {
-    const { data, error } = await supabase
-      .from('sector_constituents')
-      .select('*')
-      .eq('sector_key', sectorKey)
-      .order('sort_order');
-
-    if (error) throw new Error(error.message);
-    if (!data || data.length === 0) {
-      const e = new Error(`No constituents for ${sectorKey}`);
-      e.statusCode = 404;
-      throw e;
-    }
-    rows = data;
-    sectorConstituentsCache[sectorKey] = { data: rows, timestamp: Date.now() };
-  }
+// Resolve a list of {symbol, name, isin} rows into displayable constituents
+// with a live token + last_price: NSE quote first, then a BSE fallback for
+// NSE-dark names (suspension/special session — e.g. PFOCUS), then the static
+// instruments master. Shape: { symbol, name, isin, key, token, lastPrice,
+// previousClose }. Shared by sector drill-downs and user-defined theme baskets.
+async function resolveConstituentsFromRows(rows) {
+  if (!rows || rows.length === 0) return [];
 
   const instruments = rows.map(r => `NSE:${r.symbol}`);
   const quoteResult = await callWithTimeout({ name: 'get_quotes', arguments: { instruments } });
@@ -2934,12 +2914,8 @@ async function resolveSectorConstituents(sectorKey) {
     };
   });
 
-  // Backfill any constituent the NSE quote didn't cover. A stock can go dark on
-  // NSE (trading suspension, special session) while still trading normally on
-  // BSE under the same ISIN — e.g. PFOCUS. So first try the BSE listing, which
-  // usually still has a live quote + full history; adopt its token/price so the
-  // row populates. If BSE is dark too, fall back to the static NSE token from
-  // the instruments master so history can load the moment NSE data returns.
+  // Backfill any constituent the NSE quote didn't cover: try BSE (same ISIN),
+  // then the static NSE token from the instruments master.
   const missing = constituents.filter(c => !c.token);
   if (missing.length) {
     let bseQuotes = {};
@@ -2966,6 +2942,36 @@ async function resolveSectorConstituents(sectorKey) {
     }));
   }
 
+  return constituents;
+}
+
+// Resolves a sector's constituent list (from the sector_constituents table).
+// Returns { sector, constituents }. lastPrice is stripped by the endpoint.
+async function resolveSectorConstituents(sectorKey) {
+  if (!supabase) throw new Error('Supabase not configured');
+
+  let rows;
+  const cached = sectorConstituentsCache[sectorKey];
+  if (cached && Date.now() - cached.timestamp < SECTOR_CONSTITUENTS_TTL) {
+    rows = cached.data;
+  } else {
+    const { data, error } = await supabase
+      .from('sector_constituents')
+      .select('*')
+      .eq('sector_key', sectorKey)
+      .order('sort_order');
+
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) {
+      const e = new Error(`No constituents for ${sectorKey}`);
+      e.statusCode = 404;
+      throw e;
+    }
+    rows = data;
+    sectorConstituentsCache[sectorKey] = { data: rows, timestamp: Date.now() };
+  }
+
+  const constituents = await resolveConstituentsFromRows(rows);
   return { sector: sectorKey, constituents };
 }
 
@@ -2994,9 +3000,11 @@ const sectorAlertsCache = {};        // { sectorKey: { data, timestamp } }
 const SECTOR_ALERTS_TTL = 60 * 1000; // 60s
 const sectorAlertsPromises = {};     // in-flight coalescing
 
-async function computeSectorAlertsPayload(sectorKey) {
-  const { constituents } = await resolveSectorConstituents(sectorKey);
-
+// Compute technical alerts for an already-resolved constituents list. Requires
+// each token's full history to be warmed in historicalFullCache (the Stocks tab
+// fetches /api/historical-full/:token, which populates it). Shared by sector
+// drill-downs and theme baskets. `label` is echoed into summary.sector.
+async function buildAlertsFromConstituents(constituents, label) {
   const alerts = [];
   const notReady = [];
 
@@ -3019,24 +3027,30 @@ async function computeSectorAlertsPayload(sectorKey) {
       lastPrice: c.lastPrice,
       previousClose: c.previousClose,
       candles: candlesAfterRefresh,
-      sector: sectorKey,
+      sector: label,
     });
     if (alert) alerts.push(alert);
   }
 
-  const summary = {
-    sector: sectorKey,
-    totalConstituents: constituents.length,
-    readyCount: alerts.length,
-    notReady,
-    flagCounts: {
-      avoid: alerts.filter(a => a.tradePlan?.action === 'AVOID').length,
-      trim:  alerts.filter(a => a.tradePlan?.action === 'TRIM').length,
-      add:   alerts.filter(a => a.tradePlan?.action === 'ADD').length,
+  return {
+    alerts,
+    summary: {
+      sector: label,
+      totalConstituents: constituents.length,
+      readyCount: alerts.length,
+      notReady,
+      flagCounts: {
+        avoid: alerts.filter(a => a.tradePlan?.action === 'AVOID').length,
+        trim:  alerts.filter(a => a.tradePlan?.action === 'TRIM').length,
+        add:   alerts.filter(a => a.tradePlan?.action === 'ADD').length,
+      },
     },
   };
+}
 
-  const data = { alerts, summary };
+async function computeSectorAlertsPayload(sectorKey) {
+  const { constituents } = await resolveSectorConstituents(sectorKey);
+  const data = await buildAlertsFromConstituents(constituents, sectorKey);
   sectorAlertsCache[sectorKey] = { data, timestamp: Date.now() };
   return data;
 }
@@ -3064,6 +3078,152 @@ app.get('/api/sector-alerts/:sector', async (req, res) => {
     if (err.statusCode === 429) return res.status(429).set('Retry-After', String(err.retryAfter || 5)).json({ error: 'rate_limited', retryAfter: err.retryAfter || 5 });
     console.error('sector-alerts error:', err);
     res.status(500).json({ error: 'Failed to compute sector alerts: ' + err.message });
+  }
+});
+
+// ─── Thematic Baskets (user-defined themes) ─────────────────────
+// A "theme" is a user-curated basket of instruments, persisted in Supabase
+// (themes + theme_instruments). Constituents and technical alerts reuse the
+// exact sector pipeline (resolveConstituentsFromRows / buildAlertsFromConstituents)
+// so the theme detail page can reuse the Sector-Detail table + alerts UI.
+const themeAlertsCache = {};         // { themeId: { data, timestamp } }
+const THEME_ALERTS_TTL = 60 * 1000;
+
+async function getThemeWithRows(themeId) {
+  const { data: theme, error: tErr } = await supabase
+    .from('themes').select('*').eq('id', themeId).single();
+  if (tErr || !theme) { const e = new Error('Theme not found'); e.statusCode = 404; throw e; }
+  const { data: rows, error } = await supabase
+    .from('theme_instruments').select('*').eq('theme_id', themeId)
+    .order('sort_order').order('created_at');
+  if (error) throw new Error(error.message);
+  return { theme, rows: rows || [] };
+}
+
+// List themes with instrument counts.
+app.get('/api/themes', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    const { data: themes, error } = await supabase
+      .from('themes').select('*').order('sort_order').order('created_at');
+    if (error) throw new Error(error.message);
+    const { data: insts } = await supabase.from('theme_instruments').select('theme_id');
+    const counts = {};
+    (insts || []).forEach(i => { counts[i.theme_id] = (counts[i.theme_id] || 0) + 1; });
+    res.json({ themes: (themes || []).map(t => ({ ...t, instrumentCount: counts[t.id] || 0 })) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Create a theme.
+app.post('/api/themes', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const name = (req.body?.name || '').toString().trim();
+  if (!name) return res.status(400).json({ error: 'Theme name is required' });
+  try {
+    const { data, error } = await supabase.from('themes').insert({ name }).select().single();
+    if (error) throw new Error(error.message);
+    res.json({ theme: { ...data, instrumentCount: 0 } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Rename a theme.
+app.patch('/api/themes/:id', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const name = (req.body?.name || '').toString().trim();
+  if (!name) return res.status(400).json({ error: 'Theme name is required' });
+  try {
+    const { data, error } = await supabase
+      .from('themes').update({ name }).eq('id', req.params.id).select().single();
+    if (error) throw new Error(error.message);
+    if (!data) return res.status(404).json({ error: 'Theme not found' });
+    res.json({ theme: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Delete a theme (cascade removes its instruments via the FK).
+app.delete('/api/themes/:id', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    const { error } = await supabase.from('themes').delete().eq('id', req.params.id);
+    if (error) throw new Error(error.message);
+    delete themeAlertsCache[req.params.id];
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Add an instrument to a theme.
+app.post('/api/themes/:id/instruments', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const { symbol, name, isin, exchange } = req.body || {};
+  if (!symbol) return res.status(400).json({ error: 'symbol is required' });
+  try {
+    const { data, error } = await supabase.from('theme_instruments').insert({
+      theme_id: req.params.id,
+      symbol: symbol.toString().toUpperCase(),
+      name: name || symbol,
+      isin: isin || null,
+      exchange: (exchange || 'NSE').toString().toUpperCase(),
+    }).select().single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Already in this theme' });
+      throw new Error(error.message);
+    }
+    delete themeAlertsCache[req.params.id];
+    res.json({ instrument: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Remove an instrument from a theme.
+app.delete('/api/themes/:id/instruments/:instrumentId', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    const { error } = await supabase.from('theme_instruments')
+      .delete().eq('id', req.params.instrumentId).eq('theme_id', req.params.id);
+    if (error) throw new Error(error.message);
+    delete themeAlertsCache[req.params.id];
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Resolve a theme's constituents (same shape as /api/sector-constituents, plus
+// each row's instrumentId so the FE can delete it). lastPrice is stripped.
+app.get('/api/themes/:id/constituents', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  if (!mcpClient) return res.status(500).json({ error: 'MCP not connected' });
+  try {
+    const { theme, rows } = await getThemeWithRows(req.params.id);
+    const constituents = await resolveConstituentsFromRows(rows);
+    const idByKey = {};
+    rows.forEach(r => { idByKey[`NSE:${r.symbol.toUpperCase()}`] = r.id; });
+    res.json({
+      theme: { id: theme.id, name: theme.name },
+      constituents: constituents.map(({ lastPrice, ...rest }) => ({ ...rest, instrumentId: idByKey[rest.key] || null })),
+    });
+  } catch (err) {
+    if (err.statusCode === 404) return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Theme technical alerts (same shape as /api/sector-alerts).
+app.get('/api/themes/:id/alerts', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  if (!mcpClient) return res.status(500).json({ error: 'MCP not connected' });
+  try {
+    const id = req.params.id;
+    const cached = themeAlertsCache[id];
+    if (cached && Date.now() - cached.timestamp < THEME_ALERTS_TTL) return res.json(cached.data);
+
+    const { theme, rows } = await getThemeWithRows(id);
+    const constituents = await resolveConstituentsFromRows(rows);
+    const data = await buildAlertsFromConstituents(constituents, theme.name);
+    themeAlertsCache[id] = { data, timestamp: Date.now() };
+    res.json(data);
+  } catch (err) {
+    if (err.statusCode === 404) return res.status(404).json({ error: err.message });
+    if (err.statusCode === 429) return res.status(429).set('Retry-After', String(err.retryAfter || 5)).json({ error: 'rate_limited', retryAfter: err.retryAfter || 5 });
+    console.error('theme-alerts error:', err);
+    res.status(500).json({ error: 'Failed to compute theme alerts: ' + err.message });
   }
 });
 

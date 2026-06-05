@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useState, useRef } from 'react';
 import InstrumentSearch from './InstrumentSearch';
+import Logo from './Logo';
 
 // Sublinks under the "Market Data" dropdown. Adding more is a one-liner.
 const MARKET_DATA_LINKS = [
@@ -40,9 +41,12 @@ function Navbar({ onDisconnect }) {
 
   return (
     <nav className="glass-panel" style={{ display: 'flex', gap: '1.5rem', marginBottom: '2rem', padding: '1rem 2rem', alignItems: 'center', position: 'relative', zIndex: 9999 }}>
-      <h2 style={{ margin: 0, marginRight: '1rem', color: 'var(--accent)' }}>Kite Analytics</h2>
+      <Link to="/" style={{ marginRight: '1rem', textDecoration: 'none' }} title="Kite Analytics">
+        <Logo height={52} />
+      </Link>
       <Link to="/" style={linkStyle(location.pathname === '/')}>Dashboard</Link>
       <Link to="/portfolio" style={linkStyle(location.pathname === '/portfolio')}>Portfolio</Link>
+      <Link to="/basket" style={linkStyle(location.pathname.startsWith('/basket'))}>Basket</Link>
       <Link to="/indices" style={linkStyle(location.pathname === '/indices')}>Indices</Link>
       <Link to="/vix" style={linkStyle(location.pathname === '/vix')}>VIX</Link>
 

@@ -7,6 +7,8 @@ import Instrument from './pages/Instrument'
 import Alerts from './pages/Alerts'
 import SectorIndices from './pages/SectorIndices'
 import SectorDetail from './pages/SectorDetail'
+import Basket from './pages/Basket'
+import ThemeDetail from './pages/ThemeDetail'
 import VixIndex from './pages/VixIndex'
 import Chat from './pages/Chat'
 import FiiDii from './pages/marketData/FiiDii'
@@ -149,6 +151,8 @@ function App() {
           <Route path="/market-data/surveillance" element={<SurveillanceStocks />} />
           <Route path="/instrument/:token" element={<Instrument />} />
           <Route path="/sector/:sectorId" element={<SectorDetail />} />
+          <Route path="/basket" element={<Basket />} />
+          <Route path="/basket/:themeId" element={<ThemeDetail />} />
         </Routes>
       </div>
     </BrowserRouter>
