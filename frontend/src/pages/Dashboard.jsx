@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import VixWidget from '../components/VixWidget'
 
 function Dashboard() {
   const [data, setData] = useState({
@@ -221,6 +222,9 @@ function Dashboard() {
 
       {/* Detailed Breakdown */}
       <section className="grid" style={{ marginBottom: '2rem', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+
+        {/* India VIX Fear Gauge */}
+        <VixWidget />
 
         {/* Stocks Card */}
         <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1.5rem' }}>
