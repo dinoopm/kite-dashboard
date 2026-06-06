@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { format, parseISO } from 'date-fns'
@@ -259,6 +259,33 @@ function Instrument() {
   const symbol = searchParams.get('symbol')
   const navigate = useNavigate()
 
+  // Resolve a peer's screener slug to its NSE instrument token, then open its
+  // instrument page. Mirrors MarketDataTable's handler — the token is needed
+  // for the chart, but the page degrades gracefully (token 0) if lookup fails.
+  const peerTokenCacheRef = useRef(new Map())
+  const openPeer = async (peerSymbol) => {
+    if (!peerSymbol) return
+    const cached = peerTokenCacheRef.current.get(peerSymbol)
+    if (cached) {
+      navigate(`/instrument/${cached}?symbol=${encodeURIComponent(peerSymbol)}`)
+      return
+    }
+    try {
+      const r = await fetch(`/api/instrument-info/${encodeURIComponent(peerSymbol)}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const info = await r.json()
+      const tok = info?.instrument_token
+      if (!tok) {
+        navigate(`/instrument/0?symbol=${encodeURIComponent(peerSymbol)}`)
+        return
+      }
+      peerTokenCacheRef.current.set(peerSymbol, tok)
+      navigate(`/instrument/${tok}?symbol=${encodeURIComponent(peerSymbol)}`)
+    } catch {
+      navigate(`/instrument/0?symbol=${encodeURIComponent(peerSymbol)}`)
+    }
+  }
+
   const [data, setData] = useState([])
   const [quote, setQuote] = useState(null)
   const [indicators, setIndicators] = useState(null)
@@ -281,6 +308,10 @@ function Instrument() {
   // annual cashflow in standalone disclosures anyway.
   const [screenerCashflow, setScreenerCashflow] = useState(null)
   const [screenerCashflowError, setScreenerCashflowError] = useState(null)
+  const [screenerPeers, setScreenerPeers] = useState(null)
+  const [screenerPeersError, setScreenerPeersError] = useState(null)
+  // Peer-table sort. field=null keeps screener's natural order (by market cap).
+  const [peersSort, setPeersSort] = useState({ field: null, dir: 'desc' })
   // Annual balance sheet — consolidated by default, server falls back to
   // standalone on 404 (small caps).
   const [screenerBalanceSheet, setScreenerBalanceSheet] = useState(null)
@@ -433,6 +464,29 @@ function Instrument() {
       } catch (e) {
         if (e.name === 'AbortError') return;
         setScreenerCashflowError(e.message);
+      }
+    })();
+    return () => controller.abort();
+  }, [symbol])
+
+  // Fetch peer comparison from screener.in (the company's industry listing).
+  useEffect(() => {
+    if (!symbol) return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetchWithAbort(`/api/screener-peers/${encodeURIComponent(symbol)}`, { signal: controller.signal });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data?.peers) && data.peers.length > 0) setScreenerPeers(data);
+          else setScreenerPeersError('Screener returned no peers');
+        } else {
+          const err = await res.json().catch(() => ({}));
+          setScreenerPeersError(err.error || `Screener fetch failed (${res.status})`);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        setScreenerPeersError(e.message);
       }
     })();
     return () => controller.abort();
@@ -858,7 +912,158 @@ function Instrument() {
         >
           Shareholding
         </button>
+        <button
+          onClick={() => setActiveTab('peers')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'peers' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'peers' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '0.5rem 1rem',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'peers' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+            fontSize: '1rem'
+          }}
+        >
+          Peers
+        </button>
       </div>
+
+      {activeTab === 'peers' && (() => {
+        const peers = screenerPeers?.peers || [];
+        const median = screenerPeers?.median;
+        const fmtN = (v, d = 2) => (v == null ? '—' : Number(v).toLocaleString('en-IN', { maximumFractionDigits: d }));
+        const fmtCr = (v) => (v == null ? '—' : `₹${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`);
+        const pctColor = (v) => (v == null ? 'var(--text-secondary)' : v > 0 ? '#10b981' : v < 0 ? '#ef4444' : 'var(--text-secondary)');
+        const fmtPct = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${Number(v).toFixed(2)}%`);
+        const isSelf = (p) => symbol && p.slug && p.slug.toUpperCase() === symbol.toUpperCase();
+
+        // Column metadata drives both the sortable headers and the sort itself.
+        const columns = [
+          { key: 'name', label: 'Name', numeric: false },
+          { key: 'cmp', label: 'CMP ₹' },
+          { key: 'pe', label: 'P/E' },
+          { key: 'marketCap', label: 'Mkt Cap ₹Cr' },
+          { key: 'divYield', label: 'Div Yld %' },
+          { key: 'npQtr', label: 'NP Qtr ₹Cr' },
+          { key: 'profitVar', label: 'Profit Var %' },
+          { key: 'salesQtr', label: 'Sales Qtr ₹Cr' },
+          { key: 'salesVar', label: 'Sales Var %' },
+          { key: 'roce', label: 'ROCE %' },
+        ];
+        const sortPeersBy = (field, numeric) => setPeersSort((s) =>
+          s.field === field
+            ? { field, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+            : { field, dir: numeric === false ? 'asc' : 'desc' });
+        const sortedPeers = peersSort.field
+          ? [...peers].sort((a, b) => {
+              let va = a[peersSort.field];
+              let vb = b[peersSort.field];
+              if (va == null && vb == null) return 0;
+              if (va == null) return 1;   // nulls always sink to the bottom
+              if (vb == null) return -1;
+              if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+              if (va < vb) return peersSort.dir === 'asc' ? -1 : 1;
+              if (va > vb) return peersSort.dir === 'asc' ? 1 : -1;
+              return 0;
+            })
+          : peers;
+
+        return (
+          <section className="glass-panel" style={{ marginTop: '1rem', padding: '1.5rem' }}>
+            <div style={{ marginBottom: '1rem' }}>
+              <h2 style={{ margin: 0 }}>Peer Comparison</h2>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                {screenerPeers?.industry ? `${screenerPeers.industry} · ` : ''}Screener.in
+              </span>
+            </div>
+
+            {peers.length === 0 ? (
+              <p style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
+                {screenerPeersError
+                  ? `Peers unavailable: ${screenerPeersError}`
+                  : screenerPeers == null ? 'Loading from Screener.in…' : 'No peer data for this instrument.'}
+              </p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="interactive-table">
+                  <thead>
+                    <tr>
+                      {columns.map((col) => {
+                        const active = peersSort.field === col.key;
+                        return (
+                          <th
+                            key={col.key}
+                            onClick={() => sortPeersBy(col.key, col.numeric)}
+                            title={`Sort by ${col.label}`}
+                            style={{ cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none' }}
+                          >
+                            {col.label}
+                            <span style={{ marginLeft: '4px', opacity: active ? 1 : 0.3 }}>
+                              {active ? (peersSort.dir === 'asc' ? '↑' : '↓') : '↕'}
+                            </span>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedPeers.map((p) => (
+                      <tr key={p.slug} style={isSelf(p) ? { background: 'rgba(56,189,248,0.10)' } : undefined}>
+                        <td>
+                          {isSelf(p) ? (
+                            <strong>{p.name}</strong>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openPeer(p.slug)}
+                              title={`Open ${p.name}`}
+                              style={{
+                                background: 'transparent', border: 'none', padding: 0,
+                                font: 'inherit', fontWeight: 'bold', cursor: 'pointer',
+                                color: 'var(--accent)', textAlign: 'left',
+                              }}
+                            >
+                              {p.name}
+                            </button>
+                          )}
+                        </td>
+                        <td>{fmtN(p.cmp)}</td>
+                        <td>{fmtN(p.pe)}</td>
+                        <td>{fmtCr(p.marketCap)}</td>
+                        <td>{fmtN(p.divYield)}</td>
+                        <td>{fmtN(p.npQtr, 0)}</td>
+                        <td style={{ color: pctColor(p.profitVar) }}>{fmtPct(p.profitVar)}</td>
+                        <td>{fmtN(p.salesQtr, 0)}</td>
+                        <td style={{ color: pctColor(p.salesVar) }}>{fmtPct(p.salesVar)}</td>
+                        <td>{fmtN(p.roce)}</td>
+                      </tr>
+                    ))}
+                    {median && (
+                      <tr style={{ borderTop: '2px solid var(--border)' }}>
+                        <td><strong>Median</strong></td>
+                        <td>{fmtN(median.cmp)}</td>
+                        <td>{fmtN(median.pe)}</td>
+                        <td>{fmtCr(median.marketCap)}</td>
+                        <td>{fmtN(median.divYield)}</td>
+                        <td>{fmtN(median.npQtr, 0)}</td>
+                        <td style={{ color: pctColor(median.profitVar) }}>{fmtPct(median.profitVar)}</td>
+                        <td>{fmtN(median.salesQtr, 0)}</td>
+                        <td style={{ color: pctColor(median.salesVar) }}>{fmtPct(median.salesVar)}</td>
+                        <td>{fmtN(median.roce)}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+                <div style={{ marginTop: '0.75rem', fontSize: '0.7rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                  {peers.length} companies in {screenerPeers?.industry || 'this industry'} · current company highlighted · Source: screener.in
+                </div>
+              </div>
+            )}
+          </section>
+        );
+      })()}
 
       {activeTab === 'technicals' && (
         <>

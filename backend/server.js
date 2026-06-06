@@ -2215,7 +2215,11 @@ function parseScreenerCashflow(html) {
     });
   });
 
-  return columns;
+  // Drop columns with no data. Screener emits a blank header column for the
+  // current fiscal year before results are filed (e.g. SCHNEIDER's "Mar 2026"
+  // ahead of FY26 reporting), which would otherwise render as an empty FY bar.
+  const cfFields = Object.values(SCREENER_CASHFLOW_ROW_MAP);
+  return columns.filter(c => cfFields.some(f => c[f] != null));
 }
 
 const screenerCashflowCache = {};
@@ -2239,6 +2243,129 @@ app.get('/api/screener-cashflow/:symbol', async (req, res) => {
     console.error(`[screener-cashflow] ${symbol}:`, err.message);
     res.status(err.status === 404 ? 404 : (err.status ? 502 : 500))
       .json({ error: err.message, fallback: 'yahoo' });
+  }
+});
+
+// ─── Screener peer comparison ────────────────────────────────────
+// Screener's per-company /api/company/{id}/peers/ AJAX endpoint is unreliable
+// for server-side requests (it returns a wrong/empty peer set). Instead we use
+// the company's *industry* page (the deepest `title="Industry"` breadcrumb in
+// the #peers section, e.g. /market/IN08/IN0801/IN080101/IN080101001/) which
+// reliably lists the true sector peers with the same comparison columns:
+// Name · CMP · P/E · Mar Cap(Cr) · Div Yld% · NP Qtr(Cr) · Qtr Profit Var% ·
+// Sales Qtr(Cr) · Qtr Sales Var% · ROCE%, plus a Median row in <tfoot>.
+const SCREENER_FETCH_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
+// Map a peers header cell to a known field. Header text carries units +
+// whitespace (e.g. "Mar Cap\n Rs.Cr."), so match on normalised substrings —
+// this is what makes the parse resilient to screener inserting/reordering
+// columns (vs. reading fixed positions, which would silently mislabel data).
+function peersFieldForHeader(text) {
+  const t = (text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (t.includes('name')) return 'name';
+  if (/\bp\/e\b/.test(t) || t === 'pe') return 'pe';
+  if (t.includes('cmp') || t.includes('price')) return 'cmp';
+  if (t.includes('mar cap') || t.includes('market cap') || t.includes('m.cap')) return 'marketCap';
+  if (t.includes('div yld') || t.includes('div yield') || t.includes('dividend')) return 'divYield';
+  if (t.includes('profit var')) return 'profitVar';
+  if (t.includes('np qtr') || t.includes('net profit')) return 'npQtr';
+  if (t.includes('sales var')) return 'salesVar';
+  if (t.includes('sales qtr') || t.includes('sales')) return 'salesQtr';
+  if (t.includes('roce')) return 'roce';
+  return null;
+}
+
+const PEERS_NUMERIC = ['cmp', 'pe', 'marketCap', 'divYield', 'npQtr', 'profitVar', 'salesQtr', 'salesVar', 'roce'];
+
+function parseScreenerPeers(html) {
+  const $ = cheerio.load(html);
+  // The industry listing table is the one whose rows link to /company/ pages.
+  let table = null;
+  $('table').each((_, t) => {
+    if (!table && $(t).find('tbody a[href^="/company/"]').length > 0) table = $(t);
+  });
+  if (!table) throw new Error('Peer table not found');
+
+  // The industry table has no <thead> — header <th> cells sit in the first
+  // <tr> (and may repeat mid-table). Map field -> column index from that row.
+  const headerRow = table.find('tr').filter((_, tr) => $(tr).find('th').length > 0).first();
+  const colIndex = {};
+  headerRow.find('th').each((i, th) => {
+    const field = peersFieldForHeader($(th).text());
+    if (field && colIndex[field] === undefined) colIndex[field] = i;
+  });
+  // Fail loud if the layout we depend on is no longer recognisable, so the
+  // endpoint reports "unavailable" instead of returning shifted/garbage values.
+  const mappedNumeric = PEERS_NUMERIC.filter(f => colIndex[f] !== undefined);
+  if (colIndex.name === undefined || mappedNumeric.length < 5) {
+    throw new Error('Peer table columns unrecognised — screener layout may have changed');
+  }
+
+  const rowNumbers = (tds) => {
+    const out = {};
+    for (const f of PEERS_NUMERIC) {
+      const idx = colIndex[f];
+      out[f] = (idx === undefined || !tds[idx]) ? null : parseNumberCell($(tds[idx]).text());
+    }
+    return out;
+  };
+
+  const peers = [];
+  table.find('tr').each((_, tr) => {
+    const tds = $(tr).find('td').toArray();
+    if (tds.length <= colIndex.name) return;
+    const nameCell = $(tds[colIndex.name]);
+    const href = nameCell.find('a[href^="/company/"]').attr('href') || '';
+    const slug = (href.match(/\/company\/([^/]+)\//) || [])[1] || null;
+    if (!slug) return;
+    peers.push({ name: nameCell.text().trim().replace(/\s+/g, ' '), slug, ...rowNumbers(tds) });
+  });
+
+  // Sanity: a real industry table has peers carrying at least some numbers.
+  const usable = peers.filter(p => p.cmp != null || p.pe != null || p.marketCap != null).length;
+  if (peers.length === 0 || usable === 0) {
+    throw new Error('Peer table parsed but held no usable data');
+  }
+
+  const footTds = table.find('tfoot tr').first().find('td').toArray();
+  const median = footTds.length > 0 ? rowNumbers(footTds) : null;
+
+  return { peers, median };
+}
+
+const screenerPeersCache = {};
+
+app.get('/api/screener-peers/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const cached = screenerPeersCache[symbol];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) {
+    return res.json({ ...cached.data, cached: true });
+  }
+  try {
+    const { html } = await fetchScreenerHTML(symbol);
+    // Deepest sector breadcrumb = the tightest peer group.
+    const linkMatch = html.match(/href="(\/market\/[^"]+)"[^>]*title="Industry"[^>]*>([^<]+)</);
+    if (!linkMatch) {
+      return res.status(502).json({ error: 'Peer industry not found on screener page' });
+    }
+    const industryUrl = linkMatch[1];
+    const industry = linkMatch[2].trim().replace(/&amp;/g, '&');
+
+    const r = await fetch(`https://www.screener.in${industryUrl}`, { headers: SCREENER_FETCH_HEADERS });
+    if (!r.ok) return res.status(502).json({ error: `Industry page returned ${r.status}` });
+    const { peers, median } = parseScreenerPeers(await r.text());
+    if (peers.length === 0) return res.status(502).json({ error: 'No peers parsed' });
+
+    const payload = { source: 'screener.in', symbol, industry, peers, median };
+    screenerPeersCache[symbol] = { data: payload, ts: Date.now() };
+    res.json({ ...payload, cached: false });
+  } catch (err) {
+    console.error(`[screener-peers] ${symbol}:`, err.message);
+    res.status(err.status === 404 ? 404 : 500).json({ error: err.message });
   }
 });
 
@@ -2291,15 +2418,22 @@ function parseScreenerBalanceSheet(html) {
     });
   });
 
+  // Drop phantom columns that carry no data. Screener emits a blank placeholder
+  // column when a company switches fiscal year-end (e.g. POWERINDIA's "Dec 2021"
+  // stub from its Dec→Mar transition), which would otherwise render as an empty
+  // duplicate FY column next to the real one.
+  const bsFields = Object.values(SCREENER_BS_ROW_MAP);
+  const withData = columns.filter(c => bsFields.some(f => c[f] != null));
+
   // Derive net worth (equity capital + reserves) when both are present —
   // simpler for the UI than recomputing per row.
-  columns.forEach(c => {
+  withData.forEach(c => {
     if (c.equityCapital != null && c.reserves != null) {
       c.netWorth = +(c.equityCapital + c.reserves).toFixed(2);
     }
   });
 
-  return columns;
+  return withData;
 }
 
 const screenerBalanceSheetCache = {};
@@ -2325,15 +2459,34 @@ app.get('/api/screener-balance-sheet/:symbol', async (req, res) => {
     let usedBasis = consolidated ? 'consolidated' : 'standalone';
     let years;
     if (consolidated) {
+      let consolidatedYears = null;
       try {
-        years = await parseBasis(true);
+        consolidatedYears = await parseBasis(true);
       } catch (err) {
         // Consolidated unusable — page missing (404) OR present but empty
-        // (200 shell, no balance-sheet table, e.g. NMDC Steel). Retry standalone
-        // before giving up; many companies only file standalone anyway.
+        // (200 shell, no balance-sheet table, e.g. NMDC Steel). We fall through
+        // to standalone below; many companies only file standalone anyway.
         console.log(`[screener-balance-sheet] ${symbol} consolidated unusable (${err.message}) — falling back to standalone`);
-        years = await parseBasis(false);
-        usedBasis = 'standalone';
+      }
+      // Screener occasionally serves a degenerate single-column consolidated
+      // table (e.g. GVT&D's stale "Dec 2010") while the standalone page carries
+      // the full year history. Treat a one-column consolidated result as suspect
+      // and prefer standalone whenever it actually has more year columns.
+      if (!consolidatedYears || consolidatedYears.length < 2) {
+        try {
+          const standaloneYears = await parseBasis(false);
+          if (!consolidatedYears || standaloneYears.length > consolidatedYears.length) {
+            years = standaloneYears;
+            usedBasis = 'standalone';
+          } else {
+            years = consolidatedYears;
+          }
+        } catch (err) {
+          if (!consolidatedYears) throw err;  // both bases failed — propagate
+          years = consolidatedYears;          // standalone unavailable; keep consolidated
+        }
+      } else {
+        years = consolidatedYears;
       }
     } else {
       years = await parseBasis(false);
