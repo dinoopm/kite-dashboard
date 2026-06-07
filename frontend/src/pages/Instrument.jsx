@@ -329,7 +329,7 @@ function srPriceTag(price, color) {
     return (
       <g>
         <rect x={lx} y={y - 9} width={w} height={18} rx={4} fill="#0f172a" stroke={color} strokeWidth={1} fillOpacity={0.95} />
-        <text x={lx + w / 2} y={y + 1} dominantBaseline="middle" textAnchor="middle" fill={color} fontSize={11} fontWeight={700}>
+        <text x={lx + w / 2} y={y + 1} dominantBaseline="middle" textAnchor="middle" fill="#ffffff" fontSize={11} fontWeight={700}>
           {text}
         </text>
       </g>
