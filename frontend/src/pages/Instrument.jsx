@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts'
 import { format, parseISO } from 'date-fns'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 import AlertRow from '../components/alerts/AlertRow'
@@ -253,6 +253,54 @@ function ShareholdingPanel({ payload, error }) {
   );
 }
 
+// Detect support/resistance from the visible candles. Find swing pivots (a bar
+// whose high/low is the extreme within ±k bars), cluster pivots that sit within
+// ~1.5% of each other into a level (more touches = stronger), then split by the
+// current price: levels below = support, above = resistance. Returns the
+// nearest few on each side so the chart isn't cluttered.
+function computeSupportResistance(data) {
+  if (!Array.isArray(data) || data.length < 20) return { supports: [], resistances: [] };
+  const highs = data.map(d => d.high ?? d.close);
+  const lows = data.map(d => d.low ?? d.close);
+  const k = Math.min(10, Math.max(3, Math.round(data.length / 40)));
+
+  const pivots = [];
+  for (let i = k; i < data.length - k; i++) {
+    let isHigh = true, isLow = true;
+    for (let j = i - k; j <= i + k; j++) {
+      if (highs[j] > highs[i]) isHigh = false;
+      if (lows[j] < lows[i]) isLow = false;
+    }
+    if (isHigh) pivots.push(highs[i]);
+    if (isLow) pivots.push(lows[i]);
+  }
+  if (pivots.length === 0) return { supports: [], resistances: [] };
+
+  // Cluster nearby pivot prices into levels.
+  pivots.sort((a, b) => a - b);
+  const tol = 0.015;
+  const clusters = [];
+  for (const p of pivots) {
+    const last = clusters[clusters.length - 1];
+    const lastAvg = last ? last.sum / last.count : null;
+    if (last && Math.abs(p - lastAvg) / lastAvg <= tol) {
+      last.sum += p; last.count++;
+    } else {
+      clusters.push({ sum: p, count: 1 });
+    }
+  }
+  const levels = clusters.map(c => ({ price: +(c.sum / c.count).toFixed(2), touches: c.count }));
+
+  // Prefer levels touched 2+ times; fall back to all if none repeat.
+  let strong = levels.filter(l => l.touches >= 2);
+  if (strong.length === 0) strong = levels;
+
+  const price = data[data.length - 1].close;
+  const supports = strong.filter(l => l.price < price).sort((a, b) => b.price - a.price).slice(0, 3);
+  const resistances = strong.filter(l => l.price > price).sort((a, b) => a.price - b.price).slice(0, 3);
+  return { supports, resistances };
+}
+
 function Instrument() {
   const { token } = useParams()
   const [searchParams] = useSearchParams()
@@ -329,6 +377,7 @@ function Instrument() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
+  const [showSR, setShowSR] = useState(true) // support/resistance overlay
   const [activeTab, setActiveTab] = useState('technicals')
   // Free-text company notes (persisted per symbol in Supabase).
   const [note, setNote] = useState('')
@@ -774,6 +823,13 @@ function Instrument() {
   }, [token, timeframe])
 
   const tfOptions = ['1D', '1W', '1M', '3M', '6M', '1Y', '2Y', '3Y', '5Y'];
+
+  // Support/resistance levels for the chart overlay (intraday 1D excluded —
+  // pivots there are noise). Recomputed whenever the visible candles change.
+  const sr = useMemo(
+    () => (timeframe === '1D' ? { supports: [], resistances: [] } : computeSupportResistance(data)),
+    [data, timeframe]
+  );
 
   const todayChange = quote ? (quote.last_price - quote.ohlc.close) : null;
   const todayChangePct = quote && quote.ohlc.close ? ((todayChange / quote.ohlc.close) * 100).toFixed(2) : null;
@@ -1322,6 +1378,25 @@ function Instrument() {
                 {tf}
               </button>
             ))}
+            {timeframe !== '1D' && (
+              <button
+                onClick={() => setShowSR(v => !v)}
+                title="Toggle auto-detected support (red) & resistance (blue) levels"
+                style={{
+                  marginLeft: 'auto',
+                  background: showSR ? 'rgba(56,189,248,0.12)' : 'var(--bg-panel)',
+                  color: showSR ? 'var(--accent)' : 'var(--text-secondary)',
+                  border: `1px solid ${showSR ? 'var(--accent)' : 'var(--border)'}`,
+                  borderRadius: '4px',
+                  padding: '0.4rem 0.8rem',
+                  cursor: 'pointer',
+                  fontWeight: showSR ? 'bold' : 'normal',
+                  transition: 'all 0.2s',
+                }}
+              >
+                S/R Levels
+              </button>
+            )}
           </div>
 
           {/* Chart */}
@@ -1343,6 +1418,28 @@ function Instrument() {
                     itemStyle={{ color: 'var(--accent)' }}
                   />
                   <Legend />
+                  {showSR && sr.supports.map(l => (
+                    <ReferenceLine
+                      key={`sup-${l.price}`}
+                      y={l.price}
+                      stroke="#ef4444"
+                      strokeDasharray="5 4"
+                      strokeWidth={1.5}
+                      ifOverflow="extendDomain"
+                      label={{ value: `S ${l.price}`, position: 'insideRight', fill: '#ef4444', fontSize: 11, fontWeight: 700 }}
+                    />
+                  ))}
+                  {showSR && sr.resistances.map(l => (
+                    <ReferenceLine
+                      key={`res-${l.price}`}
+                      y={l.price}
+                      stroke="#3b82f6"
+                      strokeDasharray="5 4"
+                      strokeWidth={1.5}
+                      ifOverflow="extendDomain"
+                      label={{ value: `R ${l.price}`, position: 'insideRight', fill: '#3b82f6', fontSize: 11, fontWeight: 700 }}
+                    />
+                  ))}
                   <Line type="monotone" name="Price" dataKey="close" stroke="var(--accent)" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
