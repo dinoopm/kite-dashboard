@@ -296,9 +296,43 @@ function computeSupportResistance(data) {
   if (strong.length === 0) strong = levels;
 
   const price = data[data.length - 1].close;
-  const supports = strong.filter(l => l.price < price).sort((a, b) => b.price - a.price).slice(0, 3);
-  const resistances = strong.filter(l => l.price > price).sort((a, b) => a.price - b.price).slice(0, 3);
+
+  // Greedily keep the strongest levels that sit at least `minGap` apart, so the
+  // drawn lines and their price tags never bunch up into an unreadable cluster.
+  const minGap = 0.05; // 5% of current price
+  const pickSpaced = (cands) => {
+    const picked = [];
+    for (const l of [...cands].sort((a, b) => b.touches - a.touches)) {
+      if (picked.every(p => Math.abs(p.price - l.price) / price >= minGap)) picked.push(l);
+      if (picked.length >= 3) break;
+    }
+    return picked;
+  };
+  const supports = pickSpaced(strong.filter(l => l.price < price * 0.995))
+    .sort((a, b) => b.price - a.price);
+  const resistances = pickSpaced(strong.filter(l => l.price > price * 1.005))
+    .sort((a, b) => a.price - b.price);
   return { supports, resistances };
+}
+
+// A clean, readable price tag pinned to the right edge of a reference line —
+// solid pill + dark text (like a charting platform's axis label) instead of
+// bare coloured text that's unreadable over the dashed line.
+function srPriceTag(price, color) {
+  return function SRTag({ viewBox }) {
+    const { x, y, width } = viewBox;
+    const text = `₹${price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+    const w = text.length * 6.6 + 14;
+    const lx = x + width - w - 2;
+    return (
+      <g>
+        <rect x={lx} y={y - 9} width={w} height={18} rx={4} fill={color} />
+        <text x={lx + w / 2} y={y + 1} dominantBaseline="middle" textAnchor="middle" fill="#0b1220" fontSize={11} fontWeight={700}>
+          {text}
+        </text>
+      </g>
+    );
+  };
 }
 
 function Instrument() {
@@ -1423,10 +1457,11 @@ function Instrument() {
                       key={`sup-${l.price}`}
                       y={l.price}
                       stroke="#ef4444"
-                      strokeDasharray="5 4"
-                      strokeWidth={1.5}
+                      strokeDasharray="6 5"
+                      strokeWidth={1}
+                      strokeOpacity={0.7}
                       ifOverflow="extendDomain"
-                      label={{ value: `S ${l.price}`, position: 'insideRight', fill: '#ef4444', fontSize: 11, fontWeight: 700 }}
+                      label={srPriceTag(l.price, '#ef4444')}
                     />
                   ))}
                   {showSR && sr.resistances.map(l => (
@@ -1434,10 +1469,11 @@ function Instrument() {
                       key={`res-${l.price}`}
                       y={l.price}
                       stroke="#3b82f6"
-                      strokeDasharray="5 4"
-                      strokeWidth={1.5}
+                      strokeDasharray="6 5"
+                      strokeWidth={1}
+                      strokeOpacity={0.7}
                       ifOverflow="extendDomain"
-                      label={{ value: `R ${l.price}`, position: 'insideRight', fill: '#3b82f6', fontSize: 11, fontWeight: 700 }}
+                      label={srPriceTag(l.price, '#3b82f6')}
                     />
                   ))}
                   <Line type="monotone" name="Price" dataKey="close" stroke="var(--accent)" strokeWidth={2} dot={false} />
