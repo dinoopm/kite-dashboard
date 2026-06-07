@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts'
+import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceDot } from 'recharts'
 import { format, parseISO } from 'date-fns'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 import AlertRow from '../components/alerts/AlertRow'
@@ -297,22 +297,45 @@ function computeSupportResistance(data) {
 
   const price = data[data.length - 1].close;
 
-  // Greedily keep the strongest levels that sit at least `minGap` apart, so the
-  // drawn lines and their price tags never bunch up into an unreadable cluster.
+  // Pick the levels NEAREST the current price first — the support just under
+  // price and the resistance just above it are what a trader acts on, far more
+  // than a distant multi-year base. Keep them at least `minGap` apart so the
+  // lines never bunch into an unreadable cluster.
   const minGap = 0.05; // 5% of current price
-  const pickSpaced = (cands) => {
+  const pickNearest = (cands, descending) => {
+    const sorted = [...cands].sort((a, b) => (descending ? b.price - a.price : a.price - b.price));
     const picked = [];
-    for (const l of [...cands].sort((a, b) => b.touches - a.touches)) {
+    for (const l of sorted) {
       if (picked.every(p => Math.abs(p.price - l.price) / price >= minGap)) picked.push(l);
       if (picked.length >= 3) break;
     }
     return picked;
   };
-  const supports = pickSpaced(strong.filter(l => l.price < price * 0.995))
-    .sort((a, b) => b.price - a.price);
-  const resistances = pickSpaced(strong.filter(l => l.price > price * 1.005))
-    .sort((a, b) => a.price - b.price);
+  const supports = pickNearest(strong.filter(l => l.price < price * 0.995), true);
+  const resistances = pickNearest(strong.filter(l => l.price > price * 1.005), false);
   return { supports, resistances };
+}
+
+// Detect breakout bars: a close that pushes above the highest high of the prior
+// `lookback` bars, where the previous bar had NOT yet cleared that channel — so
+// we flag the candle that initiates each breakout, not every later new high.
+function detectBreakouts(data, lookback = 20) {
+  if (!Array.isArray(data) || data.length < lookback + 2) return [];
+  const highs = data.map(d => d.high ?? d.close);
+  const maxBefore = (end) => {
+    let m = -Infinity;
+    for (let j = Math.max(0, end - lookback); j < end; j++) if (highs[j] > m) m = highs[j];
+    return m;
+  };
+  const out = [];
+  let last = -Infinity;
+  for (let i = lookback; i < data.length; i++) {
+    if (data[i].close > maxBefore(i) && data[i - 1].close <= maxBefore(i - 1) && i - last >= lookback) {
+      out.push({ index: i, date: data[i].date, price: data[i].close });
+      last = i; // cooldown of one channel width keeps markers from bunching up
+    }
+  }
+  return out;
 }
 
 // A clean, readable price tag pinned to the right edge of a reference line —
@@ -421,6 +444,7 @@ function Instrument() {
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
   const [showSR, setShowSR] = useState(true) // support/resistance overlay
+  const [showBreakouts, setShowBreakouts] = useState(true) // breakout markers
   const [activeTab, setActiveTab] = useState('technicals')
   // Free-text company notes (persisted per symbol in Supabase).
   const [note, setNote] = useState('')
@@ -873,6 +897,11 @@ function Instrument() {
     () => (timeframe === '1D' ? { supports: [], resistances: [] } : computeSupportResistance(data)),
     [data, timeframe]
   );
+  const breakouts = useMemo(() => {
+    if (timeframe === '1D') return [];
+    const lb = Math.min(40, Math.max(12, Math.round(data.length / 20)));
+    return detectBreakouts(data, lb);
+  }, [data, timeframe]);
 
   const todayChange = quote ? (quote.last_price - quote.ohlc.close) : null;
   const todayChangePct = quote && quote.ohlc.close ? ((todayChange / quote.ohlc.close) * 100).toFixed(2) : null;
@@ -1423,10 +1452,28 @@ function Instrument() {
             ))}
             {timeframe !== '1D' && (
               <button
-                onClick={() => setShowSR(v => !v)}
-                title="Toggle auto-detected support (red) & resistance (blue) levels"
+                onClick={() => setShowBreakouts(v => !v)}
+                title="Toggle breakout markers — where price closed above its prior 20-bar high"
                 style={{
                   marginLeft: 'auto',
+                  background: showBreakouts ? 'rgba(251,191,36,0.14)' : 'var(--bg-panel)',
+                  color: showBreakouts ? '#fbbf24' : 'var(--text-secondary)',
+                  border: `1px solid ${showBreakouts ? '#fbbf24' : 'var(--border)'}`,
+                  borderRadius: '4px',
+                  padding: '0.4rem 0.8rem',
+                  cursor: 'pointer',
+                  fontWeight: showBreakouts ? 'bold' : 'normal',
+                  transition: 'all 0.2s',
+                }}
+              >
+                ▲ Breakouts
+              </button>
+            )}
+            {timeframe !== '1D' && (
+              <button
+                onClick={() => setShowSR(v => !v)}
+                title="Toggle auto-detected support (red) & resistance (green) levels"
+                style={{
                   background: showSR ? 'rgba(56,189,248,0.12)' : 'var(--bg-panel)',
                   color: showSR ? 'var(--accent)' : 'var(--text-secondary)',
                   border: `1px solid ${showSR ? 'var(--accent)' : 'var(--border)'}`,
@@ -1491,6 +1538,18 @@ function Instrument() {
                       strokeOpacity={0.85}
                       ifOverflow="extendDomain"
                       label={srPriceTag(l.price, '#4ade80')}
+                    />
+                  ))}
+                  {showBreakouts && breakouts.map((b, idx) => (
+                    <ReferenceDot
+                      key={`bo-${b.index}`}
+                      x={b.date}
+                      y={b.price}
+                      ifOverflow="extendDomain"
+                      shape={({ cx, cy }) => (
+                        <path d={`M ${cx} ${cy - 9} L ${cx - 6} ${cy + 3} L ${cx + 6} ${cy + 3} Z`} fill="#fbbf24" stroke="#0f172a" strokeWidth={1} />
+                      )}
+                      label={idx === breakouts.length - 1 ? { value: 'Breakout', position: 'top', fill: '#fbbf24', fontSize: 10, fontWeight: 700 } : undefined}
                     />
                   ))}
                   <Line type="monotone" name="Price" dataKey="close" stroke="var(--accent)" strokeWidth={2} dot={false} />
