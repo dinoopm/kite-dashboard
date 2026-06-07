@@ -330,6 +330,12 @@ function Instrument() {
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
   const [activeTab, setActiveTab] = useState('technicals')
+  // Free-text company notes (persisted per symbol in Supabase).
+  const [note, setNote] = useState('')
+  const [noteSavedAt, setNoteSavedAt] = useState(null)
+  const [noteStatus, setNoteStatus] = useState('idle') // idle | loading | saving | saved | error
+  const [noteError, setNoteError] = useState(null)
+  const noteLoadedRef = useRef('')  // last value loaded/saved from server, to detect dirty
   // cashflowType toggle removed — screener has only annual cashflow.
   // Cashflow tab sub-view: bar chart vs. data table (toggled like a tab).
   const [cashflowView, setCashflowView] = useState('chart') // 'chart' | 'table'
@@ -634,6 +640,50 @@ function Instrument() {
     return () => controller.abort();
   }, [symbol]);
 
+  // Load the saved note for this symbol.
+  useEffect(() => {
+    if (!symbol) return;
+    setNote(''); setNoteError(null); setNoteSavedAt(null); noteLoadedRef.current = '';
+    setNoteStatus('loading');
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetchWithAbort(`/api/notes/${encodeURIComponent(symbol)}`, { signal: controller.signal });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Failed to load note (${res.status})`);
+        setNote(data.note || '');
+        noteLoadedRef.current = data.note || '';
+        setNoteSavedAt(data.updatedAt || null);
+        setNoteStatus('idle');
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        setNoteError(e.message);
+        setNoteStatus('error');
+      }
+    })();
+    return () => controller.abort();
+  }, [symbol]);
+
+  const saveNote = async () => {
+    if (!symbol) return;
+    setNoteStatus('saving'); setNoteError(null);
+    try {
+      const res = await fetch(`/api/notes/${encodeURIComponent(symbol)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Failed to save (${res.status})`);
+      noteLoadedRef.current = data.note ?? note;
+      setNoteSavedAt(data.updatedAt || new Date().toISOString());
+      setNoteStatus('saved');
+    } catch (e) {
+      setNoteError(e.message);
+      setNoteStatus('error');
+    }
+  };
+
   // (Yahoo /api/cashflow fetch was here — removed when both Quarterly Results
   // and Cashflow Chart switched to screener.in. Backend route stays around
   // for now in case anything else hits it.)
@@ -928,6 +978,22 @@ function Instrument() {
         >
           Peers
         </button>
+        <button
+          onClick={() => setActiveTab('notes')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'notes' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'notes' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '0.5rem 1rem',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'notes' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+            fontSize: '1rem'
+          }}
+        >
+          Notes
+        </button>
       </div>
 
       {activeTab === 'peers' && (() => {
@@ -1061,6 +1127,65 @@ function Instrument() {
                 </div>
               </div>
             )}
+          </section>
+        );
+      })()}
+
+      {activeTab === 'notes' && (() => {
+        const dirty = note !== noteLoadedRef.current;
+        const statusText = noteStatus === 'loading' ? 'Loading…'
+          : noteStatus === 'saving' ? 'Saving…'
+          : noteStatus === 'error' ? `Error: ${noteError}`
+          : dirty ? 'Unsaved changes'
+          : noteSavedAt ? `Saved ${new Date(noteSavedAt).toLocaleString('en-IN')}`
+          : 'No note yet';
+        const statusColor = noteStatus === 'error' ? '#ef4444'
+          : dirty ? '#f59e0b'
+          : noteStatus === 'saved' || noteSavedAt ? '#10b981'
+          : 'var(--text-secondary)';
+        return (
+          <section className="glass-panel" style={{ marginTop: '1rem', padding: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Notes</h2>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  Your private notes on {symbol}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span style={{ fontSize: '0.72rem', color: statusColor }}>{statusText}</span>
+                <button
+                  onClick={saveNote}
+                  disabled={!dirty || noteStatus === 'saving' || noteStatus === 'loading'}
+                  style={{
+                    padding: '0.45rem 1.1rem', borderRadius: '6px', border: 'none',
+                    background: (!dirty || noteStatus === 'saving') ? 'rgba(56,189,248,0.15)' : 'var(--accent)',
+                    color: (!dirty || noteStatus === 'saving') ? 'var(--text-secondary)' : '#04141f',
+                    fontWeight: 700, fontSize: '0.85rem',
+                    cursor: (!dirty || noteStatus === 'saving') ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') saveNote(); }}
+              placeholder={`Write your thesis, catalysts, price levels, or anything to remember about ${symbol}…`}
+              disabled={noteStatus === 'loading'}
+              style={{
+                width: '100%', minHeight: '320px', resize: 'vertical',
+                padding: '1rem', borderRadius: '8px',
+                border: '1px solid var(--border)', background: 'var(--bg-dark)',
+                color: 'var(--text-primary)', fontSize: '0.9rem', lineHeight: 1.6,
+                fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box',
+              }}
+            />
+            <div style={{ marginTop: '0.5rem', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+              Tip: press ⌘/Ctrl + Enter to save.
+            </div>
           </section>
         );
       })()}

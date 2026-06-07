@@ -3380,6 +3380,34 @@ app.get('/api/themes/:id/alerts', async (req, res) => {
   }
 });
 
+// ─── Instrument notes (free-text per company) ───────────────────
+// One note per trading symbol, persisted in Supabase (instrument_notes).
+// Run `node migrate_notes.js` once to create the table.
+app.get('/api/notes/:symbol', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const { data, error } = await supabase
+      .from('instrument_notes').select('note, updated_at').eq('symbol', symbol).maybeSingle();
+    if (error) throw new Error(error.message);
+    res.json({ symbol, note: data?.note || '', updatedAt: data?.updated_at || null });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/notes/:symbol', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const symbol = req.params.symbol.toUpperCase();
+  const note = (req.body?.note ?? '').toString();
+  try {
+    const { data, error } = await supabase
+      .from('instrument_notes')
+      .upsert({ symbol, note, updated_at: new Date().toISOString() }, { onConflict: 'symbol' })
+      .select('note, updated_at').single();
+    if (error) throw new Error(error.message);
+    res.json({ symbol, note: data.note, updatedAt: data.updated_at });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Express error middleware: when a route throws an Error with statusCode=429
 // (from `detectRateLimit` above), surface it as a proper 429 + Retry-After
 // header so the frontend's useFetchWithAbort can back off cleanly.
