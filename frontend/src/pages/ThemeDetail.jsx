@@ -76,6 +76,8 @@ export default function ThemeDetail() {
   const [loadedCount, setLoadedCount] = useState(0);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('stocks');
+  // Stocks-table sort. key=null keeps the theme's natural (insertion) order.
+  const [sortConfig, setSortConfig] = useState({ key: null, dir: 'desc' });
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
 
@@ -273,6 +275,46 @@ export default function ThemeDetail() {
   const th = { padding: '0.6rem 0.6rem', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.7rem', letterSpacing: '0.4px', textTransform: 'uppercase', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' };
   const td = { padding: '0.7rem 0.6rem', borderBottom: '1px solid rgba(255,255,255,0.04)', whiteSpace: 'nowrap' };
 
+  // Click a header to sort; click again to flip direction. Text sorts ascending
+  // by default, everything else descending (high-to-low). Nulls always sink.
+  const requestSort = (key) => setSortConfig(prev =>
+    prev.key === key
+      ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: key === 'name' ? 'asc' : 'desc' });
+
+  const sortedStockData = (() => {
+    if (!sortConfig.key) return stockData;
+    const { key, dir } = sortConfig;
+    return [...stockData].sort((a, b) => {
+      let va = a[key];
+      let vb = b[key];
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+      if (va < vb) return dir === 'asc' ? -1 : 1;
+      if (va > vb) return dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  })();
+
+  const sortableTh = (label, key, align = 'right') => {
+    const active = sortConfig.key === key;
+    return (
+      <th
+        key={key}
+        onClick={() => requestSort(key)}
+        title={`Sort by ${label}`}
+        style={{ ...th, textAlign: align, cursor: 'pointer', userSelect: 'none' }}
+      >
+        {label}
+        <span style={{ marginLeft: '4px', opacity: active ? 1 : 0.3 }}>
+          {active ? (sortConfig.dir === 'asc' ? '↑' : '↓') : '↕'}
+        </span>
+      </th>
+    );
+  };
+
   return (
     <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -380,17 +422,17 @@ export default function ThemeDetail() {
           <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.85rem' }}>
             <thead>
               <tr>
-                <th style={{ ...th, textAlign: 'left' }}>Name</th>
-                <th style={{ ...th, textAlign: 'right' }}>Price</th>
-                {RET_COLS.map(c => <th key={c} style={{ ...th, textAlign: 'right' }}>{c}</th>)}
-                <th style={{ ...th, textAlign: 'right' }}>RSI</th>
-                <th style={{ ...th, textAlign: 'center' }}>SMA 20</th>
-                <th style={{ ...th, textAlign: 'center' }}>SMA 200</th>
+                {sortableTh('Name', 'name', 'left')}
+                {sortableTh('Price', 'price', 'right')}
+                {RET_COLS.map(c => sortableTh(c, c, 'right'))}
+                {sortableTh('RSI', 'rsi14', 'right')}
+                {sortableTh('SMA 20', 'aboveSma20', 'center')}
+                {sortableTh('SMA 200', 'aboveSma200', 'center')}
                 <th style={{ ...th, textAlign: 'center' }} />
               </tr>
             </thead>
             <tbody>
-              {stockData.map(s => (
+              {sortedStockData.map(s => (
                 <tr key={s.key}>
                   <td style={{ ...td, textAlign: 'left', cursor: s.token ? 'pointer' : 'default' }}
                     onClick={() => s.token && navigate(`/instrument/${s.token}?symbol=${encodeURIComponent(s.symbol)}`)}>
