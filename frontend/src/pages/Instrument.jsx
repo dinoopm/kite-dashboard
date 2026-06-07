@@ -294,28 +294,30 @@ function computeSupportResistance(data) {
 
   const price = data[data.length - 1].close;
 
-  // Pick the levels NEAREST the current price first — the support just under
-  // price and the resistance just above it are what a trader acts on, far more
-  // than a distant multi-year base. Keep them at least `minGap` apart so the
-  // lines never bunch into an unreadable cluster.
-  //
-  // We draw from ALL swing-pivot clusters, not just the ones touched 2+ times:
-  // a fast trender (e.g. TD Power, +160%/yr) prints each level only once on the
-  // way up, so a strict repeat-touch filter would leave nothing near price and
-  // no resistance below the high. Single pivots from the ±k window are genuine
-  // turning points, and the spacing + cap keep the result uncluttered.
+  // Score each level by how ACTIONABLE it is: nearness to the current price plus
+  // how many times it's been tested. This is a hybrid — it prefers strong, near
+  // levels (the ones that matter on a range-bound name) yet still surfaces recent
+  // single-touch swings to fill the gap on a fast trender (e.g. TD Power), all
+  // without letting distant bases or minor blips dominate. Each level keeps its
+  // touch count so the chart can draw stronger levels more prominently.
   const minGap = 0.05; // 5% of current price
-  const pickNearest = (cands, descending) => {
-    const sorted = [...cands].sort((a, b) => (descending ? b.price - a.price : a.price - b.price));
+  const scoreOf = (l) => {
+    const dist = Math.abs(l.price - price) / price;
+    const nearness = Math.max(0, 1 - dist / 0.6);  // fades out ~60% away from price
+    const strength = Math.min(l.touches, 4) / 4;   // 0.25 (1 touch) … 1 (4+ touches)
+    return 0.6 * nearness + 0.4 * strength;
+  };
+  const pickSide = (cands, descending) => {
+    const ranked = [...cands].sort((a, b) => scoreOf(b) - scoreOf(a));
     const picked = [];
-    for (const l of sorted) {
+    for (const l of ranked) {
       if (picked.every(p => Math.abs(p.price - l.price) / price >= minGap)) picked.push(l);
       if (picked.length >= 4) break;
     }
-    return picked;
+    return picked.sort((a, b) => (descending ? b.price - a.price : a.price - b.price));
   };
-  const supports = pickNearest(levels.filter(l => l.price < price * 0.995), true);
-  const resistances = pickNearest(levels.filter(l => l.price > price * 1.005), false);
+  const supports = pickSide(levels.filter(l => l.price < price * 0.995), true);
+  const resistances = pickSide(levels.filter(l => l.price > price * 1.005), false);
   return { supports, resistances };
 }
 
@@ -410,16 +412,18 @@ function detectBreakoutsAdvanced(data, { volMult = 1.5, confirmPeriods = 3, stri
 // A clean, readable price tag pinned to the right edge of a reference line —
 // solid pill + dark text (like a charting platform's axis label) instead of
 // bare coloured text that's unreadable over the dashed line.
-function srPriceTag(price, color) {
+function srPriceTag(price, color, opacity = 1) {
   return function SRTag({ viewBox }) {
     const { x, y, width } = viewBox;
     const text = `₹${price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
     const w = text.length * 6.6 + 16;
     const lx = x + width + 6; // sit in the right margin, flush to the chart edge
     // Subtle slate pill with a coloured border + coloured text — reads like a
-    // charting-platform axis tag rather than a loud solid sticker.
+    // charting-platform axis tag rather than a loud solid sticker. Opacity drops
+    // for weaker (fewer-touch) levels so the chart never implies a one-touch
+    // blip is as significant as a multi-touch base.
     return (
-      <g>
+      <g opacity={opacity}>
         <rect x={lx} y={y - 9} width={w} height={18} rx={4} fill="#0f172a" stroke={color} strokeWidth={1} fillOpacity={0.95} />
         <text x={lx + w / 2} y={y + 1} dominantBaseline="middle" textAnchor="middle" fill="#ffffff" fontSize={11} fontWeight={700}>
           {text}
@@ -427,6 +431,13 @@ function srPriceTag(price, color) {
       </g>
     );
   };
+}
+
+// Line/tag emphasis by how many times a level has been tested.
+function srStrength(touches) {
+  if (touches >= 3) return { width: 2, opacity: 0.95, tag: 1 };
+  if (touches === 2) return { width: 1.5, opacity: 0.8, tag: 0.85 };
+  return { width: 1, opacity: 0.5, tag: 0.6 }; // single-touch swing — drawn faint
 }
 
 // Compact axis date: "Dec 19, 2025" → "Dec '25". Day-level precision lives in
@@ -1657,30 +1668,36 @@ function Instrument() {
                     itemStyle={{ color: 'var(--accent)' }}
                   />
                   <Legend />
-                  {showSR && sr.supports.map(l => (
-                    <ReferenceLine
-                      key={`sup-${l.price}`}
-                      y={l.price}
-                      stroke="#f87171"
-                      strokeDasharray="2 4"
-                      strokeWidth={1.5}
-                      strokeOpacity={0.85}
-                      ifOverflow="extendDomain"
-                      label={srPriceTag(l.price, '#f87171')}
-                    />
-                  ))}
-                  {showSR && sr.resistances.map(l => (
-                    <ReferenceLine
-                      key={`res-${l.price}`}
-                      y={l.price}
-                      stroke="#4ade80"
-                      strokeDasharray="2 4"
-                      strokeWidth={1.5}
-                      strokeOpacity={0.85}
-                      ifOverflow="extendDomain"
-                      label={srPriceTag(l.price, '#4ade80')}
-                    />
-                  ))}
+                  {showSR && sr.supports.map(l => {
+                    const st = srStrength(l.touches);
+                    return (
+                      <ReferenceLine
+                        key={`sup-${l.price}`}
+                        y={l.price}
+                        stroke="#f87171"
+                        strokeDasharray="2 4"
+                        strokeWidth={st.width}
+                        strokeOpacity={st.opacity}
+                        ifOverflow="extendDomain"
+                        label={srPriceTag(l.price, '#f87171', st.tag)}
+                      />
+                    );
+                  })}
+                  {showSR && sr.resistances.map(l => {
+                    const st = srStrength(l.touches);
+                    return (
+                      <ReferenceLine
+                        key={`res-${l.price}`}
+                        y={l.price}
+                        stroke="#4ade80"
+                        strokeDasharray="2 4"
+                        strokeWidth={st.width}
+                        strokeOpacity={st.opacity}
+                        ifOverflow="extendDomain"
+                        label={srPriceTag(l.price, '#4ade80', st.tag)}
+                      />
+                    );
+                  })}
                   {showBreakouts && breakouts.map((b) => {
                     const isFail = b.status === 'failed';
                     const isPending = b.status === 'pending';
@@ -1729,6 +1746,7 @@ function Instrument() {
                 <>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><span style={{ color: '#f87171', letterSpacing: '-1px' }}>┈</span> Support</span>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><span style={{ color: '#4ade80', letterSpacing: '-1px' }}>┈</span> Resistance</span>
+                  <span style={{ opacity: 0.8 }}>(brighter line = more tested)</span>
                 </>
               )}
               <span style={{ marginLeft: 'auto', fontStyle: 'italic', opacity: 0.8 }}>Hover any marker for its volume, RSI &amp; hold details</span>
