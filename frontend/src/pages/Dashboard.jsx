@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import VixWidget from '../components/VixWidget'
+import EyeIcon from '../components/EyeIcon'
 
 function Dashboard() {
   const [data, setData] = useState({
@@ -176,7 +177,7 @@ function Dashboard() {
             className="glass-panel"
             style={{ padding: '0.6rem 1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: '30px', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 600, boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}
           >
-            <span style={{ fontSize: '1rem' }}>{hideAmounts ? '🙈' : '👁️'}</span>
+            <EyeIcon off={hideAmounts} />
             {hideAmounts ? 'Show' : 'Hide'}
           </button>
           <div className="glass-panel" style={{ padding: '0.6rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.75rem', borderRadius: '30px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}>

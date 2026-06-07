@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import EyeIcon from '../components/EyeIcon'
 
 function Portfolio() {
   const [profile, setProfile] = useState(null)
@@ -286,7 +287,7 @@ function Portfolio() {
               gap: '0.4rem',
             }}
           >
-            <span style={{ fontSize: '1rem' }}>{hideAmounts ? '🙈' : '👁️'}</span>
+            <EyeIcon off={hideAmounts} />
             {hideAmounts ? 'Show' : 'Hide'}
           </button>
           <button
