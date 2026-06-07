@@ -316,9 +316,13 @@ function computeSupportResistance(data) {
   return { supports, resistances };
 }
 
-// Detect breakout bars: a close that pushes above the highest high of the prior
-// `lookback` bars, where the previous bar had NOT yet cleared that channel — so
-// we flag the candle that initiates each breakout, not every later new high.
+// Detect breakout bars: a close that pushes DECISIVELY (by `margin`) above the
+// highest high of the prior `lookback` bars, where the previous bar had NOT yet
+// cleared that channel — so we flag the candle that initiates each breakout, not
+// every later new high. Each breakout is then classified by follow-through:
+//   held    — price was still above the broken level `look` bars later
+//   failed  — price fell back below it (a fakeout)
+//   pending — too recent to judge
 function detectBreakouts(data, lookback = 20) {
   if (!Array.isArray(data) || data.length < lookback + 2) return [];
   const highs = data.map(d => d.high ?? d.close);
@@ -327,11 +331,17 @@ function detectBreakouts(data, lookback = 20) {
     for (let j = Math.max(0, end - lookback); j < end; j++) if (highs[j] > m) m = highs[j];
     return m;
   };
+  const margin = 0.012;                               // decisive close, not a marginal poke
+  const look = Math.max(5, Math.round(lookback / 4)); // follow-through window
   const out = [];
   let last = -Infinity;
   for (let i = lookback; i < data.length; i++) {
-    if (data[i].close > maxBefore(i) && data[i - 1].close <= maxBefore(i - 1) && i - last >= lookback) {
-      out.push({ index: i, date: data[i].date, price: data[i].close });
+    const ch = maxBefore(i);
+    if (data[i].close > ch * (1 + margin) && data[i - 1].close <= maxBefore(i - 1) && i - last >= lookback) {
+      const avail = Math.min(look, data.length - 1 - i);
+      const endClose = avail > 0 ? data[i + avail].close : data[i].close;
+      const status = avail < 3 ? 'pending' : (endClose >= ch ? 'held' : 'failed');
+      out.push({ index: i, date: data[i].date, price: data[i].close, status });
       last = i; // cooldown of one channel width keeps markers from bunching up
     }
   }
@@ -899,7 +909,8 @@ function Instrument() {
   );
   const breakouts = useMemo(() => {
     if (timeframe === '1D') return [];
-    const lb = Math.min(40, Math.max(12, Math.round(data.length / 20)));
+    // Longer channel = fewer, more significant breakouts.
+    const lb = Math.min(45, Math.max(15, Math.round(data.length / 18)));
     return detectBreakouts(data, lb);
   }, [data, timeframe]);
 
@@ -1540,18 +1551,21 @@ function Instrument() {
                       label={srPriceTag(l.price, '#4ade80')}
                     />
                   ))}
-                  {showBreakouts && breakouts.map((b, idx) => (
-                    <ReferenceDot
-                      key={`bo-${b.index}`}
-                      x={b.date}
-                      y={b.price}
-                      ifOverflow="extendDomain"
-                      shape={({ cx, cy }) => (
-                        <path d={`M ${cx} ${cy - 9} L ${cx - 6} ${cy + 3} L ${cx + 6} ${cy + 3} Z`} fill="#fbbf24" stroke="#0f172a" strokeWidth={1} />
-                      )}
-                      label={idx === breakouts.length - 1 ? { value: 'Breakout', position: 'top', fill: '#fbbf24', fontSize: 10, fontWeight: 700 } : undefined}
-                    />
-                  ))}
+                  {showBreakouts && breakouts.map((b, idx) => {
+                    const c = b.status === 'held' ? '#22c55e' : b.status === 'failed' ? '#ef4444' : '#fbbf24';
+                    return (
+                      <ReferenceDot
+                        key={`bo-${b.index}`}
+                        x={b.date}
+                        y={b.price}
+                        ifOverflow="extendDomain"
+                        shape={({ cx, cy }) => (
+                          <path d={`M ${cx} ${cy - 9} L ${cx - 6} ${cy + 3} L ${cx + 6} ${cy + 3} Z`} fill={c} stroke="#0f172a" strokeWidth={1} />
+                        )}
+                        label={idx === breakouts.length - 1 ? { value: `Breakout · ${b.status}`, position: 'top', fill: c, fontSize: 10, fontWeight: 700 } : undefined}
+                      />
+                    );
+                  })}
                   <Line type="monotone" name="Price" dataKey="close" stroke="var(--accent)" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
