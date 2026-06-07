@@ -354,6 +354,7 @@ function detectBreakoutsAdvanced(data, { volMult = 1.5, confirmPeriods = 3, stri
   const highs = data.map(d => d.high ?? d.close);
   const closes = data.map(d => d.close);
   const vols = data.map(d => d.volume ?? 0);
+  const hasVolume = vols.some(v => v > 0); // indices report 0 volume — bypass the gate
   const rsi = rsi14Series(closes);
   const VOL_P = 20;
   const volSMA = (i) => {
@@ -374,10 +375,14 @@ function detectBreakoutsAdvanced(data, { volMult = 1.5, confirmPeriods = 3, stri
     // Trigger: this bar clears the channel that the previous bar hadn't.
     if (!(closes[i] > level && closes[i - 1] <= maxBefore(i - 1))) continue;
     if (i - last < cooldown) continue;
-    // Volume confirmation.
-    const vsma = volSMA(i);
-    const volX = vsma ? vols[i] / vsma : null;
-    if (volX == null || volX < volMult) continue;
+    // Volume confirmation — skipped for instruments with no volume (indices),
+    // so their breakouts still surface on price + time + momentum.
+    let volX = null;
+    if (hasVolume) {
+      const vsma = volSMA(i);
+      volX = vsma ? vols[i] / vsma : null;
+      if (volX == null || volX < volMult) continue;
+    }
     // Momentum filter (optional).
     const r = rsi[i];
     if (strictMomentum && !(r != null && r >= BREAKOUT_RSI_MIN)) continue;
@@ -1582,6 +1587,7 @@ function Instrument() {
             const nConfirmed = breakouts.filter(b => b.status === 'confirmed').length;
             const nFailed = breakouts.filter(b => b.status === 'failed').length;
             const nPending = breakouts.filter(b => b.status === 'pending').length;
+            const hasVolume = data.some(d => d.volume > 0); // false for indices
             const labelStyle = { display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: '170px' };
             const capStyle = { fontSize: '0.72rem', color: 'var(--text-secondary)' };
             return (
@@ -1593,12 +1599,13 @@ function Instrument() {
                 >
                   Breakout Engine ⓘ
                 </span>
-                <label style={labelStyle}>
+                <label style={{ ...labelStyle, opacity: hasVolume ? 1 : 0.5 }}>
                   <span style={capStyle}>
                     Volume ≥ <strong style={{ color: 'var(--accent)' }}>{volMult.toFixed(1)}×</strong> 20-bar avg
                     <span className="info-icon" title="A real breakout usually comes on heavy volume. Only flag breakouts whose volume is at least this many times the 20-day average. Higher = fewer, higher-conviction signals.">{' '}ⓘ</span>
                   </span>
-                  <input type="range" min="1" max="3" step="0.1" value={volMult} onChange={e => setVolMult(+e.target.value)} style={{ accentColor: '#38bdf8', cursor: 'pointer' }} />
+                  <input type="range" min="1" max="3" step="0.1" value={volMult} disabled={!hasVolume} onChange={e => setVolMult(+e.target.value)} style={{ accentColor: '#38bdf8', cursor: hasVolume ? 'pointer' : 'not-allowed' }} />
+                  {!hasVolume && <span style={{ fontSize: '0.65rem', color: '#fbbf24' }}>No volume for indices — filter off</span>}
                 </label>
                 <label style={labelStyle}>
                   <span style={capStyle}>
