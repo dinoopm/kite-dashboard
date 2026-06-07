@@ -12,6 +12,13 @@ function Dashboard() {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Privacy toggle — hide invested amounts and P&L (persisted across sessions).
+  const [hideAmounts, setHideAmounts] = useState(() => localStorage.getItem('hideAmounts') === '1');
+  const toggleHideAmounts = () => setHideAmounts(prev => {
+    const next = !prev;
+    localStorage.setItem('hideAmounts', next ? '1' : '0');
+    return next;
+  });
 
   const fetchData = async (signal) => {
     try {
@@ -151,6 +158,8 @@ function Dashboard() {
   const openingBalance = marginsObj?.equity?.available?.opening_balance || 0;
 
   const fmt = (num) => num.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  // When privacy mode is on, replace a displayed monetary/return token with dots.
+  const priv = (display) => (hideAmounts ? '••••••' : display);
 
   return (
     <div className="dashboard-layout">
@@ -160,10 +169,21 @@ function Dashboard() {
           <h1 style={{ fontSize: '2.5rem', margin: '0 0 0.5rem 0', background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Dashboard</h1>
           <p style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-secondary)' }}>Welcome back, <strong style={{ color: 'var(--text-primary)' }}>{data.profile?.user_name || "Trader"}</strong></p>
         </div>
-        <div className="glass-panel" style={{ padding: '0.6rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.75rem', borderRadius: '30px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}>
-          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--success)', boxShadow: '0 0 10px var(--success)' }}></div>
-          <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>User ID:</span>
-          <strong style={{ letterSpacing: '0.05em' }}>{data.profile?.user_id}</strong>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <button
+            onClick={toggleHideAmounts}
+            title={hideAmounts ? 'Show amounts' : 'Hide amounts'}
+            className="glass-panel"
+            style={{ padding: '0.6rem 1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: '30px', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: 600, boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}
+          >
+            <span style={{ fontSize: '1rem' }}>{hideAmounts ? '🙈' : '👁️'}</span>
+            {hideAmounts ? 'Show' : 'Hide'}
+          </button>
+          <div className="glass-panel" style={{ padding: '0.6rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.75rem', borderRadius: '30px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}>
+            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--success)', boxShadow: '0 0 10px var(--success)' }}></div>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>User ID:</span>
+            <strong style={{ letterSpacing: '0.05em' }}>{data.profile?.user_id}</strong>
+          </div>
         </div>
       </header>
 
@@ -202,19 +222,19 @@ function Dashboard() {
         <div className="grid">
           <div className="glass-panel stat-card" style={{ padding: '1.5rem', borderLeft: '4px solid var(--text-secondary)' }}>
             <span className="label">Total Invested</span>
-            <span className="value">₹{fmt(totalInv)}</span>
+            <span className="value">{priv(`₹${fmt(totalInv)}`)}</span>
           </div>
           <div className="glass-panel stat-card" style={{ padding: '1.5rem', borderLeft: '4px solid var(--accent)' }}>
             <span className="label">Total Current Value</span>
-            <span className="value" style={{ color: 'var(--accent)' }}>₹{fmt(totalVal)}</span>
+            <span className="value" style={{ color: 'var(--accent)' }}>{priv(`₹${fmt(totalVal)}`)}</span>
           </div>
           <div className="glass-panel stat-card" style={{ padding: '1.5rem', borderLeft: `4px solid ${totalPl >= 0 ? 'var(--success)' : 'var(--danger)'}` }}>
             <span className="label">Total P&L</span>
             <span className={`value ${totalPl >= 0 ? 'positive' : 'negative'}`}>
-              {totalPl >= 0 ? '+' : ''}₹{fmt(totalPl)}
+              {priv(`${totalPl >= 0 ? '+' : ''}₹${fmt(totalPl)}`)}
             </span>
             <span className={`label ${totalPl >= 0 ? 'positive' : 'negative'}`} style={{ marginTop: '0.25rem', marginBottom: 0, textTransform: 'none' }}>
-              {totalPl >= 0 ? '▲' : '▼'} {totalPlPct}% Overall Return
+              {priv(`${totalPl >= 0 ? '▲' : '▼'} ${totalPlPct}% Overall Return`)}
             </span>
           </div>
         </div>
@@ -235,17 +255,17 @@ function Dashboard() {
           <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '0' }} />
           <div className="stat-card" style={{ marginTop: '0.5rem' }}>
             <span className="label">Current Value</span>
-            <span className="value" style={{ fontSize: '1.75rem' }}>₹{fmt(totalStockVal)}</span>
+            <span className="value" style={{ fontSize: '1.75rem' }}>{priv(`₹${fmt(totalStockVal)}`)}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', marginTop: 'auto' }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Invested</span>
-              <span style={{ fontWeight: 500 }}>₹{fmt(totalStockInv)}</span>
+              <span style={{ fontWeight: 500 }}>{priv(`₹${fmt(totalStockInv)}`)}</span>
             </div>
             <div style={{ textAlign: 'right' }}>
               <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block' }}>P&L</span>
               <strong className={stockPl >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.95rem' }}>
-                {stockPl >= 0 ? '▲' : '▼'} ₹{fmt(Math.abs(stockPl))} ({stockPlPct}%)
+                {priv(`${stockPl >= 0 ? '▲' : '▼'} ₹${fmt(Math.abs(stockPl))} (${stockPlPct}%)`)}
               </strong>
             </div>
           </div>
@@ -260,17 +280,17 @@ function Dashboard() {
           <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '0' }} />
           <div className="stat-card" style={{ marginTop: '0.5rem' }}>
             <span className="label">Current Value</span>
-            <span className="value" style={{ fontSize: '1.75rem' }}>₹{fmt(totalMfVal)}</span>
+            <span className="value" style={{ fontSize: '1.75rem' }}>{priv(`₹${fmt(totalMfVal)}`)}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', marginTop: 'auto' }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Invested</span>
-              <span style={{ fontWeight: 500 }}>₹{fmt(totalMfInv)}</span>
+              <span style={{ fontWeight: 500 }}>{priv(`₹${fmt(totalMfInv)}`)}</span>
             </div>
             <div style={{ textAlign: 'right' }}>
               <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block' }}>P&L</span>
               <strong className={mfPl >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.95rem' }}>
-                {mfPl >= 0 ? '▲' : '▼'} ₹{fmt(Math.abs(mfPl))} ({mfPlPct}%)
+                {priv(`${mfPl >= 0 ? '▲' : '▼'} ₹${fmt(Math.abs(mfPl))} (${mfPlPct}%)`)}
               </strong>
             </div>
           </div>
@@ -285,16 +305,16 @@ function Dashboard() {
           <hr style={{ borderColor: 'rgba(255,255,255,0.05)', margin: '0' }} />
           <div className="stat-card" style={{ marginTop: '0.5rem' }}>
             <span className="label">Available Margin</span>
-            <span className="value" style={{ fontSize: '1.75rem', color: 'var(--accent)' }}>₹{fmt(availableMargin)}</span>
+            <span className="value" style={{ fontSize: '1.75rem', color: 'var(--accent)' }}>{priv(`₹${fmt(availableMargin)}`)}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', marginTop: 'auto' }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Opening</span>
-              <span style={{ fontWeight: 500 }}>₹{fmt(openingBalance)}</span>
+              <span style={{ fontWeight: 500 }}>{priv(`₹${fmt(openingBalance)}`)}</span>
             </div>
             <div style={{ textAlign: 'right' }}>
               <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block' }}>Utilised</span>
-              <span style={{ fontWeight: 500, color: 'var(--danger)' }}>₹{fmt(marginsObj?.equity?.utilised?.debits || 0)}</span>
+              <span style={{ fontWeight: 500, color: 'var(--danger)' }}>{priv(`₹${fmt(marginsObj?.equity?.utilised?.debits || 0)}`)}</span>
             </div>
           </div>
         </div>
