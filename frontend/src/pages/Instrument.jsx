@@ -323,7 +323,7 @@ function srPriceTag(price, color) {
     const { x, y, width } = viewBox;
     const text = `₹${price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
     const w = text.length * 6.6 + 14;
-    const lx = x + width - w - 2;
+    const lx = x + width + 6; // sit in the right margin, flush to the chart edge
     return (
       <g>
         <rect x={lx} y={y - 9} width={w} height={18} rx={4} fill={color} />
@@ -333,6 +333,13 @@ function srPriceTag(price, color) {
       </g>
     );
   };
+}
+
+// Compact axis date: "Dec 19, 2025" → "Dec '25". Day-level precision lives in
+// the tooltip; the axis just needs month/year to stay legible.
+function fmtAxisDate(d) {
+  const m = typeof d === 'string' && d.match(/^([A-Za-z]{3}) \d+, (\d{4})$/);
+  return m ? `${m[1]} '${m[2].slice(2)}` : d;
 }
 
 function Instrument() {
@@ -1443,8 +1450,16 @@ function Instrument() {
               <p>No historical data available for this timeline.</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-                  <XAxis dataKey="date" stroke="var(--text-secondary)" tick={{ fill: 'var(--text-secondary)' }} />
+                <LineChart data={data} margin={{ top: 10, right: 78, left: 0, bottom: 0 }}>
+                  <XAxis
+                    dataKey="date"
+                    stroke="var(--text-secondary)"
+                    tick={{ fill: 'var(--text-secondary)', fontSize: 12 }}
+                    tickFormatter={fmtAxisDate}
+                    interval="preserveStartEnd"
+                    minTickGap={56}
+                    tickMargin={8}
+                  />
                   <YAxis domain={['auto', 'auto']} stroke="var(--text-secondary)" tick={{ fill: 'var(--text-secondary)' }} />
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                   <Tooltip
@@ -1457,9 +1472,9 @@ function Instrument() {
                       key={`sup-${l.price}`}
                       y={l.price}
                       stroke="#ef4444"
-                      strokeDasharray="6 5"
-                      strokeWidth={1}
-                      strokeOpacity={0.7}
+                      strokeDasharray="2 4"
+                      strokeWidth={1.5}
+                      strokeOpacity={0.8}
                       ifOverflow="extendDomain"
                       label={srPriceTag(l.price, '#ef4444')}
                     />
@@ -1468,12 +1483,12 @@ function Instrument() {
                     <ReferenceLine
                       key={`res-${l.price}`}
                       y={l.price}
-                      stroke="#3b82f6"
-                      strokeDasharray="6 5"
-                      strokeWidth={1}
-                      strokeOpacity={0.7}
+                      stroke="#22c55e"
+                      strokeDasharray="2 4"
+                      strokeWidth={1.5}
+                      strokeOpacity={0.8}
                       ifOverflow="extendDomain"
-                      label={srPriceTag(l.price, '#3b82f6')}
+                      label={srPriceTag(l.price, '#22c55e')}
                     />
                   ))}
                   <Line type="monotone" name="Price" dataKey="close" stroke="var(--accent)" strokeWidth={2} dot={false} />
