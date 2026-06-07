@@ -4,6 +4,7 @@ import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tool
 import { format, parseISO } from 'date-fns'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 import AlertRow from '../components/alerts/AlertRow'
+import SignalChart from '../components/SignalChart'
 import ConvictionModal from '../components/alerts/ConvictionModal'
 import TradePlanModal from '../components/alerts/TradePlanModal'
 
@@ -1192,6 +1193,22 @@ function Instrument() {
           Peers
         </button>
         <button
+          onClick={() => setActiveTab('signals')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'signals' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'signals' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '0.5rem 1rem',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'signals' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+            fontSize: '1rem'
+          }}
+        >
+          Signals
+        </button>
+        <button
           onClick={() => setActiveTab('notes')}
           style={{
             background: 'transparent',
@@ -1343,6 +1360,10 @@ function Instrument() {
           </section>
         );
       })()}
+
+      {activeTab === 'signals' && (
+        <SignalChart token={token} symbol={symbol} />
+      )}
 
       {activeTab === 'notes' && (() => {
         const dirty = note !== noteLoadedRef.current;
