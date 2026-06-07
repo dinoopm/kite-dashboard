@@ -322,12 +322,14 @@ function srPriceTag(price, color) {
   return function SRTag({ viewBox }) {
     const { x, y, width } = viewBox;
     const text = `₹${price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
-    const w = text.length * 6.6 + 14;
+    const w = text.length * 6.6 + 16;
     const lx = x + width + 6; // sit in the right margin, flush to the chart edge
+    // Subtle slate pill with a coloured border + coloured text — reads like a
+    // charting-platform axis tag rather than a loud solid sticker.
     return (
       <g>
-        <rect x={lx} y={y - 9} width={w} height={18} rx={4} fill={color} />
-        <text x={lx + w / 2} y={y + 1} dominantBaseline="middle" textAnchor="middle" fill="#0b1220" fontSize={11} fontWeight={700}>
+        <rect x={lx} y={y - 9} width={w} height={18} rx={4} fill="#0f172a" stroke={color} strokeWidth={1} fillOpacity={0.95} />
+        <text x={lx + w / 2} y={y + 1} dominantBaseline="middle" textAnchor="middle" fill={color} fontSize={11} fontWeight={700}>
           {text}
         </text>
       </g>
@@ -1471,24 +1473,24 @@ function Instrument() {
                     <ReferenceLine
                       key={`sup-${l.price}`}
                       y={l.price}
-                      stroke="#ef4444"
+                      stroke="#f87171"
                       strokeDasharray="2 4"
                       strokeWidth={1.5}
-                      strokeOpacity={0.8}
+                      strokeOpacity={0.85}
                       ifOverflow="extendDomain"
-                      label={srPriceTag(l.price, '#ef4444')}
+                      label={srPriceTag(l.price, '#f87171')}
                     />
                   ))}
                   {showSR && sr.resistances.map(l => (
                     <ReferenceLine
                       key={`res-${l.price}`}
                       y={l.price}
-                      stroke="#22c55e"
+                      stroke="#4ade80"
                       strokeDasharray="2 4"
                       strokeWidth={1.5}
-                      strokeOpacity={0.8}
+                      strokeOpacity={0.85}
                       ifOverflow="extendDomain"
-                      label={srPriceTag(l.price, '#22c55e')}
+                      label={srPriceTag(l.price, '#4ade80')}
                     />
                   ))}
                   <Line type="monotone" name="Price" dataKey="close" stroke="var(--accent)" strokeWidth={2} dot={false} />
