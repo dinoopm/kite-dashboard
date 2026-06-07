@@ -1275,12 +1275,17 @@ function SectorIndices() {
         const scored = filteredData.filter(r => r.momentumScore != null);
         if (scored.length === 0) return null;
 
-        // Rank-change deltas vs the chosen lookback. Recompute the percentile
-        // pipeline as-of N trading days ago against the same tab universe, then
-        // diff against the current rank. NEW = couldn't compute past rank
-        // (insufficient history at the anchor date).
-        const tabUniverse = filteredData.filter(r => r.history);
-        const curScoreMap  = computeScoreMap(tabUniverse, 0);
+        // Rank-change deltas vs the chosen lookback. The *current* rank is the
+        // bar's visible position (sorted by momentumScore) so the ↑/↓ badge
+        // always agrees with where the bar sits — a sector pinned to the bottom
+        // can't paradoxically show a gain. The *past* rank is reconstructed from
+        // price history via computeScoreMap (there are no cached week-ago
+        // returns), restricted to the same sectors shown so both ranks share one
+        // peer set. NEW = couldn't compute past rank (insufficient history).
+        // This mirrors the Momentum table tooltip, which also pairs the visible
+        // current rank with a history-derived past rank.
+        const shownIds = new Set(scored.map(r => r.id));
+        const tabUniverse = filteredData.filter(r => r.history && shownIds.has(r.id));
         const pastScoreMap = computeScoreMap(tabUniverse, LOOKBACK_DAYS[rankLookback]);
         const rankFromMap = (m) => {
           const sorted = Object.entries(m).sort((a, b) => b[1] - a[1]);
@@ -1288,15 +1293,14 @@ function SectorIndices() {
           sorted.forEach(([id], i) => { ranks[id] = i + 1; });
           return ranks;
         };
-        const curRanks  = rankFromMap(curScoreMap);
         const pastRanks = rankFromMap(pastScoreMap);
 
         const rankedData = [...scored]
           .sort((a, b) => b.momentumScore - a.momentumScore)
-          .map(r => {
-            const curRank  = curRanks[r.id] ?? null;
+          .map((r, i) => {
+            const curRank  = i + 1;                         // visible bar position
             const pastRank = pastRanks[r.id] ?? null;
-            const delta    = (curRank != null && pastRank != null) ? pastRank - curRank : null;
+            const delta    = pastRank != null ? pastRank - curRank : null;
             return { id: r.id, name: shortName(r), score: r.momentumScore, delta, curRank, pastRank };
           });
 
