@@ -11,7 +11,15 @@ function Portfolio() {
   const [sortField, setSortField] = useState('tradingsymbol')
   const [sortDirection, setSortDirection] = useState('asc')
   const [activeTab, setActiveTab] = useState('equity')
-  
+  // Privacy toggle — shares the dashboard's localStorage key so the two stay in
+  // sync. When on, invested amounts and P&L are masked.
+  const [hideAmounts, setHideAmounts] = useState(() => localStorage.getItem('hideAmounts') === '1')
+  const toggleHideAmounts = () => setHideAmounts(prev => {
+    const next = !prev;
+    localStorage.setItem('hideAmounts', next ? '1' : '0');
+    return next;
+  });
+
   const navigate = useNavigate()
 
   const fetchData = async (signal) => {
@@ -142,6 +150,9 @@ function Portfolio() {
 
   const filteredAndSortedMFs = getFilteredAndSortedMFs();
 
+  // When privacy mode is on, replace a displayed monetary/return token with dots.
+  const priv = (display) => (hideAmounts ? '••••••' : display);
+
   const csvEscape = (v) => {
     if (v == null) return '';
     const s = String(v);
@@ -258,6 +269,27 @@ function Portfolio() {
             }}
           />
           <button
+            onClick={toggleHideAmounts}
+            title={hideAmounts ? 'Show amounts' : 'Hide amounts'}
+            style={{
+              padding: '0.6rem 1rem',
+              borderRadius: '8px',
+              border: '1px solid var(--border)',
+              background: 'var(--bg-card)',
+              color: 'var(--text-secondary)',
+              fontWeight: 700,
+              fontSize: '0.85rem',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+            }}
+          >
+            <span style={{ fontSize: '1rem' }}>{hideAmounts ? '🙈' : '👁️'}</span>
+            {hideAmounts ? 'Show' : 'Hide'}
+          </button>
+          <button
             onClick={exportCSV}
             disabled={exportDisabled}
             title={exportDisabled ? 'Nothing to export' : `Export ${activeTab === 'equity' ? 'equity' : 'mutual fund'} holdings as CSV`}
@@ -318,7 +350,7 @@ function Portfolio() {
                 <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: '3px solid var(--accent)' }}>
                   <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Total Invested</span>
                   <span className="value" style={{ fontSize: '1.5rem', fontWeight: '700' }}>
-                    ₹{totalInv.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    {priv(`₹${totalInv.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}
                   </span>
                 </div>
 
@@ -334,7 +366,7 @@ function Portfolio() {
                 <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: '3px solid var(--text-primary)' }}>
                   <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Current Value</span>
                   <span className="value" style={{ fontSize: '1.5rem', fontWeight: '700' }}>
-                    ₹{currentVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    {priv(`₹${currentVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}
                   </span>
                 </div>
 
@@ -342,10 +374,10 @@ function Portfolio() {
                 <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: `3px solid ${pl >= 0 ? 'var(--success)' : 'var(--danger)'}` }}>
                   <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Total Returns</span>
                   <span className={`value ${pl >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.5rem', fontWeight: '700' }}>
-                    {pl >= 0 ? '+' : ''}₹{pl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    {priv(`${pl >= 0 ? '+' : ''}₹${pl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}
                   </span>
                   <span className={`label ${pl >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
-                    ({plPercentage}%)
+                    {priv(`(${plPercentage}%)`)}
                   </span>
                 </div>
 
@@ -353,10 +385,10 @@ function Portfolio() {
                 <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: `3px solid ${todaysReturn >= 0 ? 'var(--success)' : 'var(--danger)'}` }}>
                   <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Today's Returns</span>
                   <span className={`value ${todaysReturn >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.5rem', fontWeight: '700' }}>
-                    {todaysReturn >= 0 ? '+' : ''}₹{todaysReturn.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    {priv(`${todaysReturn >= 0 ? '+' : ''}₹${todaysReturn.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}
                   </span>
                   <span className={`label ${todaysReturn >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
-                    ({todaysReturnPct.toFixed(2)}%)
+                    {priv(`(${todaysReturnPct.toFixed(2)}%)`)}
                   </span>
                 </div>
               </div>
@@ -386,11 +418,11 @@ function Portfolio() {
                       <td>₹{Number(item.average_price).toFixed(2)}</td>
                       <td>₹{item.last_price}</td>
                       <td>{item.displayQuantity}</td>
-                      <td>₹{item.investment.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
-                      <td>₹{item.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                      <td>{priv(`₹${item.investment.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}</td>
+                      <td>{priv(`₹${item.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}</td>
                       <td className={item.itemPL >= 0 ? 'positive' : 'negative'}>{item.itemPLPercent.toFixed(2)}%</td>
                       <td className={item.itemPL >= 0 ? 'positive' : 'negative'}>
-                        {item.itemPL > 0 ? '+' : ''}{item.itemPL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        {priv(`${item.itemPL > 0 ? '+' : ''}${item.itemPL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}
                       </td>
                       <td className={item.dayChange >= 0 ? 'positive' : 'negative'}>
                         {item.dayChange >= 0 ? '+' : ''}{item.dayChange.toFixed(2)} ({item.dayChangePct.toFixed(2)}%)
@@ -428,22 +460,22 @@ function Portfolio() {
                 <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: '3px solid var(--accent)' }}>
                   <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Total Invested</span>
                   <span className="value" style={{ fontSize: '1.5rem', fontWeight: '700' }}>
-                    ₹{mfTotalInv.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    {priv(`₹${mfTotalInv.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}
                   </span>
                 </div>
                 <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: '3px solid #a29bfe' }}>
                   <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Current Value</span>
                   <span className="value" style={{ fontSize: '1.5rem', fontWeight: '700' }}>
-                    ₹{mfCurrentVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    {priv(`₹${mfCurrentVal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}
                   </span>
                 </div>
                 <div className="glass-panel stat-card" style={{ padding: '1.25rem', borderLeft: `3px solid ${mfPL >= 0 ? 'var(--success)' : 'var(--danger)'}` }}>
                   <span className="label" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px', opacity: 0.7 }}>Total Returns</span>
                   <span className={`value ${mfPL >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.5rem', fontWeight: '700' }}>
-                    {mfPL >= 0 ? '+' : ''}₹{mfPL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                    {priv(`${mfPL >= 0 ? '+' : ''}₹${mfPL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}
                   </span>
                   <span className={`label ${mfPL >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
-                    ({mfPLPct}%)
+                    {priv(`(${mfPLPct}%)`)}
                   </span>
                 </div>
               </div>
@@ -474,11 +506,11 @@ function Portfolio() {
                       <td>₹{Number(item.average_price).toFixed(2)}</td>
                       <td>₹{item.last_price}</td>
                       <td>{item.displayQuantity}</td>
-                      <td>₹{item.investment.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
-                      <td>₹{item.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                      <td>{priv(`₹${item.investment.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}</td>
+                      <td>{priv(`₹${item.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}</td>
                       <td className={item.itemPL >= 0 ? 'positive' : 'negative'}>{item.itemPLPercent.toFixed(2)}%</td>
                       <td className={item.itemPL >= 0 ? 'positive' : 'negative'}>
-                        {item.itemPL > 0 ? '+' : ''}{item.itemPL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        {priv(`${item.itemPL > 0 ? '+' : ''}${item.itemPL.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}
                       </td>
                     </tr>
                   ))}
