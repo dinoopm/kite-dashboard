@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 
 // Trade plan explainer modal: verdict, TG/SL cards, R:R, regime notes.
 // Renders nothing when `stock` is null.
@@ -77,7 +78,10 @@ function TradePlanModal({ stock, onClose }) {
     'WILD SWINGS':  'Volatility is elevated — sharp single-day moves or wide ATR. Wider stops are needed; gap risk is real. Position sizing should be smaller than usual.',
   }
 
-  return (
+  // Portal to <body> so the fixed-position backdrop centers on the viewport.
+  // Rendered inline, it'd inherit a .glass-panel ancestor whose backdrop-filter
+  // creates a containing block, pinning the modal inside that tall panel.
+  return createPortal(
     <div className="conv-modal-backdrop" onClick={onClose}>
       <div className="conv-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '560px' }}>
         {/* Header */}
@@ -212,7 +216,8 @@ function TradePlanModal({ stock, onClose }) {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

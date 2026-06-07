@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 
 // Bullish-bias breakdown modal. Shows the components that summed into the
 // stock's confidence score. Renders nothing when `stock` is null.
@@ -51,7 +52,10 @@ function ConvictionModal({ stock, onClose }) {
     return bd
   })()
 
-  return (
+  // Portal to <body> so the fixed-position backdrop centers on the viewport
+  // instead of inside a .glass-panel ancestor (whose backdrop-filter would
+  // otherwise become the containing block and pin the modal down-page).
+  return createPortal(
     <div className="conv-modal-backdrop" onClick={onClose}>
       <div className="conv-modal" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
@@ -181,7 +185,8 @@ function ConvictionModal({ stock, onClose }) {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
