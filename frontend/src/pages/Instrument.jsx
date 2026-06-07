@@ -1565,18 +1565,31 @@ function Instrument() {
             const capStyle = { fontSize: '0.72rem', color: 'var(--text-secondary)' };
             return (
               <div className="glass-panel" style={{ display: 'flex', gap: '1.75rem', alignItems: 'center', flexWrap: 'wrap', padding: '0.85rem 1.1rem', marginBottom: '0.75rem' }}>
-                <span style={{ fontSize: '0.65rem', fontWeight: 800, letterSpacing: '1px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Breakout Engine</span>
+                <span
+                  className="info-icon"
+                  title="Flags breakouts — where price closes above its recent ceiling (the highest high of the last ~30–45 bars) — then grades each as a real move or a trap. Use the filters to set how strict that grading is."
+                  style={{ fontSize: '0.65rem', fontWeight: 800, letterSpacing: '1px', color: 'var(--text-secondary)', textTransform: 'uppercase', opacity: 1, cursor: 'help' }}
+                >
+                  Breakout Engine ⓘ
+                </span>
                 <label style={labelStyle}>
-                  <span style={capStyle}>Volume ≥ <strong style={{ color: 'var(--accent)' }}>{volMult.toFixed(1)}×</strong> 20-bar avg</span>
+                  <span style={capStyle}>
+                    Volume ≥ <strong style={{ color: 'var(--accent)' }}>{volMult.toFixed(1)}×</strong> 20-bar avg
+                    <span className="info-icon" title="A real breakout usually comes on heavy volume. Only flag breakouts whose volume is at least this many times the 20-day average. Higher = fewer, higher-conviction signals.">{' '}ⓘ</span>
+                  </span>
                   <input type="range" min="1" max="3" step="0.1" value={volMult} onChange={e => setVolMult(+e.target.value)} style={{ accentColor: '#38bdf8', cursor: 'pointer' }} />
                 </label>
                 <label style={labelStyle}>
-                  <span style={capStyle}>Confirm over <strong style={{ color: 'var(--accent)' }}>{confirmPeriods}</strong> {confirmPeriods === 1 ? 'period' : 'periods'}</span>
+                  <span style={capStyle}>
+                    Confirm over <strong style={{ color: 'var(--accent)' }}>{confirmPeriods}</strong> {confirmPeriods === 1 ? 'period' : 'periods'}
+                    <span className="info-icon" title="After a breakout, price must STAY above the broken level for this many bars to count as Confirmed (green ▲). If it falls back below within the window, it's Failed (red ▼). More periods = a tougher test.">{' '}ⓘ</span>
+                  </span>
                   <input type="range" min="1" max="5" step="1" value={confirmPeriods} onChange={e => setConfirmPeriods(+e.target.value)} style={{ accentColor: '#38bdf8', cursor: 'pointer' }} />
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                   <input type="checkbox" checked={strictMomentum} onChange={e => setStrictMomentum(e.target.checked)} style={{ accentColor: '#38bdf8', cursor: 'pointer', width: '15px', height: '15px' }} />
                   Strict momentum <span style={{ opacity: 0.7 }}>(RSI ≥ {BREAKOUT_RSI_MIN})</span>
+                  <span className="info-icon" title={`When on, ignore breakouts where momentum was weak — RSI(14) below ${BREAKOUT_RSI_MIN} at the breakout bar. Filters out breaks that fire on fading momentum.`}>ⓘ</span>
                 </label>
                 <span style={{ marginLeft: 'auto', fontSize: '0.78rem', fontWeight: 700, display: 'flex', gap: '0.75rem' }}>
                   <span style={{ color: '#22c55e' }}>▲ {nConfirmed} confirmed</span>
@@ -1671,6 +1684,26 @@ function Instrument() {
               </ResponsiveContainer>
             )}
           </section>
+
+          {/* Chart marker legend */}
+          {!loading && !error && data.length > 0 && timeframe !== '1D' && (showBreakouts || showSR) && (
+            <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', alignItems: 'center', padding: '0.5rem 0.25rem 0', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+              {showBreakouts && (
+                <>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><span style={{ color: '#22c55e' }}>▲</span> Confirmed breakout (held)</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><span style={{ color: '#ef4444' }}>▼</span> Failed breakout (trap)</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><span style={{ color: '#fbbf24' }}>◆</span> Pending (too recent)</span>
+                </>
+              )}
+              {showSR && (
+                <>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><span style={{ color: '#f87171', letterSpacing: '-1px' }}>┈</span> Support</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><span style={{ color: '#4ade80', letterSpacing: '-1px' }}>┈</span> Resistance</span>
+                </>
+              )}
+              <span style={{ marginLeft: 'auto', fontStyle: 'italic', opacity: 0.8 }}>Hover any marker for its volume, RSI &amp; hold details</span>
+            </div>
+          )}
 
           {/* Technical Indicators */}
           {indicators && (
