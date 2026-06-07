@@ -316,34 +316,85 @@ function computeSupportResistance(data) {
   return { supports, resistances };
 }
 
-// Detect breakout bars: a close that pushes DECISIVELY (by `margin`) above the
-// highest high of the prior `lookback` bars, where the previous bar had NOT yet
-// cleared that channel — so we flag the candle that initiates each breakout, not
-// every later new high. Each breakout is then classified by follow-through:
-//   held    — price was still above the broken level `look` bars later
-//   failed  — price fell back below it (a fakeout)
-//   pending — too recent to judge
-function detectBreakouts(data, lookback = 20) {
-  if (!Array.isArray(data) || data.length < lookback + 2) return [];
+// Wilder's RSI(14), aligned to the closes array (null during warmup).
+function rsi14Series(closes, period = 14) {
+  const n = closes.length;
+  const rsi = new Array(n).fill(null);
+  if (n < period + 1) return rsi;
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= period; i++) {
+    const ch = closes[i] - closes[i - 1];
+    if (ch >= 0) gain += ch; else loss -= ch;
+  }
+  let avgGain = gain / period, avgLoss = loss / period;
+  rsi[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  for (let i = period + 1; i < n; i++) {
+    const ch = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(ch, 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(-ch, 0)) / period;
+    rsi[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return rsi;
+}
+
+const BREAKOUT_RSI_MIN = 55; // "strict momentum" gate
+
+// Advanced breakout engine. A trigger is a close pushing above the prior
+// `lookback`-bar high (dynamic resistance). It's flagged only if VOLUME clears
+// `volMult`× its 20-bar average and — when strict momentum is on — RSI(14) is
+// trending (≥ BREAKOUT_RSI_MIN). It's then classified by TIME confirmation:
+//   confirmed — price held the broken level for `confirmPeriods` bars
+//   failed    — price closed back below within `confirmPeriods` (a trap)
+//   pending   — not enough bars elapsed yet to decide
+// Each event carries the exact stats that triggered it (volume ×, RSI, hold).
+function detectBreakoutsAdvanced(data, { volMult = 1.5, confirmPeriods = 3, strictMomentum = false, lookback = 30 } = {}) {
+  const n = data.length;
+  if (n < lookback + 2) return [];
   const highs = data.map(d => d.high ?? d.close);
+  const closes = data.map(d => d.close);
+  const vols = data.map(d => d.volume ?? 0);
+  const rsi = rsi14Series(closes);
+  const VOL_P = 20;
+  const volSMA = (i) => {
+    if (i < VOL_P) return null;
+    let s = 0; for (let j = i - VOL_P; j < i; j++) s += vols[j];
+    return s / VOL_P;
+  };
   const maxBefore = (end) => {
     let m = -Infinity;
     for (let j = Math.max(0, end - lookback); j < end; j++) if (highs[j] > m) m = highs[j];
     return m;
   };
-  const margin = 0.012;                               // decisive close, not a marginal poke
-  const look = Math.max(5, Math.round(lookback / 4)); // follow-through window
+  const cooldown = Math.max(3, Math.round(lookback / 3));
   const out = [];
   let last = -Infinity;
-  for (let i = lookback; i < data.length; i++) {
-    const ch = maxBefore(i);
-    if (data[i].close > ch * (1 + margin) && data[i - 1].close <= maxBefore(i - 1) && i - last >= lookback) {
-      const avail = Math.min(look, data.length - 1 - i);
-      const endClose = avail > 0 ? data[i + avail].close : data[i].close;
-      const status = avail < 3 ? 'pending' : (endClose >= ch ? 'held' : 'failed');
-      out.push({ index: i, date: data[i].date, price: data[i].close, status });
-      last = i; // cooldown of one channel width keeps markers from bunching up
+  for (let i = lookback; i < n; i++) {
+    const level = maxBefore(i);
+    // Trigger: this bar clears the channel that the previous bar hadn't.
+    if (!(closes[i] > level && closes[i - 1] <= maxBefore(i - 1))) continue;
+    if (i - last < cooldown) continue;
+    // Volume confirmation.
+    const vsma = volSMA(i);
+    const volX = vsma ? vols[i] / vsma : null;
+    if (volX == null || volX < volMult) continue;
+    // Momentum filter (optional).
+    const r = rsi[i];
+    if (strictMomentum && !(r != null && r >= BREAKOUT_RSI_MIN)) continue;
+    // Time confirmation.
+    let failedAt = null;
+    const avail = Math.min(confirmPeriods, n - 1 - i);
+    for (let k = 1; k <= avail; k++) {
+      if (closes[i + k] < level) { failedAt = k; break; }
     }
+    const status = failedAt != null ? 'failed' : (avail >= confirmPeriods ? 'confirmed' : 'pending');
+    out.push({
+      index: i, date: data[i].date, price: closes[i], level: +level.toFixed(2), status,
+      volX: volX != null ? +volX.toFixed(2) : null,
+      rsi: r != null ? Math.round(r) : null,
+      heldPeriods: failedAt != null ? failedAt - 1 : avail,
+      confirmPeriods,
+    });
+    last = i;
   }
   return out;
 }
@@ -455,6 +506,10 @@ function Instrument() {
   const [timeframe, setTimeframe] = useState('1M')
   const [showSR, setShowSR] = useState(true) // support/resistance overlay
   const [showBreakouts, setShowBreakouts] = useState(true) // breakout markers
+  // Breakout-engine parameters (drive live re-evaluation of the markers).
+  const [volMult, setVolMult] = useState(1.5)
+  const [confirmPeriods, setConfirmPeriods] = useState(3)
+  const [strictMomentum, setStrictMomentum] = useState(false)
   const [activeTab, setActiveTab] = useState('technicals')
   // Free-text company notes (persisted per symbol in Supabase).
   const [note, setNote] = useState('')
@@ -871,6 +926,7 @@ function Instrument() {
                 high: c.high,
                 low: c.low,
                 close: c.close,
+                volume: c.volume,
                 sma20: c.sma20,
                 sma5: c.sma5
               };
@@ -911,8 +967,8 @@ function Instrument() {
     if (timeframe === '1D') return [];
     // Longer channel = fewer, more significant breakouts.
     const lb = Math.min(45, Math.max(15, Math.round(data.length / 18)));
-    return detectBreakouts(data, lb);
-  }, [data, timeframe]);
+    return detectBreakoutsAdvanced(data, { volMult, confirmPeriods, strictMomentum, lookback: lb });
+  }, [data, timeframe, volMult, confirmPeriods, strictMomentum]);
 
   const todayChange = quote ? (quote.last_price - quote.ohlc.close) : null;
   const todayChangePct = quote && quote.ohlc.close ? ((todayChange / quote.ohlc.close) * 100).toFixed(2) : null;
@@ -1500,6 +1556,37 @@ function Instrument() {
             )}
           </div>
 
+          {/* Breakout engine control panel */}
+          {showBreakouts && timeframe !== '1D' && !loading && !error && data.length > 0 && (() => {
+            const nConfirmed = breakouts.filter(b => b.status === 'confirmed').length;
+            const nFailed = breakouts.filter(b => b.status === 'failed').length;
+            const nPending = breakouts.filter(b => b.status === 'pending').length;
+            const labelStyle = { display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: '170px' };
+            const capStyle = { fontSize: '0.72rem', color: 'var(--text-secondary)' };
+            return (
+              <div className="glass-panel" style={{ display: 'flex', gap: '1.75rem', alignItems: 'center', flexWrap: 'wrap', padding: '0.85rem 1.1rem', marginBottom: '0.75rem' }}>
+                <span style={{ fontSize: '0.65rem', fontWeight: 800, letterSpacing: '1px', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Breakout Engine</span>
+                <label style={labelStyle}>
+                  <span style={capStyle}>Volume ≥ <strong style={{ color: 'var(--accent)' }}>{volMult.toFixed(1)}×</strong> 20-bar avg</span>
+                  <input type="range" min="1" max="3" step="0.1" value={volMult} onChange={e => setVolMult(+e.target.value)} style={{ accentColor: '#38bdf8', cursor: 'pointer' }} />
+                </label>
+                <label style={labelStyle}>
+                  <span style={capStyle}>Confirm over <strong style={{ color: 'var(--accent)' }}>{confirmPeriods}</strong> {confirmPeriods === 1 ? 'period' : 'periods'}</span>
+                  <input type="range" min="1" max="5" step="1" value={confirmPeriods} onChange={e => setConfirmPeriods(+e.target.value)} style={{ accentColor: '#38bdf8', cursor: 'pointer' }} />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  <input type="checkbox" checked={strictMomentum} onChange={e => setStrictMomentum(e.target.checked)} style={{ accentColor: '#38bdf8', cursor: 'pointer', width: '15px', height: '15px' }} />
+                  Strict momentum <span style={{ opacity: 0.7 }}>(RSI ≥ {BREAKOUT_RSI_MIN})</span>
+                </label>
+                <span style={{ marginLeft: 'auto', fontSize: '0.78rem', fontWeight: 700, display: 'flex', gap: '0.75rem' }}>
+                  <span style={{ color: '#22c55e' }}>▲ {nConfirmed} confirmed</span>
+                  <span style={{ color: '#ef4444' }}>▼ {nFailed} failed</span>
+                  {nPending > 0 && <span style={{ color: '#fbbf24' }}>◆ {nPending} pending</span>}
+                </span>
+              </div>
+            );
+          })()}
+
           {/* Chart */}
           <section className="glass-panel" style={{ height: '400px', padding: '1.5rem 1rem 1rem 1rem' }}>
             {loading ? (
@@ -1551,8 +1638,14 @@ function Instrument() {
                       label={srPriceTag(l.price, '#4ade80')}
                     />
                   ))}
-                  {showBreakouts && breakouts.map((b, idx) => {
-                    const c = b.status === 'held' ? '#22c55e' : b.status === 'failed' ? '#ef4444' : '#fbbf24';
+                  {showBreakouts && breakouts.map((b) => {
+                    const isFail = b.status === 'failed';
+                    const isPending = b.status === 'pending';
+                    const c = isFail ? '#ef4444' : isPending ? '#fbbf24' : '#22c55e';
+                    const tip = `${b.status.toUpperCase()} breakout @ ₹${b.price}\n`
+                      + `Resistance: ₹${b.level}\n`
+                      + `Volume: ${b.volX != null ? b.volX + '×' : '—'} avg · RSI: ${b.rsi ?? '—'}\n`
+                      + `Held for: ${b.heldPeriods} / ${b.confirmPeriods} period${b.confirmPeriods === 1 ? '' : 's'}`;
                     return (
                       <ReferenceDot
                         key={`bo-${b.index}`}
@@ -1560,9 +1653,16 @@ function Instrument() {
                         y={b.price}
                         ifOverflow="extendDomain"
                         shape={({ cx, cy }) => (
-                          <path d={`M ${cx} ${cy - 9} L ${cx - 6} ${cy + 3} L ${cx + 6} ${cy + 3} Z`} fill={c} stroke="#0f172a" strokeWidth={1} />
+                          <g style={{ cursor: 'pointer' }}>
+                            <title>{tip}</title>
+                            {isFail
+                              // Down-arrow above the peak.
+                              ? <path d={`M ${cx} ${cy - 7} L ${cx - 7} ${cy - 19} L ${cx + 7} ${cy - 19} Z`} fill={c} stroke="#0f172a" strokeWidth={1} />
+                              // Up-arrow on the series.
+                              : <path d={`M ${cx} ${cy - 19} L ${cx - 7} ${cy - 7} L ${cx + 7} ${cy - 7} Z`} fill={c} stroke="#0f172a" strokeWidth={1} />}
+                          </g>
                         )}
-                        label={idx === breakouts.length - 1 ? { value: `Breakout · ${b.status}`, position: 'top', fill: c, fontSize: 10, fontWeight: 700 } : undefined}
+                        label={isFail ? { value: 'Breakout - failed', position: 'top', fill: c, fontSize: 10, fontWeight: 700 } : undefined}
                       />
                     );
                   })}
