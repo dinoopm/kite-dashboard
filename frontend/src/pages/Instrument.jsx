@@ -684,6 +684,24 @@ function Instrument() {
     }
   };
 
+  const deleteNote = async () => {
+    if (!symbol) return;
+    if (!window.confirm(`Delete your note on ${symbol}? This can't be undone.`)) return;
+    setNoteStatus('saving'); setNoteError(null);
+    try {
+      const res = await fetch(`/api/notes/${encodeURIComponent(symbol)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Failed to delete (${res.status})`);
+      setNote('');
+      noteLoadedRef.current = '';
+      setNoteSavedAt(null);
+      setNoteStatus('idle');
+    } catch (e) {
+      setNoteError(e.message);
+      setNoteStatus('error');
+    }
+  };
+
   // (Yahoo /api/cashflow fetch was here — removed when both Quarterly Results
   // and Cashflow Chart switched to screener.in. Backend route stays around
   // for now in case anything else hits it.)
@@ -1154,6 +1172,21 @@ function Instrument() {
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                 <span style={{ fontSize: '0.72rem', color: statusColor }}>{statusText}</span>
+                {(noteSavedAt || noteLoadedRef.current) && (
+                  <button
+                    onClick={deleteNote}
+                    disabled={noteStatus === 'saving' || noteStatus === 'loading'}
+                    title={`Delete note on ${symbol}`}
+                    style={{
+                      padding: '0.45rem 1rem', borderRadius: '6px',
+                      border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.08)',
+                      color: '#ef4444', fontWeight: 700, fontSize: '0.85rem',
+                      cursor: noteStatus === 'saving' ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Delete
+                  </button>
+                )}
                 <button
                   onClick={saveNote}
                   disabled={!dirty || noteStatus === 'saving' || noteStatus === 'loading'}

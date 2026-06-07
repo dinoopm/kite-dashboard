@@ -3408,6 +3408,16 @@ app.put('/api/notes/:symbol', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.delete('/api/notes/:symbol', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const { error } = await supabase.from('instrument_notes').delete().eq('symbol', symbol);
+    if (error) throw new Error(error.message);
+    res.json({ symbol, success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Express error middleware: when a route throws an Error with statusCode=429
 // (from `detectRateLimit` above), surface it as a proper 429 + Retry-After
 // header so the frontend's useFetchWithAbort can back off cleanly.
