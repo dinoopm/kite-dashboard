@@ -292,28 +292,30 @@ function computeSupportResistance(data) {
   }
   const levels = clusters.map(c => ({ price: +(c.sum / c.count).toFixed(2), touches: c.count }));
 
-  // Prefer levels touched 2+ times; fall back to all if none repeat.
-  let strong = levels.filter(l => l.touches >= 2);
-  if (strong.length === 0) strong = levels;
-
   const price = data[data.length - 1].close;
 
   // Pick the levels NEAREST the current price first — the support just under
   // price and the resistance just above it are what a trader acts on, far more
   // than a distant multi-year base. Keep them at least `minGap` apart so the
   // lines never bunch into an unreadable cluster.
+  //
+  // We draw from ALL swing-pivot clusters, not just the ones touched 2+ times:
+  // a fast trender (e.g. TD Power, +160%/yr) prints each level only once on the
+  // way up, so a strict repeat-touch filter would leave nothing near price and
+  // no resistance below the high. Single pivots from the ±k window are genuine
+  // turning points, and the spacing + cap keep the result uncluttered.
   const minGap = 0.05; // 5% of current price
   const pickNearest = (cands, descending) => {
     const sorted = [...cands].sort((a, b) => (descending ? b.price - a.price : a.price - b.price));
     const picked = [];
     for (const l of sorted) {
       if (picked.every(p => Math.abs(p.price - l.price) / price >= minGap)) picked.push(l);
-      if (picked.length >= 3) break;
+      if (picked.length >= 4) break;
     }
     return picked;
   };
-  const supports = pickNearest(strong.filter(l => l.price < price * 0.995), true);
-  const resistances = pickNearest(strong.filter(l => l.price > price * 1.005), false);
+  const supports = pickNearest(levels.filter(l => l.price < price * 0.995), true);
+  const resistances = pickNearest(levels.filter(l => l.price > price * 1.005), false);
   return { supports, resistances };
 }
 
