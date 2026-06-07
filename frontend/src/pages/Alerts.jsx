@@ -219,7 +219,7 @@ function Alerts() {
 
         /* Conviction Modal */
         .conv-modal-backdrop {
-          position: fixed; inset: 0; z-index: 1000;
+          position: fixed; inset: 0; z-index: 10001;
           background: rgba(0,0,0,0.65); backdrop-filter: blur(6px);
           display: flex; align-items: center; justify-content: center;
           animation: convFadeIn 0.2s ease;

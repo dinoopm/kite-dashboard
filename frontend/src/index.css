@@ -207,7 +207,9 @@ tbody tr:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  /* Above the navbar (z-index 9999) and its search dropdown (10000) so the
+     full-screen overlay dims and sits on top of everything. */
+  z-index: 10001;
   padding: 1rem;
 }
 
@@ -218,7 +220,7 @@ tbody tr:hover {
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
   max-height: 90vh;
   overflow-y: auto;
-  z-index: 1001;
+  z-index: 10002;
 }
 
 .conv-modal-header {
