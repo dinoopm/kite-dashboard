@@ -16,8 +16,12 @@ const SELL_COLOR = '#ef4444';
 
 const barTime = (b) => Math.floor(new Date(b.dateObj || b.date).getTime() / 1000);
 
+// View = how much recent history to ZOOM to. Full 5Y is loaded up front so the
+// Slow SMA stays warm even on a 1-month view; these only pan/zoom the time axis.
+const VIEW_DAYS = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '3Y': 1095, '5Y': null };
+
 function SignalChart({ token, symbol }) {
-  const [tf, setTf] = useState('2Y');
+  const [view, setView] = useState('1Y');
   const [bars, setBars] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -35,14 +39,15 @@ function SignalChart({ token, symbol }) {
   const tooltipRef = useRef(null);
   const signalByTimeRef = useRef(new Map()); // time -> signal, read by the crosshair handler
 
-  // Fetch OHLCV for the selected window.
+  // Fetch a deep OHLCV history ONCE (5Y) so the moving averages are warm at any
+  // zoom level. The view buttons only change the visible range, not the data.
   useEffect(() => {
     if (!token || token === '0') { setLoading(false); setError('Live token required for the candlestick chart.'); return; }
     const controller = new AbortController();
     setLoading(true); setError(null);
     (async () => {
       try {
-        const res = await fetchWithAbort(`/api/historical/${token}?tf=${tf}`, { signal: controller.signal });
+        const res = await fetchWithAbort(`/api/historical/${token}?tf=5Y`, { signal: controller.signal });
         const json = await res.json();
         if (json?.content?.[0]?.text) {
           const parsed = JSON.parse(json.content[0].text);
@@ -61,7 +66,7 @@ function SignalChart({ token, symbol }) {
       }
     })();
     return () => controller.abort();
-  }, [token, tf]);
+  }, [token]);
 
   // Recompute the engine output whenever bars or the control params change.
   const engine = useMemo(
@@ -144,6 +149,19 @@ function SignalChart({ token, symbol }) {
     candleRef.current.setMarkers(markers);
   }, [engine, strict, bars]);
 
+  // Zoom the time axis to the chosen view (runs after chart creation since both
+  // depend on `bars`, and on its own when the view button changes).
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || bars.length === 0) return;
+    const ts = chart.timeScale();
+    const days = VIEW_DAYS[view];
+    if (!days) { ts.fitContent(); return; }
+    const last = barTime(bars[bars.length - 1]);
+    const from = Math.max(barTime(bars[0]), last - days * 86400);
+    ts.setVisibleRange({ from, to: last });
+  }, [view, bars]);
+
   const buyCount = engine.signals.filter(s => s.type === 'buy').length;
   const sellCount = engine.signals.filter(s => s.type === 'sell').length;
   const sliderStyle = { accentColor: FAST_COLOR, cursor: 'pointer', width: '150px' };
@@ -159,12 +177,12 @@ function SignalChart({ token, symbol }) {
           </span>
         </div>
         <div style={{ display: 'flex', gap: '0.4rem' }}>
-          {['1Y', '2Y', '3Y', '5Y'].map(t => (
-            <button key={t} onClick={() => setTf(t)} style={{
+          {['1M', '3M', '6M', '1Y', '3Y', '5Y'].map(t => (
+            <button key={t} onClick={() => setView(t)} title="Zoom the view (5Y of history is always loaded so the SMAs stay accurate)" style={{
               padding: '0.3rem 0.7rem', borderRadius: '4px', fontSize: '0.75rem', cursor: 'pointer',
-              border: `1px solid ${tf === t ? 'var(--accent)' : 'var(--border)'}`,
-              background: tf === t ? 'rgba(56,189,248,0.12)' : 'transparent',
-              color: tf === t ? 'var(--accent)' : 'var(--text-secondary)', fontWeight: tf === t ? 700 : 400,
+              border: `1px solid ${view === t ? 'var(--accent)' : 'var(--border)'}`,
+              background: view === t ? 'rgba(56,189,248,0.12)' : 'transparent',
+              color: view === t ? 'var(--accent)' : 'var(--text-secondary)', fontWeight: view === t ? 700 : 400,
             }}>{t}</button>
           ))}
         </div>
