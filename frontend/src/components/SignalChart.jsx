@@ -74,6 +74,18 @@ function SignalChart({ token, symbol }) {
     [bars, fastPeriod, slowPeriod]
   );
 
+  // Only the signals inside the zoomed window. The chart loads 5Y so the SMAs
+  // stay warm, but markers (and the counts) must be scoped to what's on screen —
+  // otherwise old low-price signals from years ago render clamped at the bottom
+  // edge and the tally won't match the view.
+  const visibleSignals = useMemo(() => {
+    if (bars.length === 0) return [];
+    const days = VIEW_DAYS[view];
+    if (!days) return engine.signals;
+    const fromT = barTime(bars[bars.length - 1]) - days * 86400;
+    return engine.signals.filter(s => barTime(s.bar) >= fromT);
+  }, [engine, view, bars]);
+
   // Create the chart once per bars set (timeframe change). Sets candle data,
   // resize observer, and the crosshair tooltip handler.
   useEffect(() => {
@@ -84,7 +96,9 @@ function SignalChart({ token, symbol }) {
       layout: { background: { color: BG }, textColor: '#9aa4b8', fontSize: 11 },
       grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
       crosshair: { mode: 0 },
-      rightPriceScale: { borderColor: GRID },
+      // Leave head-room top & bottom so aboveBar / belowBar markers (the S/B
+      // arrows) always have space to render and never clip at the chart edge.
+      rightPriceScale: { borderColor: GRID, scaleMargins: { top: 0.12, bottom: 0.18 } },
       timeScale: { borderColor: GRID, timeVisible: false, rightOffset: 6 },
     });
     const candle = chart.addCandlestickSeries({
@@ -124,16 +138,20 @@ function SignalChart({ token, symbol }) {
     return () => { chart.remove(); chartRef.current = null; };
   }, [bars]);
 
-  // Push indicator lines + markers whenever the engine output changes. This is
-  // the hot path while dragging sliders — only setData/setMarkers, no rebuild.
+  // Push the SMA overlay lines whenever the engine recomputes (e.g. slider drag).
   useEffect(() => {
-    if (!candleRef.current || bars.length === 0) return;
+    if (!fastRef.current || bars.length === 0) return;
     const toLine = (arr) => bars.map((b, i) => (arr[i] == null ? null : { time: barTime(b), value: arr[i] })).filter(Boolean);
     fastRef.current.setData(toLine(engine.fast));
     slowRef.current.setData(toLine(engine.slow));
+  }, [engine, bars]);
 
+  // Push the Buy/Sell markers (scoped to the visible window). Hot path on slider
+  // drag and view change — only setMarkers, no chart rebuild.
+  useEffect(() => {
+    if (!candleRef.current || bars.length === 0) return;
     const map = new Map();
-    const markers = engine.signals.map((s) => {
+    const markers = visibleSignals.map((s) => {
       const time = barTime(s.bar);
       map.set(time, s);
       const buy = s.type === 'buy';
@@ -147,7 +165,7 @@ function SignalChart({ token, symbol }) {
     });
     signalByTimeRef.current = map;
     candleRef.current.setMarkers(markers);
-  }, [engine, strict, bars]);
+  }, [visibleSignals, strict, bars]);
 
   // Zoom the time axis to the chosen view (runs after chart creation since both
   // depend on `bars`, and on its own when the view button changes).
@@ -162,8 +180,8 @@ function SignalChart({ token, symbol }) {
     ts.setVisibleRange({ from, to: last });
   }, [view, bars]);
 
-  const buyCount = engine.signals.filter(s => s.type === 'buy').length;
-  const sellCount = engine.signals.filter(s => s.type === 'sell').length;
+  const buyCount = visibleSignals.filter(s => s.type === 'buy').length;
+  const sellCount = visibleSignals.filter(s => s.type === 'sell').length;
   const sliderStyle = { accentColor: FAST_COLOR, cursor: 'pointer', width: '150px' };
   const capStyle = { fontSize: '0.72rem', color: 'var(--text-secondary)' };
 
