@@ -52,11 +52,23 @@ function SignalChart({ token, symbol }) {
         if (json?.content?.[0]?.text) {
           const parsed = JSON.parse(json.content[0].text);
           if (Array.isArray(parsed)) {
-            // Ascending, unique-per-day; lightweight-charts requires sorted times.
-            const clean = parsed
+            // lightweight-charts setData() throws on out-of-order or duplicate
+            // timestamps — which silently leaves an empty chart with no axis. So
+            // drop unparseable dates, sort ascending, and collapse same-day dupes.
+            const mapped = parsed
               .filter(c => c.open != null && c.close != null)
-              .map(c => ({ dateObj: new Date(c.date), open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume }));
-            setBars(clean);
+              .map(c => ({ dateObj: new Date(c.date), open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume }))
+              .filter(b => !Number.isNaN(b.dateObj.getTime()))
+              .sort((a, b) => a.dateObj - b.dateObj);
+            const clean = [];
+            for (const b of mapped) {
+              const prev = clean[clean.length - 1];
+              if (prev && Math.floor(prev.dateObj.getTime() / 1000) === Math.floor(b.dateObj.getTime() / 1000)) {
+                clean[clean.length - 1] = b; // same day — keep the later candle
+              } else clean.push(b);
+            }
+            if (clean.length === 0) setError('No price data for this instrument.');
+            else setBars(clean);
           } else setError('Unexpected data format.');
         } else setError(json?.error || 'No data.');
       } catch (e) {
@@ -91,9 +103,11 @@ function SignalChart({ token, symbol }) {
   useEffect(() => {
     if (!containerRef.current || bars.length === 0) return;
 
-    const chart = createChart(containerRef.current, {
-      autoSize: true,
-      layout: { background: { color: BG }, textColor: '#9aa4b8', fontSize: 11 },
+    const el = containerRef.current;
+    const chart = createChart(el, {
+      width: el.clientWidth,
+      height: el.clientHeight,
+      layout: { background: { color: BG }, textColor: '#c3cce0', fontSize: 12 },
       grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
       crosshair: { mode: 0 },
       // Leave head-room top & bottom so aboveBar / belowBar markers (the S/B
@@ -105,7 +119,15 @@ function SignalChart({ token, symbol }) {
       upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
       wickUpColor: '#26a69a', wickDownColor: '#ef5350',
     });
-    candle.setData(bars.map(b => ({ time: barTime(b), open: b.open, high: b.high, low: b.low, close: b.close })));
+    // setData throws on bad time ordering — surface a clear error rather than
+    // leaving a silent empty chart (no candles, no x-axis).
+    try {
+      candle.setData(bars.map(b => ({ time: barTime(b), open: b.open, high: b.high, low: b.low, close: b.close })));
+    } catch {
+      chart.remove();
+      setError('Could not render price data for this instrument.');
+      return;
+    }
 
     const fast = chart.addLineSeries({ color: FAST_COLOR, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     const slow = chart.addLineSeries({ color: SLOW_COLOR, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
@@ -135,7 +157,14 @@ function SignalChart({ token, symbol }) {
     fastRef.current = fast;
     slowRef.current = slow;
 
-    return () => { chart.remove(); chartRef.current = null; };
+    // Keep the chart sized to its container (explicit, so the time axis always
+    // gets its full height and the date labels aren't clipped at the bottom).
+    const ro = new ResizeObserver(() => {
+      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight });
+    });
+    ro.observe(el);
+
+    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
   }, [bars]);
 
   // Push the SMA overlay lines whenever the engine recomputes (e.g. slider drag).
@@ -227,7 +256,7 @@ function SignalChart({ token, symbol }) {
       </div>
 
       {/* Chart */}
-      <div style={{ position: 'relative', height: '460px' }}>
+      <div style={{ position: 'relative', height: '480px' }}>
         {loading ? (
           <div className="loader" style={{ position: 'absolute', top: '50%', left: '50%' }}></div>
         ) : error ? (
