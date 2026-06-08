@@ -2110,11 +2110,17 @@ function Instrument() {
         };
 
         // Row spec mapped to screener.in field names.
+        const hasInterest = columns.some(c => {
+          const r = byLabel[c.label];
+          return r && r.interest != null && r.interest > 0;
+        });
+
         const rows = [
           { key: 'totalIncome',     label: 'Sales',            fmt: fmtCr,  get: r => r?.totalIncome,     pill: growthPill },
           { key: 'expenses',        label: 'Expenses',         fmt: fmtCr,  get: r => r?.expenses,        pill: expensePill },
           { key: 'operatingProfit', label: 'Operating Profit', fmt: fmtCr,  get: r => r?.operatingProfit, pill: growthPill },
           { key: 'operatingMargin', label: 'Operating Margin', fmt: fmtPct, get: r => opMarginOf(r),     pill: marginPill },
+          ...(hasInterest ? [{ key: 'interest', label: 'Interest', fmt: fmtCr, get: r => r?.interest, pill: expensePill }] : []),
           { key: 'netProfit',       label: 'Net Profit',       fmt: fmtCr,  get: r => r?.netProfit,       pill: growthPill },
           { key: 'eps',             label: 'EPS',              fmt: fmtEPS, get: r => r?.eps,             pill: growthPill },
         ];
@@ -2219,7 +2225,8 @@ function Instrument() {
           }
           // Margin compression > 3pp (trailing-window avg vs prior-window avg)
           if (opmTtmDelta != null && opmTtmDelta < -3) {
-            flags.push(`Operating margin compressed by ${Math.abs(opmTtmDelta).toFixed(1)}pp vs prior ${windowSize} ${periodNoun}`);
+            const periodNounSingular = isYearly ? 'year' : 'quarter';
+            flags.push(`Operating margin compressed by ${Math.abs(opmTtmDelta).toFixed(1)}pp vs prior ${windowSize}-${periodNounSingular} average`);
           }
           // Net loss in latest period
           const latest = last4[last4.length - 1];
@@ -2861,16 +2868,24 @@ function Instrument() {
           // negative ratio to a fractional power returns NaN. The Vodafone
           // Idea case (₹23k Cr → -₹35k Cr) triggered exactly this. Caller
           // surfaces a "Turned negative" hint below when this returns null.
+          const nwValidYears = years.filter(y => y.netWorth != null);
+          const nwEarliest = nwValidYears.length > 0 ? nwValidYears[0] : null;
+          const nwLatest = nwValidYears.length > 0 ? nwValidYears[nwValidYears.length - 1] : null;
+          
           const nwCAGR = (() => {
-            if (latest.netWorth == null || earliest.netWorth == null) return null;
-            if (earliest.netWorth <= 0 || latest.netWorth <= 0) return null;
-            const yrs = latest.fy - earliest.fy;
+            if (!nwEarliest || !nwLatest) return null;
+            if (nwEarliest.netWorth <= 0 || nwLatest.netWorth <= 0) return null;
+            const yrs = nwLatest.fy - nwEarliest.fy;
             if (yrs <= 0) return null;
-            return (Math.pow(latest.netWorth / earliest.netWorth, 1 / yrs) - 1) * 100;
+            return {
+              val: (Math.pow(nwLatest.netWorth / nwEarliest.netWorth, 1 / yrs) - 1) * 100,
+              earliestLabel: nwEarliest.fyLabel,
+              latestLabel: nwLatest.fyLabel
+            };
           })();
           const nwTurnedNegative = (
-            earliest.netWorth != null && latest.netWorth != null
-            && earliest.netWorth > 0 && latest.netWorth <= 0
+            nwEarliest != null && nwLatest != null
+            && nwEarliest.netWorth > 0 && nwLatest.netWorth <= 0
           );
 
           // Total Assets YoY (latest)
@@ -2903,7 +2918,7 @@ function Instrument() {
               flags.push(`Net worth declining for 2+ consecutive years (${years[years.length - 3].fyLabel} → ${latest.fyLabel})`);
             }
           }
-          if (cwipYoY != null && cwipYoY > 100) {
+          if (cwipYoY != null && cwipYoY > 100 && latest.cwip > 50) {
             flags.push(`CWIP ballooned +${cwipYoY.toFixed(0)}% — large capex cycle in progress, watch for execution risk`);
           }
 
@@ -2988,19 +3003,19 @@ function Instrument() {
                         <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Net Worth CAGR</div>
                         <div style={{
                           fontSize: '1.05rem', fontWeight: 700, marginTop: '0.2rem',
-                          color: bsSnapshot.nwTurnedNegative ? '#ef4444' : trendColor(bsSnapshot.nwCAGR, 0.5),
+                          color: bsSnapshot.nwTurnedNegative ? '#ef4444' : trendColor(bsSnapshot.nwCAGR?.val, 0.5),
                         }}>
                           {bsSnapshot.nwTurnedNegative
                             ? '↓ n/a'
                             : bsSnapshot.nwCAGR == null
                               ? '—'
-                              : `${arrow(bsSnapshot.nwCAGR, 0.5)} ${bsSnapshot.nwCAGR >= 0 ? '+' : ''}${bsSnapshot.nwCAGR.toFixed(1)}% /yr`}
+                              : `${arrow(bsSnapshot.nwCAGR.val, 0.5)} ${bsSnapshot.nwCAGR.val >= 0 ? '+' : ''}${bsSnapshot.nwCAGR.val.toFixed(1)}% /yr`}
                         </div>
                         <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
                           {bsSnapshot.nwTurnedNegative
                             ? `Turned negative by ${bsSnapshot.latest.fyLabel}`
                             : bsSnapshot.nwCAGR != null
-                              ? `${years[0].fyLabel} → ${bsSnapshot.latest.fyLabel}`
+                              ? `${bsSnapshot.nwCAGR.earliestLabel} → ${bsSnapshot.nwCAGR.latestLabel}`
                               : 'Needs ≥ 2 years'}
                         </div>
                       </div>

@@ -2,6 +2,22 @@
   box-sizing: border-box;
 }
 
+.tv-lightweight-charts, .tv-lightweight-charts * {
+  box-sizing: content-box !important;
+}
+.tv-lightweight-charts table {
+  margin: 0 !important;
+  border-collapse: collapse !important;
+}
+.tv-lightweight-charts tr {
+  background: transparent !important;
+}
+.tv-lightweight-charts td, .tv-lightweight-charts th {
+  padding: 0 !important;
+  border: none !important;
+  text-align: left !important;
+}
+
 :root {
   --bg-dark: #0f172a;
   --bg-panel: rgba(30, 41, 59, 0.7);

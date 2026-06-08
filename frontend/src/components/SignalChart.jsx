@@ -14,7 +14,19 @@ const SLOW_COLOR = '#f59e0b'; // orange
 const BUY_COLOR = '#22c55e';
 const SELL_COLOR = '#ef4444';
 
-const barTime = (b) => Math.floor(new Date(b.dateObj || b.date).getTime() / 1000);
+const barTimeStr = (b) => {
+  const d = b.dateObj || new Date(b.date);
+  return `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,'0')}-${d.getDate().toString().padStart(2,'0')}`;
+};
+
+const barTime = (b) => {
+  const d = b.dateObj || new Date(b.date);
+  return {
+    year: d.getFullYear(),
+    month: d.getMonth() + 1,
+    day: d.getDate(),
+  };
+};
 
 // View = how much recent history to ZOOM to. Full 5Y is loaded up front so the
 // Slow SMA stays warm even on a 1-month view; these only pan/zoom the time axis.
@@ -63,7 +75,7 @@ function SignalChart({ token, symbol }) {
             const clean = [];
             for (const b of mapped) {
               const prev = clean[clean.length - 1];
-              if (prev && Math.floor(prev.dateObj.getTime() / 1000) === Math.floor(b.dateObj.getTime() / 1000)) {
+              if (prev && barTimeStr(prev) === barTimeStr(b)) {
                 clean[clean.length - 1] = b; // same day — keep the later candle
               } else clean.push(b);
             }
@@ -94,8 +106,9 @@ function SignalChart({ token, symbol }) {
     if (bars.length === 0) return [];
     const days = VIEW_DAYS[view];
     if (!days) return engine.signals;
-    const fromT = barTime(bars[bars.length - 1]) - days * 86400;
-    return engine.signals.filter(s => barTime(s.bar) >= fromT);
+    const lastTime = (bars[bars.length - 1].dateObj || new Date(bars[bars.length - 1].date)).getTime();
+    const fromT = lastTime - days * 86400000;
+    return engine.signals.filter(s => (s.bar.dateObj || new Date(s.bar.date)).getTime() >= fromT);
   }, [engine, view, bars]);
 
   // Create the chart once per bars set (timeframe change). Sets candle data,
@@ -113,7 +126,7 @@ function SignalChart({ token, symbol }) {
       // Leave head-room top & bottom so aboveBar / belowBar markers (the S/B
       // arrows) always have space to render and never clip at the chart edge.
       rightPriceScale: { borderColor: GRID, scaleMargins: { top: 0.12, bottom: 0.18 } },
-      timeScale: { borderColor: GRID, timeVisible: false, rightOffset: 6 },
+      timeScale: { borderColor: GRID, rightOffset: 6 },
     });
     const candle = chart.addCandlestickSeries({
       upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
@@ -204,9 +217,27 @@ function SignalChart({ token, symbol }) {
     const ts = chart.timeScale();
     const days = VIEW_DAYS[view];
     if (!days) { ts.fitContent(); return; }
-    const last = barTime(bars[bars.length - 1]);
-    const from = Math.max(barTime(bars[0]), last - days * 86400);
-    ts.setVisibleRange({ from, to: last });
+    
+    const lastObj = bars[bars.length - 1].dateObj || new Date(bars[bars.length - 1].date);
+    const targetTime = lastObj.getTime() - days * 86400000;
+    
+    // Find the closest valid bar >= targetTime
+    let fromBar = bars[0];
+    for (let i = 0; i < bars.length; i++) {
+      if ((bars[i].dateObj || new Date(bars[i].date)).getTime() >= targetTime) {
+        fromBar = bars[i];
+        break;
+      }
+    }
+    
+    const to = barTime(bars[bars.length - 1]);
+    const from = barTime(fromBar);
+    
+    try {
+      ts.setVisibleRange({ from, to });
+    } catch (e) {
+      ts.fitContent(); // Fallback if setVisibleRange fails (e.g. invalid TimeRange)
+    }
   }, [view, bars]);
 
   const buyCount = visibleSignals.filter(s => s.type === 'buy').length;
