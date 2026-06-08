@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 import TechnicalAlertsPanel from '../components/alerts/TechnicalAlertsPanel';
+import { breakoutStatus } from '../lib/breakout';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -66,6 +67,12 @@ const pctColor = (v) => (v == null ? 'var(--text-secondary)' : v > 0 ? '#10b981'
 const smaBadge = (above) => above == null
   ? <span style={{ color: 'var(--text-secondary)' }}>—</span>
   : <span style={{ color: above ? '#10b981' : '#ef4444' }}>{above ? '▲' : '▼'}</span>;
+// Breakout indicator: 2 = fresh 20-day-high breakout, 1 = coiling near it, 0/null = no.
+const breakoutBadge = (v) => {
+  if (v === 2) return <span title="Breakout — closed at a fresh 20-day high" style={{ color: '#fbbf24', fontWeight: 700 }}>🚀 B/O</span>;
+  if (v === 1) return <span title="Near breakout — within 1.5% of the 20-day high" style={{ color: '#eab308', fontWeight: 700 }}>↗ Near</span>;
+  return <span style={{ color: 'var(--text-secondary)' }}>—</span>;
+};
 
 export default function ThemeDetail() {
   const { themeId } = useParams();
@@ -139,7 +146,7 @@ export default function ThemeDetail() {
         return {
           ...c, price, '1D': change1D,
           '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null,
-          rsi14: null, aboveSma20: null, aboveSma200: null, histLoaded: false,
+          rsi14: null, aboveSma20: null, aboveSma200: null, breakout: null, histLoaded: false,
         };
       });
       setStockData(initial);
@@ -172,6 +179,7 @@ export default function ThemeDetail() {
               rsi14,
               aboveSma20: sma20 != null ? lastClose >= sma20 : null,
               aboveSma200: sma200 != null ? lastClose >= sma200 : null,
+              breakout: breakoutStatus(sorted),
               histLoaded: true,
             } : s));
             setLoadedCount(n => n + 1);
@@ -428,6 +436,7 @@ export default function ThemeDetail() {
                 {sortableTh('RSI', 'rsi14', 'right')}
                 {sortableTh('SMA 20', 'aboveSma20', 'center')}
                 {sortableTh('SMA 200', 'aboveSma200', 'center')}
+                {sortableTh('Breakout', 'breakout', 'center')}
                 <th style={{ ...th, textAlign: 'center' }} />
               </tr>
             </thead>
@@ -450,6 +459,7 @@ export default function ThemeDetail() {
                   <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>{s.rsi14 == null ? '—' : s.rsi14}</td>
                   <td style={{ ...td, textAlign: 'center' }}>{smaBadge(s.aboveSma20)}</td>
                   <td style={{ ...td, textAlign: 'center' }}>{smaBadge(s.aboveSma200)}</td>
+                  <td style={{ ...td, textAlign: 'center' }}>{breakoutBadge(s.breakout)}</td>
                   <td style={{ ...td, textAlign: 'center' }}>
                     <button onClick={() => removeInstrument(s.instrumentId, s.symbol)} title="Remove from theme"
                       style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.9rem' }}>✕</button>

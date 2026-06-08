@@ -6,6 +6,7 @@ import AlertRow from '../components/alerts/AlertRow';
 import ConvictionModal from '../components/alerts/ConvictionModal';
 import TradePlanModal from '../components/alerts/TradePlanModal';
 import { biasClass } from '../components/alerts/biasClass';
+import { breakoutStatus } from '../lib/breakout';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 
 const ALERTS_REFRESH_MS = 60_000;
@@ -391,7 +392,7 @@ export default function SectorDetail() {
           price, '1D': change1D,
           '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null,
           rsi14: null, sma20: null, sma200: null, aboveSma20: null, aboveSma200: null,
-          weeklyHighs: null, pastRawMomentum: null, histLoaded: false,
+          breakout: null, weeklyHighs: null, pastRawMomentum: null, histLoaded: false,
         };
       });
       setStockData(initial);
@@ -451,7 +452,7 @@ export default function SectorDetail() {
                 // 1D from the history series so the row isn't a blank dash / flat
                 // 0.00%. 1D uses the last two daily closes, matching how 1W–3Y are
                 // derived. A real live price keeps its real-time price and 1D.
-                ? { ...s, ...returns, price: s.price || price, '1D': (!s.price && prevDayClose) ? ((price - prevDayClose) / prevDayClose) * 100 : s['1D'], rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, weeklyHighs, pastRawMomentum, histLoaded: true }
+                ? { ...s, ...returns, price: s.price || price, '1D': (!s.price && prevDayClose) ? ((price - prevDayClose) / prevDayClose) * 100 : s['1D'], rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, breakout: breakoutStatus(sorted), weeklyHighs, pastRawMomentum, histLoaded: true }
                 : s
             ));
             setHistLoadedCount(n => n + 1);
@@ -669,6 +670,15 @@ export default function SectorDetail() {
     return <td style={{ padding: '0.4rem', textAlign: 'center', color: v ? '#22c55e' : '#ef4444' }}>{v ? '▲' : '▼'}</td>;
   };
 
+  // Breakout indicator: 2 = fresh 20-day-high breakout, 1 = coiling near it, 0/null = no.
+  const BreakoutCell = ({ v }) => {
+    const base = { padding: '0.4rem', textAlign: 'center', whiteSpace: 'nowrap' };
+    if (v === 2) return <td style={base} title="Breakout — closed at a fresh 20-day high"><span style={{ color: '#fbbf24', fontWeight: 700 }}>🚀 B/O</span></td>;
+    if (v === 1) return <td style={{ ...base, color: '#eab308', fontWeight: 700 }} title="Near breakout — within 1.5% of the 20-day high">↗ Near</td>;
+    if (v === 0) return <td style={{ ...base, color: 'var(--text-secondary)' }}>–</td>;
+    return <td style={{ ...base, color: 'var(--text-secondary)' }}>–</td>;
+  };
+
   const Cell = ({ value }) => (
     <td style={{ padding: '0.4rem', color: pctColor(value), fontWeight: value != null ? 600 : 400, textAlign: 'right' }}>
       {fmtPct(value)}
@@ -779,6 +789,7 @@ export default function SectorDetail() {
               <SortTh label="1W Δ" sortKey="weeklyRankDelta" sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'right' }} />
               <SortTh label="SMA 20" sortKey="aboveSma20" sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'center' }} />
               <SortTh label="SMA 200" sortKey="aboveSma200" sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'center' }} />
+              <SortTh label="Breakout" sortKey="breakout" sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'center' }} />
             </tr>
           </thead>
           <tbody>
@@ -834,6 +845,7 @@ export default function SectorDetail() {
                 </td>
                 <SmaCell v={s.aboveSma20} />
                 <SmaCell v={s.aboveSma200} />
+                <BreakoutCell v={s.breakout} />
               </tr>
             ))}
           </tbody>
