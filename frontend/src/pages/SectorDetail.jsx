@@ -780,7 +780,7 @@ export default function SectorDetail() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
           <thead style={{ position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5 }}>
             <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-              <th style={{ textAlign: 'left', padding: '0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5 }}>Name</th>
+              <th style={{ textAlign: 'left', padding: '0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5, width: '150px' }}>Name</th>
               <th style={{ textAlign: 'right', padding: '0.5rem', color: 'var(--text-secondary)', position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5 }}>Price</th>
               {['1D','1W','1M','3M','6M','1Y','2Y','3Y'].map(k => (
                 <SortTh key={k} label={k} sortKey={k} sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'right' }} />
@@ -802,8 +802,8 @@ export default function SectorDetail() {
                 onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
                 onMouseOut={e => e.currentTarget.style.background = 'transparent'}
               >
-                <td style={{ padding: '0.4rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                  <div>{s.name}</div>
+                <td style={{ padding: '0.4rem', fontWeight: 600, maxWidth: '150px' }}>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.name}>{s.name}</div>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{s.symbol}</div>
                 </td>
                 <td style={{ padding: '0.4rem', textAlign: 'right', fontWeight: 600 }}>
