@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 import TechnicalAlertsPanel from '../components/alerts/TechnicalAlertsPanel';
-import { breakoutStatus } from '../lib/breakout';
+import { breakoutRank, breakoutLabel } from '../lib/breakout';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -67,11 +67,13 @@ const pctColor = (v) => (v == null ? 'var(--text-secondary)' : v > 0 ? '#10b981'
 const smaBadge = (above) => above == null
   ? <span style={{ color: 'var(--text-secondary)' }}>—</span>
   : <span style={{ color: above ? '#10b981' : '#ef4444' }}>{above ? '▲' : '▼'}</span>;
-// Breakout indicator: 2 = fresh 20-day-high breakout, 1 = coiling near it, 0/null = no.
+// Breakout indicator — longest horizon at a new high (3Y…1M), or Near / below.
 const breakoutBadge = (v) => {
-  if (v === 2) return <span title="Breakout — closed at a fresh 20-day high" style={{ color: '#fbbf24', fontWeight: 700 }}>🚀 B/O</span>;
-  if (v === 1) return <span title="Near breakout — within 1.5% of the 20-day high" style={{ color: '#eab308', fontWeight: 700 }}>↗ Near</span>;
-  return <span style={{ color: 'var(--text-secondary)' }}>—</span>;
+  if (v == null) return <span style={{ color: 'var(--text-secondary)' }}>—</span>;
+  const { text, color } = breakoutLabel(v);
+  const title = v >= 2 ? `Breakout — closed at a new ${text.replace('🚀 ', '')} high`
+    : v === 1 ? 'Near breakout — within 1.5% of the 1-month high' : 'Below the 1-month high';
+  return <span title={title} style={{ color, fontWeight: v >= 1 ? 700 : 400 }}>{text}</span>;
 };
 
 export default function ThemeDetail() {
@@ -179,7 +181,7 @@ export default function ThemeDetail() {
               rsi14,
               aboveSma20: sma20 != null ? lastClose >= sma20 : null,
               aboveSma200: sma200 != null ? lastClose >= sma200 : null,
-              breakout: breakoutStatus(sorted),
+              breakout: breakoutRank(sorted),
               histLoaded: true,
             } : s));
             setLoadedCount(n => n + 1);

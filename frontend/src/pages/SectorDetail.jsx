@@ -6,7 +6,7 @@ import AlertRow from '../components/alerts/AlertRow';
 import ConvictionModal from '../components/alerts/ConvictionModal';
 import TradePlanModal from '../components/alerts/TradePlanModal';
 import { biasClass } from '../components/alerts/biasClass';
-import { breakoutStatus } from '../lib/breakout';
+import { breakoutRank, breakoutLabel } from '../lib/breakout';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 
 const ALERTS_REFRESH_MS = 60_000;
@@ -452,7 +452,7 @@ export default function SectorDetail() {
                 // 1D from the history series so the row isn't a blank dash / flat
                 // 0.00%. 1D uses the last two daily closes, matching how 1W–3Y are
                 // derived. A real live price keeps its real-time price and 1D.
-                ? { ...s, ...returns, price: s.price || price, '1D': (!s.price && prevDayClose) ? ((price - prevDayClose) / prevDayClose) * 100 : s['1D'], rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, breakout: breakoutStatus(sorted), weeklyHighs, pastRawMomentum, histLoaded: true }
+                ? { ...s, ...returns, price: s.price || price, '1D': (!s.price && prevDayClose) ? ((price - prevDayClose) / prevDayClose) * 100 : s['1D'], rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, breakout: breakoutRank(sorted), weeklyHighs, pastRawMomentum, histLoaded: true }
                 : s
             ));
             setHistLoadedCount(n => n + 1);
@@ -670,13 +670,14 @@ export default function SectorDetail() {
     return <td style={{ padding: '0.4rem', textAlign: 'center', color: v ? '#22c55e' : '#ef4444' }}>{v ? '▲' : '▼'}</td>;
   };
 
-  // Breakout indicator: 2 = fresh 20-day-high breakout, 1 = coiling near it, 0/null = no.
+  // Breakout indicator — shows the longest horizon at a new high (3Y…1M), or Near.
   const BreakoutCell = ({ v }) => {
     const base = { padding: '0.4rem', textAlign: 'center', whiteSpace: 'nowrap' };
-    if (v === 2) return <td style={base} title="Breakout — closed at a fresh 20-day high"><span style={{ color: '#fbbf24', fontWeight: 700 }}>🚀 B/O</span></td>;
-    if (v === 1) return <td style={{ ...base, color: '#eab308', fontWeight: 700 }} title="Near breakout — within 1.5% of the 20-day high">↗ Near</td>;
-    if (v === 0) return <td style={{ ...base, color: 'var(--text-secondary)' }}>–</td>;
-    return <td style={{ ...base, color: 'var(--text-secondary)' }}>–</td>;
+    if (v == null) return <td style={{ ...base, color: 'var(--text-secondary)' }}>–</td>;
+    const { text, color } = breakoutLabel(v);
+    const title = v >= 2 ? `Breakout — closed at a new ${text.replace('🚀 ', '')} high`
+      : v === 1 ? 'Near breakout — within 1.5% of the 1-month high' : 'Below the 1-month high';
+    return <td style={{ ...base, color, fontWeight: v >= 1 ? 700 : 400 }} title={title}>{text}</td>;
   };
 
   const Cell = ({ value }) => (
