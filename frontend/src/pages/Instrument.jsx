@@ -1642,7 +1642,7 @@ function Instrument() {
           })()}
 
           {/* Chart */}
-          <section className="glass-panel" style={{ height: '400px', padding: '1.5rem 1rem 1rem 1rem' }}>
+          <section className="glass-panel" style={{ height: '500px', padding: '1.5rem 1rem 1rem 1rem' }}>
             {loading ? (
               <div className="loader"></div>
             ) : error ? (
