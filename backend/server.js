@@ -39,6 +39,10 @@ const toYahooSymbol = (symbol) => {
   if (!symbol) return '';
   // Remove NSE: or BSE: prefix if present
   let cleanSymbol = symbol.replace(/^(NSE|BSE):/, '');
+  
+  // Strip NSE series suffixes (like -BE for Book Entry) before querying Yahoo
+  cleanSymbol = cleanSymbol.replace(/-(BE|SM|EQ)$/i, '');
+
   // Unless it's an index or explicitly a global ticker, append .NS for Indian equities
   // (We assume NSE as default for Kite stocks if not specified)
   if (!cleanSymbol.includes('.') && cleanSymbol !== 'NIFTY 50' && cleanSymbol !== 'NIFTY BANK') {
@@ -916,6 +920,32 @@ app.get('/api/historical/:token', async (req, res) => {
       return res.json(result);
     }
 
+    // For 4Y, neither the 3-year historyCache nor a single MCP call (Kite caps
+    // ~1yr of daily candles per request) can cover the range. Serve from the
+    // chunked 4-calendar-year fetch (cached + coalesced) the backtester and
+    // screener already use, then align SMAs the same way as every other tf.
+    if (tf === '4Y') {
+      const { data } = await getOrFetchFullHistory(token);
+      if (!Array.isArray(data) || data.length === 0) {
+        return res.json({ content: [{ type: "text", text: "[]" }] });
+      }
+      const closes = data.map(c => c.close);
+      const sma20Func = SMA.calculate({ period: 20, values: closes });
+      const sma5Func = SMA.calculate({ period: 5, values: closes });
+      const aligned = data.map((c, i) => ({
+        ...c,
+        sma20: i >= 19 ? sma20Func[i - 19] : null,
+        sma5: i >= 4 ? sma5Func[i - 4] : null
+      }));
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 1460); // ~4 years
+      const filtered = aligned.filter(c => new Date(c.date) >= cutoff);
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      return res.json({
+        content: [{ type: "text", text: JSON.stringify(filtered.length ? filtered : aligned) }]
+      });
+    }
+
     // For daily timeframes, try serving from cache
     const cached = historyCache[token];
     if (cached && cached.length > 0) {
@@ -1154,54 +1184,10 @@ app.get('/api/indicators/:token', async (req, res) => {
 // Pure function over a candle series. Used by both /api/alerts (holdings) and
 // /api/sector-alerts/:sectorId (sector drill-down). Returns the alert object,
 // or null if the stock has no actionable signals.
-// Classic SuperTrend(period, multiplier) — iterative because each bar's bands
-// depend on the prior bar's "sticky" final bands and direction. Inputs:
-//   candles: full OHLC array (uses high, low, close)
-//   atrArr:  output from technicalindicators ATR.calculate (length = candles.length - period)
-//   period:  lookback used to align ATR with candles (default 10)
-//   mult:    band multiplier (default 3)
-// Returns one row per usable bar (starting from index `period` in candles)
-// shaped { value, direction: 'BULL'|'BEAR' }. The first row's direction is
-// seeded from close vs basic upper band; subsequent rows carry/flip per the
-// canonical SuperTrend rules.
-function computeSuperTrend(candles, atrArr, period = 10, mult = 3) {
-  if (!candles || candles.length <= period || atrArr.length === 0) return [];
-  const offset = candles.length - atrArr.length; // ATR lops off first `period` bars
-  const out = [];
-  let prevFinalUpper = null;
-  let prevFinalLower = null;
-  let prevDirection = null;
-  for (let i = 0; i < atrArr.length; i++) {
-    const c = candles[i + offset];
-    const prevC = candles[i + offset - 1] || c;
-    const hl2 = (c.high + c.low) / 2;
-    const basicUpper = hl2 + mult * atrArr[i];
-    const basicLower = hl2 - mult * atrArr[i];
-
-    // Sticky final bands — tighten only in the direction of trend.
-    const finalUpper = (prevFinalUpper == null || basicUpper < prevFinalUpper || prevC.close > prevFinalUpper)
-      ? basicUpper : prevFinalUpper;
-    const finalLower = (prevFinalLower == null || basicLower > prevFinalLower || prevC.close < prevFinalLower)
-      ? basicLower : prevFinalLower;
-
-    let direction;
-    if (prevDirection == null) {
-      // Seed off the very first bar — direction = whichever band the close is above.
-      direction = c.close > finalUpper ? 'BULL' : 'BEAR';
-    } else if (prevDirection === 'BULL') {
-      direction = c.close < finalLower ? 'BEAR' : 'BULL';
-    } else {
-      direction = c.close > finalUpper ? 'BULL' : 'BEAR';
-    }
-    const value = direction === 'BULL' ? finalLower : finalUpper;
-    out.push({ value, direction });
-
-    prevFinalUpper = finalUpper;
-    prevFinalLower = finalLower;
-    prevDirection = direction;
-  }
-  return out;
-}
+// computeSuperTrend moved to ./backtest/indicators.js so the live alert engine,
+// the backtester, and the screener share identical SuperTrend math (same
+// iterative sticky-band semantics documented there).
+const { computeSuperTrend } = require('./backtest/indicators');
 
 //
 // `holding` is the raw Kite holdings row when called from /api/alerts; pass
@@ -1973,6 +1959,13 @@ async function fetchScreenerHTML(symbol, { consolidated = false } = {}) {
 
   const slugCandidates = [];
   if (SCREENER_SLUG_ALIASES[symbol]) slugCandidates.push(SCREENER_SLUG_ALIASES[symbol]);
+  // NSE series suffixes (BE = Trade-to-Trade, BZ, SM = SME, etc.) ride on the
+  // Kite tradingsymbol — e.g. SIGMAADV-BE — but screener.in keys off the base
+  // symbol (SIGMAADV). Strip a known 2-letter series suffix and try the base
+  // first. (Only matches the known set, so hyphenated names like BAJAJ-AUTO are
+  // left untouched.)
+  const baseSymbol = symbol.replace(/-(BE|BZ|BL|IL|SM|ST|GB|GC|GS|DR)$/i, '');
+  if (baseSymbol !== symbol) slugCandidates.push(baseSymbol);
   slugCandidates.push(symbol);
 
   const tryFetch = async (slug) => {
@@ -3416,6 +3409,918 @@ app.delete('/api/notes/:symbol', async (req, res) => {
     if (error) throw new Error(error.message);
     res.json({ symbol, success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── Strategy Backtester ──────────────────────────────────────
+// Replays pure per-bar strategy rules (backend/backtest/) over the same 4Y
+// candle caches the rest of the app uses. Engine is O(n) per stock — see
+// backtest/engine.js for the execution model (next-open fills, pessimistic
+// intrabar stops, flat round-trip cost). UI is currently unwired (replaced by
+// the Custom Screener); the API stays available.
+const { runBacktest } = require('./backtest/engine');
+const { STRATEGIES, publicStrategyList } = require('./backtest/strategies');
+const { computeMetrics: computeBacktestMetrics } = require('./backtest/metrics');
+
+const MIN_BACKTEST_BARS = 260; // breakout warmup needs less; supertrend needs 210 + headroom
+
+app.get('/api/backtest/strategies', (req, res) => {
+  res.json({ strategies: publicStrategyList() });
+});
+
+app.post('/api/backtest/run', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
+  const { token, symbol, strategyId, params = {} } = req.body || {};
+  if (!token || !strategyId) return res.status(400).json({ error: 'token and strategyId are required' });
+  if (!STRATEGIES[strategyId]) return res.status(400).json({ error: `Unknown strategy "${strategyId}"` });
+  const costPct = Number.isFinite(Number(req.body?.costPct)) ? Number(req.body.costPct) : 0.25;
+  const capitalPerTrade = Number(req.body?.capitalPerTrade) > 0 ? Number(req.body.capitalPerTrade) : 100000;
+  try {
+    const { data: candles } = await getOrFetchFullHistory(String(token));
+    if (!Array.isArray(candles) || candles.length < MIN_BACKTEST_BARS) {
+      return res.status(422).json({ error: `Insufficient history to backtest (${candles?.length || 0} bars, need ≥ ${MIN_BACKTEST_BARS})` });
+    }
+    const result = runBacktest({ candles, strategyId, params, costPct, capitalPerTrade });
+    res.json({ symbol: symbol || null, token: String(token), ...result });
+  } catch (err) {
+    if (err.statusCode === 429) return res.status(429).set('Retry-After', String(err.retryAfter || 5)).json({ error: 'rate_limited', retryAfter: err.retryAfter || 5 });
+    console.error('[backtest/run]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Basket backtests run as async in-memory jobs: a cold basket needs up to
+// ~50 rate-limited multi-year MCP fetches (minutes), far beyond an HTTP
+// timeout. Mirrors the historicalFullWarming progress pattern.
+const backtestJobs = {};  // jobId -> { id, status, progress, result, error, createdAt }
+let backtestJobSeq = 0;
+
+async function resolveBasketConstituents(scope) {
+  if (scope?.type === 'sector') {
+    if (!scope.sectorKey) throw new Error('sectorKey required for sector scope');
+    const { constituents } = await resolveSectorConstituents(scope.sectorKey);
+    return { label: scope.sectorKey, list: constituents };
+  }
+  if (scope?.type === 'theme') {
+    if (!scope.themeId) throw new Error('themeId required for theme scope');
+    const { theme, rows } = await getThemeWithRows(scope.themeId);
+    const constituents = await resolveConstituentsFromRows(rows);
+    return { label: theme.name, list: constituents };
+  }
+  if (scope?.type === 'holdings') {
+    const holdingsResult = await fetchWithCache("get_holdings", "holdings", {});
+    let holdings = [];
+    if (holdingsResult?.content?.[0]?.text) {
+      const parsed = JSON.parse(holdingsResult.content[0].text);
+      holdings = parsed.data || parsed;
+    }
+    if (!Array.isArray(holdings) || holdings.length === 0) throw new Error('No holdings available');
+    return {
+      label: 'Holdings',
+      list: holdings.map(h => ({
+        symbol: h.tradingsymbol,
+        token: h.instrument_token ? String(h.instrument_token) : null,
+      })),
+    };
+  }
+  throw new Error(`Unknown scope type "${scope?.type}"`);
+}
+
+// Equal-weight aggregation: capitalPerTrade allocated independently per stock;
+// aggregate curve = date-aligned sum of per-stock curves (forward-filled, and
+// seeded at per-stock capital before a stock's curve starts); trade stats are
+// pooled; CAGR/maxDD computed on the summed curve.
+function aggregateBasket(perStockFull, capitalPerTrade) {
+  const dateSet = new Set();
+  for (const s of perStockFull) for (const pt of s.result.equityCurve) dateSet.add(pt.date);
+  const dates = [...dateSet].sort();
+
+  const eqMaps = perStockFull.map(s => new Map(s.result.equityCurve.map(pt => [pt.date, pt.equity])));
+  const bhMaps = perStockFull.map(s => new Map(s.result.buyHoldCurve.map(pt => [pt.date, pt.equity])));
+  const lastEq = perStockFull.map(() => capitalPerTrade);
+  const lastBh = perStockFull.map(() => capitalPerTrade);
+
+  const equityCurve = [];
+  const buyHoldCurve = [];
+  for (const d of dates) {
+    let se = 0, sb = 0;
+    for (let i = 0; i < perStockFull.length; i++) {
+      const e = eqMaps[i].get(d);
+      if (e !== undefined) lastEq[i] = e;
+      const b = bhMaps[i].get(d);
+      if (b !== undefined) lastBh[i] = b;
+      se += lastEq[i];
+      sb += lastBh[i];
+    }
+    equityCurve.push({ date: d, equity: +se.toFixed(2) });
+    buyHoldCurve.push({ date: d, equity: +sb.toFixed(2) });
+  }
+  let peak = -Infinity;
+  for (const pt of equityCurve) {
+    peak = Math.max(peak, pt.equity);
+    pt.drawdownPct = peak > 0 ? +(((pt.equity - peak) / peak) * 100).toFixed(2) : 0;
+  }
+
+  const pooledTrades = perStockFull.flatMap(s => s.result.trades);
+  const totalBars = perStockFull.reduce((s, x) => s + x.result.evaluatedBars, 0);
+  const barsInMarket = perStockFull.reduce((s, x) =>
+    s + (x.result.metrics.exposurePct != null ? (x.result.metrics.exposurePct / 100) * x.result.evaluatedBars : 0), 0);
+  const metrics = computeBacktestMetrics(pooledTrades, equityCurve, buyHoldCurve, { barsInMarket, totalBars });
+  return { metrics, equityCurve, buyHoldCurve };
+}
+
+async function runBasketJob(job, { scope, strategyId, params, costPct, capitalPerTrade }) {
+  const { label, list } = await resolveBasketConstituents(scope);
+  job.progress.total = list.length;
+
+  const perStockFull = [];
+  const skipped = [];
+  for (const c of list) {
+    job.progress.symbol = c.symbol;
+    try {
+      if (!c.token) { skipped.push(c.symbol); continue; }
+      const token = String(c.token);
+      const warm = historicalFullCache[token] && (Date.now() - historicalFullCache[token].timestamp < HISTORICAL_FULL_TTL);
+      const { data: candles } = await getOrFetchFullHistory(token);
+      // Same rate-limit discipline as prewarmRrgHistoricalCache: only space out
+      // requests when we actually hit the upstream.
+      if (!warm) await new Promise(r => setTimeout(r, 800));
+      if (!Array.isArray(candles) || candles.length < MIN_BACKTEST_BARS) { skipped.push(c.symbol); continue; }
+      const t0 = Date.now();
+      const result = runBacktest({ candles, strategyId, params, costPct, capitalPerTrade });
+      if (Date.now() - t0 > 100) console.log(`  ⚠️ [backtest] slow engine run for ${c.symbol}: ${Date.now() - t0}ms`);
+      perStockFull.push({ symbol: c.symbol, token, result });
+    } catch (e) {
+      console.log(`  ⚠️ [backtest/basket] ${c.symbol}: ${e.message}`);
+      skipped.push(c.symbol);
+    } finally {
+      job.progress.loaded++;
+    }
+  }
+
+  if (perStockFull.length === 0) throw new Error(`No constituent had enough history to backtest (${skipped.length} skipped)`);
+
+  const aggregate = aggregateBasket(perStockFull, capitalPerTrade);
+  const perStock = perStockFull.map(s => ({
+    symbol: s.symbol,
+    token: s.token,
+    trades: s.result.trades.length,
+    winRate: s.result.metrics.winRate,
+    profitFactor: s.result.metrics.profitFactor,
+    totalReturnPct: s.result.metrics.totalReturnPct,
+    cagr: s.result.metrics.cagr,
+    maxDrawdownPct: s.result.metrics.maxDrawdownPct,
+    buyHoldReturnPct: s.result.metrics.buyHold.totalReturnPct,
+    totalPnl: +s.result.trades.reduce((a, t) => a + t.pnl, 0).toFixed(2),
+    openPosition: !!s.result.openPosition,
+    fromDate: s.result.fromDate,
+    toDate: s.result.toDate,
+  }));
+
+  return {
+    kind: 'basket',
+    label,
+    scope,
+    strategyId,
+    params: perStockFull[0].result.params,
+    costPct,
+    capitalPerTrade,
+    aggregate,
+    perStock,
+    skipped,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+app.post('/api/backtest/basket', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
+  const { scope, strategyId, params = {} } = req.body || {};
+  if (!scope?.type) return res.status(400).json({ error: 'scope.type is required (sector | theme | holdings)' });
+  if (!STRATEGIES[strategyId]) return res.status(400).json({ error: `Unknown strategy "${strategyId}"` });
+  const costPct = Number.isFinite(Number(req.body?.costPct)) ? Number(req.body.costPct) : 0.25;
+  const capitalPerTrade = Number(req.body?.capitalPerTrade) > 0 ? Number(req.body.capitalPerTrade) : 100000;
+
+  // Prune finished jobs beyond the 20 newest.
+  const ids = Object.keys(backtestJobs).sort((a, b) => backtestJobs[a].createdAt - backtestJobs[b].createdAt);
+  for (const id of ids.slice(0, Math.max(0, ids.length - 20))) {
+    if (backtestJobs[id].status !== 'running') delete backtestJobs[id];
+  }
+
+  const jobId = `bt${++backtestJobSeq}-${Date.now().toString(36)}`;
+  const job = { id: jobId, status: 'running', progress: { loaded: 0, total: 0, symbol: null }, result: null, error: null, createdAt: Date.now() };
+  backtestJobs[jobId] = job;
+
+  runBasketJob(job, { scope, strategyId, params, costPct, capitalPerTrade })
+    .then(result => { job.result = result; job.status = 'done'; })
+    .catch(e => { job.status = 'error'; job.error = e.message; console.error('[backtest/basket]', e.message); });
+
+  res.json({ jobId });
+});
+
+app.get('/api/backtest/basket/:jobId', (req, res) => {
+  const job = backtestJobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: 'Job not found (jobs are in-memory and pruned on restart)' });
+  res.json({
+    status: job.status,
+    progress: job.progress,
+    ...(job.status === 'done' ? { result: job.result } : {}),
+    ...(job.status === 'error' ? { error: job.error } : {}),
+  });
+});
+
+// Distinct sector keys for scope dropdowns (screener + backtest basket).
+const sectorsListCache = { data: null, ts: 0 };
+app.get('/api/sectors', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  if (sectorsListCache.data && Date.now() - sectorsListCache.ts < 60 * 60 * 1000) {
+    return res.json(sectorsListCache.data);
+  }
+  try {
+    const { data, error } = await supabase.from('sector_constituents').select('sector_key');
+    if (error) throw new Error(error.message);
+    const sectors = [...new Set((data || []).map(r => r.sector_key))].sort();
+    const payload = { sectors };
+    sectorsListCache.data = payload;
+    sectorsListCache.ts = Date.now();
+    res.json(payload);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Saved backtest runs (Supabase: backtest_runs — see migrate_backtests.js) ──
+app.post('/api/backtest/runs', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const { kind, label, symbol, token, scope, strategyId, params, metrics, result, fromDate, toDate } = req.body || {};
+  if (!kind || !label || !strategyId || !metrics || !result) {
+    return res.status(400).json({ error: 'kind, label, strategyId, metrics and result are required' });
+  }
+  try {
+    const { data, error } = await supabase.from('backtest_runs').insert({
+      kind,
+      label,
+      symbol: symbol || null,
+      token: token ? String(token) : null,
+      scope: scope || null,
+      strategy_id: strategyId,
+      params: params || {},
+      metrics,
+      result,
+      from_date: fromDate || null,
+      to_date: toDate || null,
+    }).select('id, kind, label, symbol, strategy_id, metrics, from_date, to_date, created_at').single();
+    if (error) throw new Error(error.message);
+    res.json({ run: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/backtest/runs', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    // List view never loads the heavy `result` jsonb.
+    let q = supabase.from('backtest_runs')
+      .select('id, kind, label, symbol, token, scope, strategy_id, params, metrics, from_date, to_date, created_at')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (req.query.kind) q = q.eq('kind', req.query.kind);
+    if (req.query.symbol) q = q.eq('symbol', String(req.query.symbol).toUpperCase());
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    res.json({ runs: data || [] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/backtest/runs/:id', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    const { data, error } = await supabase.from('backtest_runs').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return res.status(404).json({ error: 'Run not found' });
+    res.json({ run: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/backtest/runs/:id', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    const { error } = await supabase.from('backtest_runs').delete().eq('id', req.params.id);
+    if (error) throw new Error(error.message);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── Macro Economics overview (indiandataproject.org) ──────────
+// Free static JSON under Govt Open Data License — no API key, no rate limit.
+// Data updates ~quarterly/annually, so a 12h in-memory cache makes this
+// endpoint effectively free; no Supabase table or scraper needed. Files live
+// under /data/<domain>/<FY>/<file>.json keyed by Indian fiscal-year label.
+const IDP_BASE = 'https://indiandataproject.org/data';
+const MACRO_TTL_MS = 12 * 60 * 60 * 1000;     // full success
+const MACRO_PARTIAL_TTL_MS = 15 * 60 * 1000;  // retry sooner after partial failure
+const macroCache = { data: null, ts: 0, ttl: MACRO_TTL_MS, fy: null, lastGood: null };
+let macroInflight = null; // coalesce concurrent cold fetches
+
+// Indian FY runs April–March: June 2026 → '2026-27', Feb 2026 → '2025-26'.
+function currentIndianFY(d = new Date()) {
+  const start = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
+  return `${start}-${String((start + 1) % 100).padStart(2, '0')}`;
+}
+function previousFY(fy) {
+  const start = parseInt(fy.slice(0, 4), 10) - 1;
+  return `${start}-${String((start + 1) % 100).padStart(2, '0')}`;
+}
+
+async function fetchIdpJson(fy, relPath) {
+  const url = `${IDP_BASE}/${relPath.replace('{fy}', fy)}`;
+  const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!r.ok) {
+    const e = new Error(`HTTP ${r.status} for ${relPath.replace('{fy}', fy)}`);
+    e.status = r.status;
+    throw e;
+  }
+  return r.json();
+}
+
+// ── RBI policy supplement ────────────────────────────────────────
+// indiandataproject.org's rbi files stopped tracking MPC decisions after
+// Feb 2025 — verified June 2026: upstream still reported repo 6.25% while the
+// actual rate had been cut to 5.25% (Dec 2025). Curated continuation of the
+// decision history from RBI MPC press releases, merged over upstream by date
+// (supplement wins on collision). Update when new MPC decisions land
+// (bi-monthly: Feb / Apr / Jun / Aug / Oct / Dec).
+const RBI_POLICY_SUPPLEMENT = {
+  crr: 3.0, // 100bps phased cut announced at the Jun-2025 MPC; upstream still says 4.0
+  decisions: [
+    { date: '2025-04-09', rate: 6.0,  change: -0.25, stance: 'Accommodative' },
+    { date: '2025-06-06', rate: 5.5,  change: -0.5,  stance: 'Neutral' },
+    { date: '2025-08-06', rate: 5.5,  change: 0.0,   stance: 'Neutral' },
+    { date: '2025-10-01', rate: 5.5,  change: 0.0,   stance: 'Neutral' },
+    { date: '2025-12-05', rate: 5.25, change: -0.25, stance: 'Neutral' },
+    { date: '2026-02-06', rate: 5.25, change: 0.0,   stance: 'Neutral' },
+    { date: '2026-04-08', rate: 5.25, change: 0.0,   stance: 'Neutral' },
+    { date: '2026-06-05', rate: 5.25, change: 0.0,   stance: 'Neutral' },
+  ],
+};
+
+// Live "Current Rates" table scraped off the rbi.org.in homepage — keeps the
+// headline repo rate correct even when BOTH the upstream dataset and the
+// supplement above go stale, and lets us flag an incomplete decision history
+// (live rate ≠ last known decision). Best-effort: returns null on any failure.
+async function fetchRbiLiveRates() {
+  try {
+    const r = await fetch('https://www.rbi.org.in/', {
+      headers: SCREENER_FETCH_HEADERS,
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!r.ok) return null;
+    const html = await r.text();
+    const grab = (label) => {
+      const m = html.match(new RegExp('<th>\\s*' + label + '\\s*</th>\\s*<td>\\s*:?\\s*([0-9.]+)%', 'i'));
+      return m ? parseFloat(m[1]) : null;
+    };
+    const repoRate = grab('Policy Repo Rate');
+    if (repoRate == null) return null; // layout changed — treat as unavailable
+    return {
+      repoRate,
+      sdf: grab('Standing Deposit Facility Rate'),
+      msf: grab('Marginal Standing Facility Rate'),
+      slr: grab('SLR'),
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Probe economy/<fy>/summary.json for the current FY, fall back to previous
+// (the source publishes a new FY folder only after the Economic Survey drops).
+// Returns { fy, summary } so the probe result is reused, not re-fetched.
+async function resolveMacroFY() {
+  const fyNow = currentIndianFY();
+  for (const fy of [fyNow, previousFY(fyNow)]) {
+    try {
+      const summary = await fetchIdpJson(fy, 'economy/{fy}/summary.json');
+      return { fy, summary };
+    } catch { /* try previous FY */ }
+  }
+  throw new Error('No usable fiscal-year folder found upstream');
+}
+
+async function buildMacroPayload() {
+  const { fy, summary } = await resolveMacroFY();
+
+  const FILES = {
+    gdpGrowth: 'economy/{fy}/gdp-growth.json',
+    inflation: 'economy/{fy}/inflation.json',
+    fiscal: 'economy/{fy}/fiscal.json',
+    external: 'economy/{fy}/external.json',
+    sectors: 'economy/{fy}/sectors.json',
+    rbiSummary: 'rbi/{fy}/summary.json',
+    monetaryPolicy: 'rbi/{fy}/monetary-policy.json',
+    forex: 'rbi/{fy}/forex.json',
+    credit: 'rbi/{fy}/credit.json',
+    liquidity: 'rbi/{fy}/liquidity.json',
+  };
+  const keys = Object.keys(FILES);
+  const [settled, liveRates] = await Promise.all([
+    Promise.allSettled(keys.map(k => fetchIdpJson(fy, FILES[k]))),
+    fetchRbiLiveRates(), // best-effort; null on failure
+  ]);
+  const raw = {};
+  const errors = [];
+  keys.forEach((k, i) => {
+    if (settled[i].status === 'fulfilled') raw[k] = settled[i].value;
+    else { raw[k] = null; errors.push({ file: FILES[k].replace('{fy}', fy), error: settled[i].reason?.message || 'fetch failed' }); }
+  });
+
+  // Merge upstream MPC decisions with the curated supplement (supplement wins
+  // on date collision — it's the corrected record). The repo-rate step chart
+  // needs ascending dates; upstream is newest-first.
+  const decisionsByDate = new Map();
+  for (const d of raw.monetaryPolicy?.decisions || []) decisionsByDate.set(d.date, d);
+  for (const d of RBI_POLICY_SUPPLEMENT.decisions) decisionsByDate.set(d.date, d);
+  const decisions = [...decisionsByDate.values()]
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  const latestDecision = decisions[decisions.length - 1] || null;
+
+  // Headline policy fields, freshest layer first: live rbi.org.in scrape →
+  // merged decision history → upstream rbi summary.
+  const repoRate = liveRates?.repoRate ?? latestDecision?.rate ?? raw.rbiSummary?.repoRate ?? null;
+  const stance = latestDecision?.stance ?? raw.rbiSummary?.stance ?? raw.monetaryPolicy?.currentStance ?? null;
+  // If the live rate disagrees with the last known decision, the curated
+  // history has fallen behind too — surface that to the UI.
+  const historyIncomplete = !!(liveRates && latestDecision
+    && Math.abs(liveRates.repoRate - latestDecision.rate) > 0.001);
+
+  return {
+    fy,
+    fetchedAt: new Date().toISOString(),
+    stale: false,
+    summary: summary ? {
+      year: summary.year,
+      surveyDate: summary.surveyDate ?? null,
+      realGDPGrowth: summary.realGDPGrowth ?? null,
+      nominalGDP: summary.nominalGDP ?? null,
+      projectedGrowthHigh: summary.projectedGrowthHigh ?? null,
+      cpiInflation: summary.cpiInflation ?? null,
+      fiscalDeficitPercentGDP: summary.fiscalDeficitPercentGDP ?? null,
+      currentAccountDeficitPercentGDP: summary.currentAccountDeficitPercentGDP ?? null,
+      perCapitaGDP: summary.perCapitaGDP ?? null,
+      lastUpdated: summary.lastUpdated ?? null,
+      source: summary.source ?? null,
+    } : null,
+    policy: (raw.rbiSummary || decisions.length || liveRates) ? {
+      repoRate,
+      repoRateLive: !!liveRates, // true → headline rate read live off rbi.org.in
+      repoRateDate: latestDecision?.date ?? raw.rbiSummary?.repoRateDate ?? null,
+      stance,
+      crr: RBI_POLICY_SUPPLEMENT.crr ?? raw.rbiSummary?.crr ?? null,
+      slr: liveRates?.slr ?? raw.rbiSummary?.slr ?? null,
+      sdf: liveRates?.sdf ?? null,
+      msf: liveRates?.msf ?? null,
+      cpiLatest: raw.rbiSummary?.cpiLatest ?? null,
+      forexReservesUSD: raw.rbiSummary?.forexReservesUSD ?? null,
+      broadMoneyGrowth: raw.rbiSummary?.broadMoneyGrowth ?? null,
+      lastUpdated: raw.rbiSummary?.lastUpdated ?? null,
+      historyIncomplete,
+      decisions,
+    } : null,
+    gdpGrowth: raw.gdpGrowth ? { unit: raw.gdpGrowth.unit, series: raw.gdpGrowth.series || [], source: raw.gdpGrowth.source ?? null } : null,
+    inflation: raw.inflation ? {
+      targetBand: raw.inflation.targetBand ?? null,
+      series: raw.inflation.series || [],
+      source: raw.inflation.source ?? null,
+    } : null,
+    fiscal: raw.fiscal ? {
+      targetFiscalDeficit: raw.fiscal.targetFiscalDeficit ?? null,
+      series: raw.fiscal.series || [],
+      source: raw.fiscal.source ?? null,
+    } : null,
+    external: raw.external ? { series: raw.external.series || [], source: raw.external.source ?? null } : null,
+    sectors: raw.sectors?.sectors || null,
+    sectorsSource: raw.sectors?.source ?? null,
+    forex: raw.forex?.reservesUSD ? {
+      series: (raw.forex.reservesUSD.series || []).slice(-20),
+      unit: raw.forex.reservesUSD.unit ?? 'USD billion',
+      source: raw.forex.reservesUSD.source ?? null,
+    } : null,
+    rates: (raw.credit || raw.liquidity) ? {
+      lendingRate: raw.credit?.lendingRate ?? null,
+      depositRate: raw.credit?.depositRate ?? null,
+      broadMoneyGrowth: raw.liquidity?.broadMoneyGrowth ?? null,
+    } : null,
+    errors,
+  };
+}
+
+app.get('/api/macro-overview', async (req, res) => {
+  if (macroCache.data && Date.now() - macroCache.ts < macroCache.ttl) {
+    return res.json(macroCache.data);
+  }
+  try {
+    if (!macroInflight) {
+      macroInflight = buildMacroPayload().finally(() => { macroInflight = null; });
+    }
+    const payload = await macroInflight;
+    macroCache.data = payload;
+    macroCache.ts = Date.now();
+    macroCache.fy = payload.fy;
+    macroCache.ttl = payload.errors.length ? MACRO_PARTIAL_TTL_MS : MACRO_TTL_MS;
+    if (payload.errors.length === 0) macroCache.lastGood = payload;
+    res.json(payload);
+  } catch (err) {
+    console.error('[macro-overview]', err.message);
+    // Upstream completely unreachable — serve the last fully-good payload if we have one.
+    if (macroCache.lastGood) {
+      return res.json({ ...macroCache.lastGood, stale: true });
+    }
+    res.status(502).json({ error: 'Macro data source unreachable: ' + err.message });
+  }
+});
+
+// ─── Custom Screener ──────────────────────────────────────────
+// Scans a universe (holdings / sector / theme) against user-defined indicator
+// conditions. Reuses the backtester's series math (backend/screener/engine.js
+// → buildSeries) and the same async-job + rate-limited fetch discipline as
+// basket backtests, since a cold universe needs multi-year history per stock.
+const { SCREENER_FIELDS, computeScreenerRow, validateConditions, evaluateConditions } = require('./screener/engine');
+
+const MIN_SCREENER_BARS = 60; // enough for RSI/ADX/ST + 20d windows; longer fields go null
+
+app.get('/api/screener/fields', (req, res) => {
+  res.json({ fields: SCREENER_FIELDS });
+});
+
+const screenerJobs = {};
+let screenerJobSeq = 0;
+
+async function runScreenerJob(job, { scope, conditions }) {
+  const { label, list } = await resolveBasketConstituents(scope);
+  job.progress.total = list.length;
+
+  const matches = [];
+  const notReady = [];
+  for (const c of list) {
+    job.progress.symbol = c.symbol;
+    try {
+      if (!c.token) { notReady.push(c.symbol); continue; }
+      const token = String(c.token);
+      const warm = historicalFullCache[token] && (Date.now() - historicalFullCache[token].timestamp < HISTORICAL_FULL_TTL);
+      const { data: candles } = await getOrFetchFullHistory(token);
+      if (!warm) await new Promise(r => setTimeout(r, 800));
+      if (!Array.isArray(candles) || candles.length < MIN_SCREENER_BARS) { notReady.push(c.symbol); continue; }
+      const values = computeScreenerRow(candles);
+      if (evaluateConditions(values, conditions)) {
+        matches.push({ symbol: c.symbol, token, values });
+      }
+    } catch (e) {
+      console.log(`  ⚠️ [screener] ${c.symbol}: ${e.message}`);
+      notReady.push(c.symbol);
+    } finally {
+      job.progress.loaded++;
+    }
+  }
+
+  return {
+    label,
+    scope,
+    conditions,
+    matches,
+    scanned: job.progress.total - notReady.length,
+    total: job.progress.total,
+    notReady,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+app.post('/api/screener/run', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
+  const { scope, conditions } = req.body || {};
+  if (!scope?.type) return res.status(400).json({ error: 'scope.type is required (sector | theme | holdings)' });
+  try {
+    validateConditions(conditions);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+
+  const ids = Object.keys(screenerJobs).sort((a, b) => screenerJobs[a].createdAt - screenerJobs[b].createdAt);
+  for (const id of ids.slice(0, Math.max(0, ids.length - 20))) {
+    if (screenerJobs[id].status !== 'running') delete screenerJobs[id];
+  }
+
+  const jobId = `sc${++screenerJobSeq}-${Date.now().toString(36)}`;
+  const job = { id: jobId, status: 'running', progress: { loaded: 0, total: 0, symbol: null }, result: null, error: null, createdAt: Date.now() };
+  screenerJobs[jobId] = job;
+
+  runScreenerJob(job, { scope, conditions })
+    .then(result => { job.result = result; job.status = 'done'; })
+    .catch(e => { job.status = 'error'; job.error = e.message; console.error('[screener]', e.message); });
+
+  res.json({ jobId });
+});
+
+app.get('/api/screener/run/:jobId', (req, res) => {
+  const job = screenerJobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: 'Job not found (jobs are in-memory and pruned on restart)' });
+  res.json({
+    status: job.status,
+    progress: job.progress,
+    ...(job.status === 'done' ? { result: job.result } : {}),
+    ...(job.status === 'error' ? { error: job.error } : {}),
+  });
+});
+
+// ── Saved screens (Supabase: saved_screens — see migrate_screens.js) ──
+// The pre-existing table stores `rules` (jsonb) + `universe` (text JSON), so we
+// map to/from the API shape { scope, conditions } at the boundary.
+const screenRowToApi = (row) => {
+  let scope = null;
+  try { scope = typeof row.universe === 'string' ? JSON.parse(row.universe) : row.universe; } catch { /* leave null */ }
+  return {
+    id: row.id,
+    name: row.name,
+    scope,
+    conditions: row.rules?.conditions || [],
+    created_at: row.created_at,
+  };
+};
+
+app.post('/api/screener/screens', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const { name, scope, conditions } = req.body || {};
+  if (!name || !scope?.type) return res.status(400).json({ error: 'name and scope are required' });
+  try {
+    validateConditions(conditions);
+    const { data, error } = await supabase.from('saved_screens')
+      .insert({ name: String(name).trim(), rules: { conditions }, universe: JSON.stringify(scope) })
+      .select().single();
+    if (error) throw new Error(error.message);
+    res.json({ screen: screenRowToApi(data) });
+  } catch (err) {
+    res.status(err.message.includes('condition') || err.message.includes('field') || err.message.includes('value') || err.message.includes('operator') ? 400 : 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/screener/screens', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    const { data, error } = await supabase.from('saved_screens')
+      .select('*').order('created_at', { ascending: false }).limit(50);
+    if (error) throw new Error(error.message);
+    res.json({ screens: (data || []).map(screenRowToApi) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/screener/screens/:id', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    const { error } = await supabase.from('saved_screens').delete().eq('id', req.params.id);
+    if (error) throw new Error(error.message);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── Valuation assessment ─────────────────────────────────────
+// Composes data the app already caches (screener annual P&L / balance sheet /
+// cashflow / peers, Yahoo fundamentals, 4Y candles, macro repo rate) into a
+// four-lens valuation verdict. Pure math lives in backend/valuation/engine.js.
+const { computeValuation } = require('./valuation/engine');
+
+const valuationCache = {}; // symbol -> { data, ts }
+const VALUATION_TTL = 60 * 60 * 1000; // 1h — inputs refresh slower than this
+
+// Screener fetch helpers sharing the SAME caches the per-tab endpoints use,
+// so a user who already opened the P&L tab pays nothing extra here.
+async function getScreenerAnnualCached(symbol) {
+  const cached = screenerAnnualCache[symbol];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) return cached.data;
+  const { html } = await fetchScreenerHTML(symbol);
+  const years = parseScreenerAnnualPL(html);
+  const payload = { source: 'screener.in', symbol, period: 'annual', years };
+  screenerAnnualCache[symbol] = { data: payload, ts: Date.now() };
+  return payload;
+}
+
+async function getScreenerQuarterlyCached(symbol) {
+  const cached = screenerCache[symbol];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) return cached.data;
+  const { html } = await fetchScreenerHTML(symbol);
+  const quarters = parseScreenerQuarterly(html);
+  const payload = { source: 'screener.in', symbol, quarters };
+  screenerCache[symbol] = { data: payload, ts: Date.now() };
+  return payload;
+}
+
+async function getScreenerCashflowCached(symbol) {
+  const cached = screenerCashflowCache[symbol];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) return cached.data;
+  const { html } = await fetchScreenerHTML(symbol);
+  const years = parseScreenerCashflow(html);
+  const payload = { source: 'screener.in', symbol, period: 'annual', years };
+  screenerCashflowCache[symbol] = { data: payload, ts: Date.now() };
+  return payload;
+}
+
+async function getScreenerBalanceSheetCached(symbol) {
+  const cacheKey = `${symbol}::consolidated`;
+  const cached = screenerBalanceSheetCache[cacheKey];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) return cached.data;
+  // Simplified consolidated→standalone fallback (mirrors the endpoint).
+  let years, usedBasis = 'consolidated';
+  try {
+    const { html } = await fetchScreenerHTML(symbol, { consolidated: true });
+    years = parseScreenerBalanceSheet(html);
+    if (!years || years.length < 2) throw new Error('degenerate consolidated table');
+  } catch {
+    const { html } = await fetchScreenerHTML(symbol, { consolidated: false });
+    years = parseScreenerBalanceSheet(html);
+    usedBasis = 'standalone';
+  }
+  const payload = { source: 'screener.in', symbol, period: 'annual', basis: usedBasis, years };
+  screenerBalanceSheetCache[cacheKey] = { data: payload, ts: Date.now() };
+  return payload;
+}
+
+async function getScreenerPeersCached(symbol) {
+  const cached = screenerPeersCache[symbol];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) return cached.data;
+  const { html } = await fetchScreenerHTML(symbol);
+  const linkMatch = html.match(/href="(\/market\/[^"]+)"[^>]*title="Industry"[^>]*>([^<]+)</);
+  if (!linkMatch) throw new Error('Peer industry not found on screener page');
+  const r = await fetch(`https://www.screener.in${linkMatch[1]}`, { headers: SCREENER_FETCH_HEADERS });
+  if (!r.ok) throw new Error(`Industry page returned ${r.status}`);
+  const { peers, median } = parseScreenerPeers(await r.text());
+  const payload = { source: 'screener.in', symbol, industry: linkMatch[2].trim().replace(/&amp;/g, '&'), peers, median };
+  screenerPeersCache[symbol] = { data: payload, ts: Date.now() };
+  return payload;
+}
+
+app.get('/api/valuation/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const token = req.query.token ? String(req.query.token) : null;
+  const cached = valuationCache[symbol];
+  if (cached && req.query.refresh !== '1' && Date.now() - cached.ts < (cached.ttl ?? VALUATION_TTL)) {
+    return res.json({ ...cached.data, cached: true });
+  }
+  try {
+    const settled = await Promise.allSettled([
+      getScreenerAnnualCached(symbol),
+      getScreenerBalanceSheetCached(symbol),
+      getScreenerCashflowCached(symbol),
+      getScreenerPeersCached(symbol),
+      getScreenerQuarterlyCached(symbol),
+      yahooFinance.quoteSummary(toYahooSymbol(symbol), {
+        modules: ['summaryDetail', 'defaultKeyStatistics', 'financialData', 'price'],
+      }),
+      token && mcpClient ? getOrFetchFullHistory(token) : Promise.resolve(null),
+    ]);
+    const [annualR, bsR, cfR, peersR, quarterlyR, yahooR, histR] = settled;
+    const val = (r) => (r.status === 'fulfilled' ? r.value : null);
+    const inputErrors = [];
+    const tag = ['annual P&L', 'balance sheet', 'cashflow', 'peers', 'quarterly results', 'yahoo fundamentals', 'price history'];
+    settled.forEach((r, i) => { if (r.status === 'rejected') inputErrors.push({ input: tag[i], error: r.reason?.message || 'failed' }); });
+
+    const annual = val(annualR);
+    const bs = val(bsR);
+    const cf = val(cfR);
+    const peersData = val(peersR);
+    const quarterly = val(quarterlyR);
+    const yq = val(yahooR);
+    const candles = val(histR)?.data || [];
+    if (token && candles.length === 0 && !inputErrors.some(e => e.input === 'price history')) {
+      inputErrors.push({ input: 'price history', error: mcpClient ? 'no candles returned' : 'MCP not connected' });
+    }
+
+    // TTM EPS = sum of the last 4 quarterly EPS (screener basis). Only when
+    // all 4 are present — partial sums would understate the denominator.
+    let ttmEps = null;
+    {
+      const q = (quarterly?.quarters || []).slice().sort((a, b) => a.sortKey - b.sortKey);
+      const last4 = q.slice(-4).map(x => x.eps);
+      if (last4.length === 4 && last4.every(v => v != null)) {
+        ttmEps = last4.reduce((s, v) => s + v, 0);
+      }
+    }
+
+    const annualYears = (annual?.years || []).slice().sort((a, b) => a.sortKey - b.sortKey)
+      .map(y => ({
+        label: y.label, sortKey: y.sortKey,
+        eps: y.eps ?? null, netProfit: y.netProfit ?? null, totalIncome: y.totalIncome ?? null,
+        otherIncome: y.otherIncome ?? null, pbt: y.pbt ?? null, operatingProfit: y.operatingProfit ?? null,
+      }));
+    const bsYears = (bs?.years || []).slice().sort((a, b) => a.fy - b.fy);
+    const netWorthYears = bsYears.map(y => ({ fyLabel: y.fyLabel, fy: y.fy, netWorth: y.netWorth ?? null }));
+    const isFinancial = bsYears.some(y => y.deposits != null || y.loans != null);
+    const fcfYears = (cf?.years || []).slice().sort((a, b) => a.fy - b.fy)
+      .map(y => ({ fyLabel: y.fyLabel, freeCashFlow: y.freeCashFlow ?? null }));
+
+    // Self row in the industry table: match slug against the base symbol
+    // (series suffixes like -BE don't appear in screener slugs).
+    const baseSymbol = (SCREENER_SLUG_ALIASES[symbol] || symbol).replace(/-(BE|BZ|BL|IL|SM|ST|GB|GC|GS|DR)$/i, '').toUpperCase();
+    const peerSelf = (peersData?.peers || []).find(p => (p.slug || '').toUpperCase() === baseSymbol) || null;
+
+    // Hygienic peer median: SELF excluded, only positive P/Es (loss-makers
+    // carry no multiple), require n ≥ 5 for statistical meaning, report IQR.
+    // Falls back to screener's own <tfoot> Median row when the universe is
+    // too small (flagged via `basis`).
+    let peerMedian = null;
+    {
+      const others = (peersData?.peers || []).filter(p => (p.slug || '').toUpperCase() !== baseSymbol);
+      const quantile = (vals, q) => {
+        const v = vals.filter(x => x != null && x > 0).sort((a, b) => a - b);
+        if (!v.length) return null;
+        const idx = (v.length - 1) * q;
+        const lo = Math.floor(idx), hi = Math.ceil(idx);
+        return v[lo] + (v[hi] - v[lo]) * (idx - lo);
+      };
+      const pes = others.map(p => p.pe);
+      const validCount = pes.filter(x => x != null && x > 0).length;
+      if (validCount >= 5) {
+        peerMedian = {
+          pe: quantile(pes, 0.5),
+          q1: quantile(pes, 0.25),
+          q3: quantile(pes, 0.75),
+          roce: quantile(others.map(p => p.roce), 0.5),
+          peerCount: validCount,
+          basis: 'computed (self excluded)',
+        };
+      } else if (peersData?.median?.pe != null) {
+        peerMedian = { ...peersData.median, basis: 'screener median row (includes self)' };
+      } else if (peersData) {
+        peerMedian = { reason: `Too few comparable peers with a meaningful P/E (${validCount} of ${others.length})` };
+      }
+    }
+
+    // Cyclical/commodity industries: trailing P/E inverts at cycle extremes,
+    // so the engine applies a cycle-adjusted guard for these.
+    const isCyclical = /refiner|oil|gas|petro|metal|steel|mining|coal|cement|sugar|paper|chemical|fertili|alumin|copper|zinc|commodit|shipping|textile/i
+      .test(peersData?.industry || '');
+
+    // Size mismatch vs peer set (conglomerate detection): own market cap many
+    // multiples above the peer median means the industry table isn't really
+    // a comparable universe (e.g. RELIANCE vs standalone refiners).
+    let sizeMismatchRatio = null;
+    {
+      const others = (peersData?.peers || []).filter(p => (p.slug || '').toUpperCase() !== baseSymbol);
+      const caps = others.map(p => p.marketCap).filter(x => x != null && x > 0).sort((a, b) => a - b);
+      const ownCap = (yq?.price?.marketCap != null ? yq.price.marketCap / 1e7 : null) ?? peerSelf?.marketCap ?? null;
+      if (caps.length >= 5 && ownCap != null) {
+        const mid = Math.floor(caps.length / 2);
+        const medCap = caps.length % 2 ? caps[mid] : (caps[mid - 1] + caps[mid]) / 2;
+        if (medCap > 0) sizeMismatchRatio = ownCap / medCap;
+      }
+    }
+
+    // Current price: explicit override → Yahoo live → last candle → peers CMP.
+    const price = Number(req.query.price) > 0 ? Number(req.query.price)
+      : yq?.price?.regularMarketPrice
+      ?? (candles.length ? candles[candles.length - 1].close : null)
+      ?? peerSelf?.cmp
+      ?? null;
+    if (price == null) return res.status(422).json({ error: 'Could not resolve a current price for ' + symbol });
+
+    const yahoo = yq ? {
+      trailingPE: yq.summaryDetail?.trailingPE ?? null,
+      forwardPE: yq.summaryDetail?.forwardPE ?? null,
+      evToEbitda: yq.defaultKeyStatistics?.enterpriseToEbitda ?? null,
+      priceToBook: yq.defaultKeyStatistics?.priceToBook ?? null,
+      marketCapCr: yq.price?.marketCap != null ? yq.price.marketCap / 1e7 : null,
+      sharesOutstandingCr: yq.defaultKeyStatistics?.sharesOutstanding != null ? yq.defaultKeyStatistics.sharesOutstanding / 1e7 : null,
+      roePct: yq.financialData?.returnOnEquity != null ? yq.financialData.returnOnEquity * 100 : null,
+      dividendYieldPct: yq.summaryDetail?.dividendYield != null ? yq.summaryDetail.dividendYield * 100 : null,
+    } : {};
+
+    const result = computeValuation({
+      symbol,
+      price,
+      // Repo rate as the risk-free anchor: live macro cache first, then the
+      // curated MPC supplement's latest decision (always present).
+      riskFreeRate: macroCache.data?.policy?.repoRate
+        ?? RBI_POLICY_SUPPLEMENT.decisions[RBI_POLICY_SUPPLEMENT.decisions.length - 1].rate,
+      yahoo,
+      peerMedian,
+      peerSelf,
+      annualYears,
+      ttmEps,
+      netWorthYears,
+      fcfYears,
+      candles,
+      isFinancial,
+      debtCr: bsYears.length ? (bsYears[bsYears.length - 1].borrowings ?? null) : null,
+      isCyclical,
+      sizeMismatchRatio,
+    });
+    result.industry = peersData?.industry ?? null;
+    result.inputErrors = inputErrors;
+
+    // Cache for the full hour only when inputs were complete; retry sooner
+    // when something (typically MCP candles during startup) was missing.
+    valuationCache[symbol] = {
+      data: result,
+      ts: Date.now(),
+      ttl: inputErrors.length ? 5 * 60 * 1000 : VALUATION_TTL,
+    };
+    res.json({ ...result, cached: false });
+  } catch (err) {
+    console.error(`[valuation] ${symbol}:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Express error middleware: when a route throws an Error with statusCode=429

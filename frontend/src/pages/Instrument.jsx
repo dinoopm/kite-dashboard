@@ -7,6 +7,7 @@ import AlertRow from '../components/alerts/AlertRow'
 import SignalChart from '../components/SignalChart'
 import ConvictionModal from '../components/alerts/ConvictionModal'
 import TradePlanModal from '../components/alerts/TradePlanModal'
+import ValuationPanel from '../components/ValuationPanel'
 
 // Two-panel shareholding view: left selects a quarter and shows horizontal
 // % bars per category; right selects a category and shows a vertical bar
@@ -457,11 +458,12 @@ function Instrument() {
   // instrument page. Mirrors MarketDataTable's handler — the token is needed
   // for the chart, but the page degrades gracefully (token 0) if lookup fails.
   const peerTokenCacheRef = useRef(new Map())
-  const openPeer = async (peerSymbol) => {
+  const openPeer = async (peerSymbol, peerName) => {
     if (!peerSymbol) return
+    const nameParam = peerName ? `&name=${encodeURIComponent(peerName)}` : ''
     const cached = peerTokenCacheRef.current.get(peerSymbol)
     if (cached) {
-      navigate(`/instrument/${cached}?symbol=${encodeURIComponent(peerSymbol)}`)
+      navigate(`/instrument/${cached}?symbol=${encodeURIComponent(peerSymbol)}${nameParam}`)
       return
     }
     try {
@@ -470,13 +472,13 @@ function Instrument() {
       const info = await r.json()
       const tok = info?.instrument_token
       if (!tok) {
-        navigate(`/instrument/0?symbol=${encodeURIComponent(peerSymbol)}`)
+        navigate(`/instrument/0?symbol=${encodeURIComponent(peerSymbol)}${nameParam}`)
         return
       }
       peerTokenCacheRef.current.set(peerSymbol, tok)
-      navigate(`/instrument/${tok}?symbol=${encodeURIComponent(peerSymbol)}`)
+      navigate(`/instrument/${tok}?symbol=${encodeURIComponent(peerSymbol)}${nameParam}`)
     } catch {
-      navigate(`/instrument/0?symbol=${encodeURIComponent(peerSymbol)}`)
+      navigate(`/instrument/0?symbol=${encodeURIComponent(peerSymbol)}${nameParam}`)
     }
   }
 
@@ -974,7 +976,7 @@ function Instrument() {
     return () => controller.abort();
   }, [token, timeframe])
 
-  const tfOptions = ['1D', '1W', '1M', '3M', '6M', '1Y', '2Y', '3Y', '5Y'];
+  const tfOptions = ['1D', '1W', '1M', '3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y'];
 
   // Support/resistance levels for the chart overlay (intraday 1D excluded —
   // pivots there are noise). Recomputed whenever the visible candles change.
@@ -1052,6 +1054,8 @@ function Instrument() {
     return { text: 'Neutral', color: '' };
   };
 
+  const nameFromUrl = searchParams.get('name')
+
   if (loading) return <div className="loader"></div>;
 
   return (
@@ -1065,10 +1069,11 @@ function Instrument() {
             {kiteName
               || fundamentals?.price?.longName
               || fundamentals?.price?.shortName
+              || nameFromUrl
               || symbol
               || 'Instrument'}
           </h1>
-          {(kiteName || fundamentals?.price?.longName || fundamentals?.price?.shortName) && symbol && (
+          {(kiteName || fundamentals?.price?.longName || fundamentals?.price?.shortName || nameFromUrl) && symbol && (
             <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, letterSpacing: '0.5px', marginTop: '0.25rem' }}>
               {symbol}
             </div>
@@ -1242,7 +1247,29 @@ function Instrument() {
         >
           Notes
         </button>
+        <button
+          onClick={() => setActiveTab('valuation')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'valuation' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'valuation' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '0.5rem 1rem',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'valuation' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+            fontSize: '1rem'
+          }}
+        >
+          Valuation
+        </button>
       </div>
+
+      {activeTab === 'valuation' && (
+        <section style={{ marginBottom: '2rem' }}>
+          <ValuationPanel symbol={symbol} token={token} />
+        </section>
+      )}
 
       {activeTab === 'peers' && (() => {
         const peers = screenerPeers?.peers || [];
@@ -1331,7 +1358,7 @@ function Instrument() {
                           ) : (
                             <button
                               type="button"
-                              onClick={() => openPeer(p.slug)}
+                              onClick={() => openPeer(p.slug, p.name)}
                               title={`Open ${p.name}`}
                               style={{
                                 background: 'transparent', border: 'none', padding: 0,
@@ -1907,6 +1934,20 @@ function Instrument() {
                 </div>
               )}
 
+              {fundamentals.assetProfile?.website && (
+                <div style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Website</span>
+                  <a
+                    href={fundamentals.assetProfile.website}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#7aa2f7', textDecoration: 'none', fontWeight: 600, wordBreak: 'break-all' }}
+                  >
+                    {fundamentals.assetProfile.website.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                  </a>
+                </div>
+              )}
+
               <div className="grid" style={{ gap: '0.75rem' }}>
                 <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
                   <span className="label" style={{ fontSize: '0.85rem' }}>Market Cap</span>
@@ -2053,11 +2094,14 @@ function Instrument() {
 
         // ── Formatters ────────────────────────────────────────────────
         // Screener serves numbers already in ₹ Cr (no /1e7 needed, unlike Yahoo).
+        // A true 0 is rendered as ₹0 Cr — screener's parser only yields 0 when
+        // the company reported zero (blank cells arrive as null), and zero
+        // revenue years are real (e.g. dormant shells like SIGMAADV FY24-25).
         const fmtCr = (v) => {
-          if (v == null || v === 0) return '—';
+          if (v == null) return '—';
           return `₹${v.toLocaleString('en-IN', { maximumFractionDigits: Math.abs(v) < 1000 ? 1 : 0 })} Cr`;
         };
-        const fmtEPS = (v) => (v == null || v === 0) ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+        const fmtEPS = (v) => v == null ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
         const fmtPct = (v) => v == null ? '—' : `${v.toFixed(1)}%`;
 
         // Pair growth = computed once per cell, colour-graded by magnitude.

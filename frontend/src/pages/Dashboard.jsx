@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import VixWidget from '../components/VixWidget'
+import MacroWidget from '../components/MacroWidget'
 import EyeIcon from '../components/EyeIcon'
 
 function Dashboard() {
@@ -394,6 +395,8 @@ function Dashboard() {
             )}
           </div>
         </div>
+
+        <MacroWidget />
 
       </section>
     </div>

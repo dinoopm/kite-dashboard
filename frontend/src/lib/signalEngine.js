@@ -43,11 +43,25 @@ export function rsi(closes, period = 14) {
 //   Sell: fast SMA crosses BELOW slow SMA (death cross)  AND RSI < 50
 // Returns the indicator series plus a list of signal events, each carrying the
 // exact values that triggered it (for the tooltip).
-export function generateSignals(bars, fastPeriod = 10, slowPeriod = 50, rsiPeriod = 14) {
+// `bbPeriod` is the Bollinger middle-band length (SMA basis, default 20) used
+// only for the dead-cat-bounce guard below.
+export function generateSignals(bars, fastPeriod = 10, slowPeriod = 50, rsiPeriod = 14, bbPeriod = 20) {
   const closes = bars.map(b => b.close);
   const fast = sma(closes, fastPeriod);
   const slow = sma(closes, slowPeriod);
+  const mid = sma(closes, bbPeriod); // Bollinger middle band (the SMA basis)
   const rsiArr = rsi(closes, rsiPeriod);
+
+  // Sharp-drop detector: a fall of ≥ DROP_PCT from the highest close over the
+  // prior DROP_LOOKBACK bars — i.e. a recent steep decline that a bounce would
+  // be retracing.
+  const DROP_LOOKBACK = 10;
+  const DROP_PCT = 0.10;
+  const sharpDropAt = (i) => {
+    let peak = -Infinity;
+    for (let j = Math.max(0, i - DROP_LOOKBACK); j <= i; j++) peak = Math.max(peak, closes[j]);
+    return peak > 0 && (peak - closes[i]) / peak >= DROP_PCT;
+  };
 
   const signals = [];
   for (let i = 1; i < bars.length; i++) {
@@ -57,10 +71,14 @@ export function generateSignals(bars, fastPeriod = 10, slowPeriod = 50, rsiPerio
     const crossedDown = fast[i - 1] >= slow[i - 1] && fast[i] < slow[i];
 
     if (crossedUp && rsiArr[i] > 50) {
-      signals.push({ index: i, type: 'buy', bar: bars[i], rsi: rsiArr[i], fast: fast[i], slow: slow[i], fastPeriod, slowPeriod });
+      // Dead-cat-bounce guard: a golden-cross buy while the close is still BELOW
+      // the middle band right after a sharp drop is usually a failed bounce in a
+      // downtrend, not a real reversal. Flag it so the UI can ignore it as a buy.
+      const deadCat = mid[i] != null && closes[i] < mid[i] && sharpDropAt(i);
+      signals.push({ index: i, type: 'buy', bar: bars[i], rsi: rsiArr[i], fast: fast[i], slow: slow[i], fastPeriod, slowPeriod, deadCat, mid: mid[i], close: closes[i] });
     } else if (crossedDown && rsiArr[i] < 50) {
       signals.push({ index: i, type: 'sell', bar: bars[i], rsi: rsiArr[i], fast: fast[i], slow: slow[i], fastPeriod, slowPeriod });
     }
   }
-  return { fast, slow, rsi: rsiArr, signals };
+  return { fast, slow, mid, rsi: rsiArr, signals };
 }

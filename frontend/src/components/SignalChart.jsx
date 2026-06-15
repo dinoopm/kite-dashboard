@@ -13,6 +13,31 @@ const FAST_COLOR = '#38bdf8'; // bright blue
 const SLOW_COLOR = '#f59e0b'; // orange
 const BUY_COLOR = '#22c55e';
 const SELL_COLOR = '#ef4444';
+const BB_COLOR = '#a78bfa';   // violet — distinct from the SMA blue/orange
+const DEADCAT_COLOR = '#fbbf24'; // amber — flagged/ignored buy
+const SQUEEZE_COLOR = '#ec4899'; // magenta — BB-width squeeze highlight
+const BB_PERIOD = 20;
+const BB_MULT = 2;
+const SQUEEZE_LOOKBACK = 30;     // "lowest in the last 30 days" window
+const SQUEEZE_TOL = 1.05;        // within 5% of the 30-day low counts as squeezed
+
+// Bollinger Bands: SMA(period) ± mult × population std-dev, over `closes`.
+// Returns arrays aligned to `closes` (null during the warmup window).
+function bollinger(closes, period = BB_PERIOD, mult = BB_MULT) {
+  const upper = new Array(closes.length).fill(null);
+  const middle = new Array(closes.length).fill(null);
+  const lower = new Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += closes[j];
+    const m = sum / period;
+    let v = 0;
+    for (let j = i - period + 1; j <= i; j++) v += (closes[j] - m) ** 2;
+    const sd = Math.sqrt(v / period);
+    middle[i] = m; upper[i] = m + mult * sd; lower[i] = m - mult * sd;
+  }
+  return { upper, middle, lower };
+}
 
 const barTimeStr = (b) => {
   const d = b.dateObj || new Date(b.date);
@@ -42,12 +67,18 @@ function SignalChart({ token, symbol }) {
   const [fastPeriod, setFastPeriod] = useState(10);
   const [slowPeriod, setSlowPeriod] = useState(50);
   const [strict, setStrict] = useState(false);
+  const [showBB, setShowBB] = useState(false);
 
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const candleRef = useRef(null);
   const fastRef = useRef(null);
   const slowRef = useRef(null);
+  const bbUpperRef = useRef(null);
+  const bbMiddleRef = useRef(null);
+  const bbLowerRef = useRef(null);
+  const bbUpperSqRef = useRef(null);
+  const bbLowerSqRef = useRef(null);
   const tooltipRef = useRef(null);
   const signalByTimeRef = useRef(new Map()); // time -> signal, read by the crosshair handler
 
@@ -98,6 +129,34 @@ function SignalChart({ token, symbol }) {
     [bars, fastPeriod, slowPeriod]
   );
 
+  // Bollinger Bands recompute only when the price series changes (fixed 20, 2).
+  const bb = useMemo(
+    () => (bars.length ? bollinger(bars.map(b => b.close)) : { upper: [], middle: [], lower: [] }),
+    [bars]
+  );
+
+  // Bollinger Bandwidth = (Upper − Lower) ÷ Middle × 100. A "squeeze" is when
+  // bandwidth sits at (or within 5% of) its lowest level over the last 30 bars —
+  // statistically a precursor to a volatility breakout. `mask[i]` flags squeezed
+  // bars so the chart can recolor those band segments.
+  const squeeze = useMemo(() => {
+    const n = bars.length;
+    const bbw = new Array(n).fill(null);
+    for (let i = 0; i < n; i++) {
+      if (bb.middle[i] != null && bb.middle[i] !== 0) bbw[i] = ((bb.upper[i] - bb.lower[i]) / bb.middle[i]) * 100;
+    }
+    const mask = new Array(n).fill(false);
+    for (let i = 0; i < n; i++) {
+      if (bbw[i] == null) continue;
+      let mn = Infinity;
+      for (let j = Math.max(0, i - SQUEEZE_LOOKBACK + 1); j <= i; j++) if (bbw[j] != null) mn = Math.min(mn, bbw[j]);
+      if (mn !== Infinity && bbw[i] <= mn * SQUEEZE_TOL) mask[i] = true;
+    }
+    let current = null, isSqueezeNow = false;
+    for (let i = n - 1; i >= 0; i--) { if (bbw[i] != null) { current = bbw[i]; isSqueezeNow = mask[i]; break; } }
+    return { bbw, mask, current, isSqueezeNow };
+  }, [bb, bars]);
+
   // Only the signals inside the zoomed window. The chart loads 5Y so the SMAs
   // stay warm, but markers (and the counts) must be scoped to what's on screen —
   // otherwise old low-price signals from years ago render clamped at the bottom
@@ -142,6 +201,20 @@ function SignalChart({ token, symbol }) {
       return;
     }
 
+    // Bollinger band lines (added first so the SMAs + markers draw on top).
+    // Middle band is the SMA(20) basis — dashed to distinguish it from the
+    // crossover SMAs. Data is pushed (or cleared) by the toggle effect below.
+    const bandOpts = { color: BB_COLOR, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+    const bbUpper = chart.addLineSeries(bandOpts);
+    const bbLower = chart.addLineSeries(bandOpts);
+    const bbMiddle = chart.addLineSeries({ ...bandOpts, lineStyle: 2 /* dashed */, color: 'rgba(167,139,250,0.6)' });
+    // Squeeze overlay: same band coordinates, drawn thicker in magenta but only
+    // on bars where bandwidth is at its 30-day low — so the band "lights up"
+    // exactly where volatility is compressed.
+    const sqOpts = { color: SQUEEZE_COLOR, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+    const bbUpperSq = chart.addLineSeries(sqOpts);
+    const bbLowerSq = chart.addLineSeries(sqOpts);
+
     const fast = chart.addLineSeries({ color: FAST_COLOR, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     const slow = chart.addLineSeries({ color: SLOW_COLOR, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
 
@@ -153,6 +226,16 @@ function SignalChart({ token, symbol }) {
       if (!tip) return;
       const sig = param.time != null ? signalByTimeRef.current.get(param.time) : null;
       if (!sig || !param.point) { tip.style.display = 'none'; return; }
+      if (sig.type === 'buy' && sig.deadCat) {
+        tip.innerHTML = `<strong style="color:${DEADCAT_COLOR}">Dead Cat Bounce — buy ignored</strong><br/>`
+          + `Golden cross fired below the ${BB_PERIOD}-bar middle band (₹${sig.mid.toFixed(1)}) after a sharp drop.<br/>`
+          + `Likely a failed bounce in a downtrend.`;
+        tip.style.display = 'block';
+        const cwd = containerRef.current.clientWidth;
+        tip.style.left = `${Math.min(Math.max(param.point.x + 14, 8), cwd - 190)}px`;
+        tip.style.top = `${Math.max(param.point.y - 10, 8)}px`;
+        return;
+      }
       const verb = sig.type === 'buy' ? 'Buy' : 'Sell';
       const dir = sig.type === 'buy' ? 'crossed above' : 'crossed below';
       tip.innerHTML = `<strong style="color:${sig.type === 'buy' ? BUY_COLOR : SELL_COLOR}">${verb} Signal Triggered</strong><br/>`
@@ -169,6 +252,11 @@ function SignalChart({ token, symbol }) {
     candleRef.current = candle;
     fastRef.current = fast;
     slowRef.current = slow;
+    bbUpperRef.current = bbUpper;
+    bbMiddleRef.current = bbMiddle;
+    bbLowerRef.current = bbLower;
+    bbUpperSqRef.current = bbUpperSq;
+    bbLowerSqRef.current = bbLowerSq;
 
     // Keep the chart sized to its container (explicit, so the time axis always
     // gets its full height and the date labels aren't clipped at the bottom).
@@ -188,6 +276,28 @@ function SignalChart({ token, symbol }) {
     slowRef.current.setData(toLine(engine.slow));
   }, [engine, bars]);
 
+  // Push (or clear) the Bollinger band lines on toggle / recompute.
+  useEffect(() => {
+    if (!bbUpperRef.current || bars.length === 0) return;
+    const toLine = (arr) => bars.map((b, i) => (arr[i] == null ? null : { time: barTime(b), value: arr[i] })).filter(Boolean);
+    // Gapped: a value only on squeezed bars, whitespace ({time}) elsewhere so the
+    // magenta overlay draws disconnected segments exactly over the squeeze runs.
+    const toGapped = (arr) => bars.map((b, i) => (squeeze.mask[i] && arr[i] != null ? { time: barTime(b), value: arr[i] } : { time: barTime(b) }));
+    if (showBB) {
+      bbUpperRef.current.setData(toLine(bb.upper));
+      bbMiddleRef.current.setData(toLine(bb.middle));
+      bbLowerRef.current.setData(toLine(bb.lower));
+      bbUpperSqRef.current.setData(toGapped(bb.upper));
+      bbLowerSqRef.current.setData(toGapped(bb.lower));
+    } else {
+      bbUpperRef.current.setData([]);
+      bbMiddleRef.current.setData([]);
+      bbLowerRef.current.setData([]);
+      bbUpperSqRef.current.setData([]);
+      bbLowerSqRef.current.setData([]);
+    }
+  }, [bb, squeeze, showBB, bars]);
+
   // Push the Buy/Sell markers (scoped to the visible window). Hot path on slider
   // drag and view change — only setMarkers, no chart rebuild.
   useEffect(() => {
@@ -196,6 +306,11 @@ function SignalChart({ token, symbol }) {
     const markers = visibleSignals.map((s) => {
       const time = barTime(s.bar);
       map.set(time, s);
+      // Dead-cat-bounce buys are flagged, not acted on: amber circle below the
+      // bar instead of a green buy arrow.
+      if (s.type === 'buy' && s.deadCat) {
+        return { time, position: 'belowBar', color: DEADCAT_COLOR, shape: 'circle', text: 'DC' };
+      }
       const buy = s.type === 'buy';
       return {
         time,
@@ -240,8 +355,10 @@ function SignalChart({ token, symbol }) {
     }
   }, [view, bars]);
 
-  const buyCount = visibleSignals.filter(s => s.type === 'buy').length;
+  // Dead-cat buys are excluded from the actionable buy tally and counted apart.
+  const buyCount = visibleSignals.filter(s => s.type === 'buy' && !s.deadCat).length;
   const sellCount = visibleSignals.filter(s => s.type === 'sell').length;
+  const deadCatCount = visibleSignals.filter(s => s.type === 'buy' && s.deadCat).length;
   const sliderStyle = { accentColor: FAST_COLOR, cursor: 'pointer', width: '150px' };
   const capStyle = { fontSize: '0.72rem', color: 'var(--text-secondary)' };
 
@@ -280,9 +397,27 @@ function SignalChart({ token, symbol }) {
           <input type="checkbox" checked={strict} onChange={e => setStrict(e.target.checked)} style={{ accentColor: FAST_COLOR, cursor: 'pointer', width: '15px', height: '15px' }} />
           Strict Compliance Mode <span style={{ opacity: 0.7 }}>(B/S → Long/Short)</span>
         </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+          <input type="checkbox" checked={showBB} onChange={e => setShowBB(e.target.checked)} style={{ accentColor: BB_COLOR, cursor: 'pointer', width: '15px', height: '15px' }} />
+          <span style={{ color: BB_COLOR }}>━</span> Bollinger Bands <span style={{ opacity: 0.7 }}>({BB_PERIOD}, {BB_MULT})</span>
+        </label>
+        {showBB && squeeze.current != null && (
+          <span
+            title={`Bollinger Bandwidth = (Upper − Lower) ÷ Middle. A ${SQUEEZE_LOOKBACK}-bar low (squeeze) signals compressed volatility — a breakout is statistically more likely to follow.`}
+            style={{
+              fontSize: '0.76rem', fontWeight: 700, padding: '0.25rem 0.65rem', borderRadius: '6px', whiteSpace: 'nowrap',
+              color: squeeze.isSqueezeNow ? '#0f172a' : 'var(--text-secondary)',
+              background: squeeze.isSqueezeNow ? SQUEEZE_COLOR : 'transparent',
+              border: `1px solid ${squeeze.isSqueezeNow ? SQUEEZE_COLOR : 'var(--border)'}`,
+            }}
+          >
+            Bandwidth: {squeeze.current.toFixed(1)}%{squeeze.isSqueezeNow ? ` · ⚠ Squeeze (${SQUEEZE_LOOKBACK}-day low) — breakout likely` : ''}
+          </span>
+        )}
         <span style={{ marginLeft: 'auto', fontSize: '0.78rem', fontWeight: 700, display: 'flex', gap: '0.75rem' }}>
           <span style={{ color: BUY_COLOR }}>▲ {buyCount} buy</span>
           <span style={{ color: SELL_COLOR }}>▼ {sellCount} sell</span>
+          {deadCatCount > 0 && <span style={{ color: DEADCAT_COLOR }} title="Golden-cross buys ignored as likely dead-cat bounces (below the 20-bar middle band after a sharp drop)">⊘ {deadCatCount} dead-cat</span>}
         </span>
       </div>
 
@@ -310,7 +445,10 @@ function SignalChart({ token, symbol }) {
       <div style={{ marginTop: '0.6rem', fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'flex', gap: '1.25rem', flexWrap: 'wrap' }}>
         <span><span style={{ color: BUY_COLOR }}>▲ B</span> = Buy (golden cross, RSI &gt; 50)</span>
         <span><span style={{ color: SELL_COLOR }}>▼ S</span> = Sell (death cross, RSI &lt; 50)</span>
+        <span><span style={{ color: DEADCAT_COLOR }}>● DC</span> = Dead-cat bounce (buy ignored: below {BB_PERIOD}-bar mid after sharp drop)</span>
         <span><span style={{ color: FAST_COLOR }}>━</span> Fast SMA · <span style={{ color: SLOW_COLOR }}>━</span> Slow SMA</span>
+        {showBB && <span><span style={{ color: BB_COLOR }}>━</span> Bollinger ({BB_PERIOD}, {BB_MULT})</span>}
+        {showBB && <span><span style={{ color: SQUEEZE_COLOR }}>━</span> Squeeze ({SQUEEZE_LOOKBACK}-day bandwidth low)</span>}
         <span style={{ fontStyle: 'italic', opacity: 0.8 }}>Hover a marker for the trigger detail</span>
       </div>
     </section>
