@@ -16,6 +16,7 @@ const SELL_COLOR = '#ef4444';
 const BB_COLOR = '#a78bfa';   // violet — distinct from the SMA blue/orange
 const DEADCAT_COLOR = '#fbbf24'; // amber — flagged/ignored buy
 const SQUEEZE_COLOR = '#ec4899'; // magenta — BB-width squeeze highlight
+const RSI_COLOR = '#22d3ee';     // cyan — RSI oscillator (bottom sub-band)
 const BB_PERIOD = 20;
 const BB_MULT = 2;
 const SQUEEZE_LOOKBACK = 30;     // "lowest in the last 30 days" window
@@ -68,6 +69,8 @@ function SignalChart({ token, symbol }) {
   const [slowPeriod, setSlowPeriod] = useState(50);
   const [strict, setStrict] = useState(false);
   const [showBB, setShowBB] = useState(false);
+  const [showRSI, setShowRSI] = useState(true);
+  const [hoverRsi, setHoverRsi] = useState(null); // RSI under the crosshair
 
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -79,6 +82,9 @@ function SignalChart({ token, symbol }) {
   const bbLowerRef = useRef(null);
   const bbUpperSqRef = useRef(null);
   const bbLowerSqRef = useRef(null);
+  const rsiArrRef = useRef([]); // latest RSI series, read by the crosshair handler
+  const rsiContainerRef = useRef(null); // separate RSI sub-pane (own 0–100 axis)
+  const rsiChartRef = useRef(null);
   const tooltipRef = useRef(null);
   const signalByTimeRef = useRef(new Map()); // time -> signal, read by the crosshair handler
 
@@ -125,7 +131,7 @@ function SignalChart({ token, symbol }) {
 
   // Recompute the engine output whenever bars or the control params change.
   const engine = useMemo(
-    () => (bars.length ? generateSignals(bars, fastPeriod, slowPeriod) : { fast: [], slow: [], signals: [] }),
+    () => (bars.length ? generateSignals(bars, fastPeriod, slowPeriod) : { fast: [], slow: [], mid: [], rsi: [], signals: [] }),
     [bars, fastPeriod, slowPeriod]
   );
 
@@ -184,7 +190,10 @@ function SignalChart({ token, symbol }) {
       crosshair: { mode: 0 },
       // Leave head-room top & bottom so aboveBar / belowBar markers (the S/B
       // arrows) always have space to render and never clip at the chart edge.
-      rightPriceScale: { borderColor: GRID, scaleMargins: { top: 0.12, bottom: 0.18 } },
+      // Pin the axis width so this plot area matches the RSI pane's exactly —
+      // otherwise the wider price labels (4-digit) make this plot narrower than
+      // the RSI plot (0–100), drifting the two timelines apart toward the right.
+      rightPriceScale: { borderColor: GRID, scaleMargins: { top: 0.12, bottom: 0.18 }, minimumWidth: 72 },
       timeScale: { borderColor: GRID, rightOffset: 6 },
     });
     const candle = chart.addCandlestickSeries({
@@ -218,10 +227,26 @@ function SignalChart({ token, symbol }) {
     const fast = chart.addLineSeries({ color: FAST_COLOR, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     const slow = chart.addLineSeries({ color: SLOW_COLOR, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
 
+    // RSI is rendered in a SEPARATE synced pane below (own 0–100 axis), so its
+    // crosshair shows RSI values — not the price scale. See the showRSI effect.
+
     chart.timeScale().fitContent();
 
     // Crosshair tooltip — show the signal explanation when hovering its bar.
     chart.subscribeCrosshairMove((param) => {
+      // Live RSI readout follows the crosshair. Primary source: param.logical
+      // (the bar index under the cursor) → RSI array, which is robust and
+      // scale-independent. Fallback: the series data at the crosshair time.
+      // Done first, before the signal-tooltip early-returns, so it updates
+      // everywhere on the chart.
+      let rsiVal = null;
+      const arr = rsiArrRef.current;
+      if (param.logical != null && arr) {
+        const idx = Math.round(param.logical);
+        if (idx >= 0 && idx < arr.length) rsiVal = arr[idx];
+      }
+      setHoverRsi(param.point && rsiVal != null ? rsiVal : null);
+
       const tip = tooltipRef.current;
       if (!tip) return;
       const sig = param.time != null ? signalByTimeRef.current.get(param.time) : null;
@@ -298,6 +323,63 @@ function SignalChart({ token, symbol }) {
     }
   }, [bb, squeeze, showBB, bars]);
 
+  // RSI sub-band: push the oscillator and split the price scale so the bottom
+  // ~22% is reserved for it; when off, give the candles the full height back.
+  // Keep the crosshair handler's RSI source fresh for the control-panel readout.
+  useEffect(() => { rsiArrRef.current = engine.rsi; }, [engine]);
+
+  // RSI sub-pane: a SEPARATE lightweight-charts instance below the price chart,
+  // with its own 0–100 axis, time-synced to the main chart. This is what makes
+  // hovering the RSI show RSI values (not the price scale). Built/torn down on
+  // the showRSI toggle (and rebuilt when the price chart rebuilds on `bars`).
+  useEffect(() => {
+    if (!showRSI || !rsiContainerRef.current || !chartRef.current || bars.length === 0) return;
+    const main = chartRef.current;
+    const el = rsiContainerRef.current;
+    const rsiChart = createChart(el, {
+      width: el.clientWidth, height: el.clientHeight,
+      layout: { background: { color: BG }, textColor: '#c3cce0', fontSize: 12 },
+      grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
+      crosshair: { mode: 0 },
+      // 0–100 axis pinned via autoscaleInfoProvider below; show RSI labels right.
+      rightPriceScale: { borderColor: GRID, scaleMargins: { top: 0.12, bottom: 0.12 }, minimumWidth: 72 }, // match the price pane's axis width so the plots align
+      timeScale: { borderColor: GRID, visible: false, rightOffset: 6 }, // dates live on the price chart above
+    });
+    const s = rsiChart.addLineSeries({
+      color: RSI_COLOR, lineWidth: 1.5, priceLineVisible: false, lastValueVisible: true,
+      autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }),
+    });
+    // Keep EVERY bar — whitespace ({time} only) during the RSI warmup — so the
+    // RSI chart's time axis is identical to the price chart's. The two panes sync
+    // by logical index, which only aligns to the same dates when both series span
+    // the same bars; dropping the warmup here would shift RSI ~14 bars sideways.
+    s.setData(bars.map((b, i) => (engine.rsi[i] == null ? { time: barTime(b) } : { time: barTime(b), value: engine.rsi[i] })));
+    s.createPriceLine({ price: 50, color: 'rgba(148,163,184,0.6)', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '50' });
+    s.createPriceLine({ price: 70, color: 'rgba(239,68,68,0.4)', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '70' });
+    s.createPriceLine({ price: 30, color: 'rgba(16,185,129,0.4)', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '30' });
+    rsiChartRef.current = rsiChart;
+
+    // Two-way time-axis sync (pan/zoom together), guarded against feedback loops.
+    let syncing = false;
+    const onMain = (r) => { if (syncing || !r) return; syncing = true; try { rsiChart.timeScale().setVisibleLogicalRange(r); } finally { syncing = false; } };
+    const onRsi = (r) => { if (syncing || !r) return; syncing = true; try { main.timeScale().setVisibleLogicalRange(r); } finally { syncing = false; } };
+    main.timeScale().subscribeVisibleLogicalRangeChange(onMain);
+    rsiChart.timeScale().subscribeVisibleLogicalRangeChange(onRsi);
+    const lr = main.timeScale().getVisibleLogicalRange();
+    if (lr) rsiChart.timeScale().setVisibleLogicalRange(lr);
+
+    const ro = new ResizeObserver(() => { if (rsiContainerRef.current) rsiChart.applyOptions({ width: rsiContainerRef.current.clientWidth, height: rsiContainerRef.current.clientHeight }); });
+    ro.observe(el);
+
+    return () => {
+      ro.disconnect();
+      main.timeScale().unsubscribeVisibleLogicalRangeChange(onMain);
+      rsiChart.timeScale().unsubscribeVisibleLogicalRangeChange(onRsi);
+      rsiChart.remove();
+      rsiChartRef.current = null;
+    };
+  }, [showRSI, bars, engine]);
+
   // Push the Buy/Sell markers (scoped to the visible window). Hot path on slider
   // drag and view change — only setMarkers, no chart rebuild.
   useEffect(() => {
@@ -359,6 +441,12 @@ function SignalChart({ token, symbol }) {
   const buyCount = visibleSignals.filter(s => s.type === 'buy' && !s.deadCat).length;
   const sellCount = visibleSignals.filter(s => s.type === 'sell').length;
   const deadCatCount = visibleSignals.filter(s => s.type === 'buy' && s.deadCat).length;
+  // RSI readout — the crosshair value when hovering, else the latest bar.
+  // >70 overbought (red), <30 oversold (green).
+  let latestRsi = null;
+  for (let i = engine.rsi.length - 1; i >= 0; i--) { if (engine.rsi[i] != null) { latestRsi = engine.rsi[i]; break; } }
+  const displayRsi = hoverRsi != null ? hoverRsi : latestRsi;
+  const rsiReadoutColor = displayRsi == null ? 'var(--text-secondary)' : displayRsi >= 70 ? '#ef4444' : displayRsi <= 30 ? '#10b981' : 'var(--text-secondary)';
   const sliderStyle = { accentColor: FAST_COLOR, cursor: 'pointer', width: '150px' };
   const capStyle = { fontSize: '0.72rem', color: 'var(--text-secondary)' };
 
@@ -401,6 +489,11 @@ function SignalChart({ token, symbol }) {
           <input type="checkbox" checked={showBB} onChange={e => setShowBB(e.target.checked)} style={{ accentColor: BB_COLOR, cursor: 'pointer', width: '15px', height: '15px' }} />
           <span style={{ color: BB_COLOR }}>━</span> Bollinger Bands <span style={{ opacity: 0.7 }}>({BB_PERIOD}, {BB_MULT})</span>
         </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+          <input type="checkbox" checked={showRSI} onChange={e => setShowRSI(e.target.checked)} style={{ accentColor: RSI_COLOR, cursor: 'pointer', width: '15px', height: '15px' }} />
+          <span style={{ color: RSI_COLOR }}>━</span> RSI (14)
+          {showRSI && displayRsi != null && <strong style={{ color: rsiReadoutColor }}>&nbsp;{displayRsi.toFixed(1)}</strong>}
+        </label>
         {showBB && squeeze.current != null && (
           <span
             title={`Bollinger Bandwidth = (Upper − Lower) ÷ Middle. A ${SQUEEZE_LOOKBACK}-bar low (squeeze) signals compressed volatility — a breakout is statistically more likely to follow.`}
@@ -421,7 +514,7 @@ function SignalChart({ token, symbol }) {
         </span>
       </div>
 
-      {/* Chart */}
+      {/* Price chart */}
       <div style={{ position: 'relative', height: '480px' }}>
         {loading ? (
           <div className="loader" style={{ position: 'absolute', top: '50%', left: '50%' }}></div>
@@ -442,6 +535,13 @@ function SignalChart({ token, symbol }) {
           </>
         )}
       </div>
+
+      {/* RSI sub-pane (own 0–100 axis, time-synced to the price chart above) */}
+      {showRSI && !loading && !error && (
+        <div style={{ height: '130px', marginTop: '2px' }}>
+          <div ref={rsiContainerRef} style={{ width: '100%', height: '100%' }} />
+        </div>
+      )}
       <div style={{ marginTop: '0.6rem', fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'flex', gap: '1.25rem', flexWrap: 'wrap' }}>
         <span><span style={{ color: BUY_COLOR }}>▲ B</span> = Buy (golden cross, RSI &gt; 50)</span>
         <span><span style={{ color: SELL_COLOR }}>▼ S</span> = Sell (death cross, RSI &lt; 50)</span>
@@ -449,6 +549,7 @@ function SignalChart({ token, symbol }) {
         <span><span style={{ color: FAST_COLOR }}>━</span> Fast SMA · <span style={{ color: SLOW_COLOR }}>━</span> Slow SMA</span>
         {showBB && <span><span style={{ color: BB_COLOR }}>━</span> Bollinger ({BB_PERIOD}, {BB_MULT})</span>}
         {showBB && <span><span style={{ color: SQUEEZE_COLOR }}>━</span> Squeeze ({SQUEEZE_LOOKBACK}-day bandwidth low)</span>}
+        {showRSI && <span><span style={{ color: RSI_COLOR }}>━</span> RSI (14) · 50 = Buy/Sell threshold, 30/70 guides</span>}
         <span style={{ fontStyle: 'italic', opacity: 0.8 }}>Hover a marker for the trigger detail</span>
       </div>
     </section>
