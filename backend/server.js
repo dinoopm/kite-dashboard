@@ -3227,6 +3227,104 @@ app.get('/api/sector-alerts/:sector', async (req, res) => {
   }
 });
 
+// ─── Synthetic Sector Composite Index ───────────────────────────
+// Some sectors (e.g. NSE:NIFTY CAPITAL GOODS) have no tradable Kite index
+// instrument, so there's no quote/historical level to plot on the Indices
+// Performance page. This builds an EQUAL-WEIGHTED composite from the sector's
+// constituents: chain the cross-sectional average of each name's daily return,
+// rebased to 1000. Averaging *returns* (not prices) per day means names with
+// different history lengths or recent IPOs slot in cleanly as they appear,
+// without distorting the level. Output mirrors /api/historical-full (an array
+// of { date, close }) plus the derived last/prev close for the 1D figure.
+const sectorCompositeCache = {};         // { sectorKey: { data, timestamp } }
+const SECTOR_COMPOSITE_TTL = 10 * 60 * 1000; // 10 min — matches the page's cadence
+
+function buildEqualWeightComposite(seriesByToken) {
+  // seriesByToken: Map<token, Array<{date, close}>>. Build date -> {token -> close}.
+  const closeByDate = new Map();
+  for (const arr of seriesByToken.values()) {
+    if (!Array.isArray(arr)) continue;
+    for (const c of arr) {
+      if (c == null || c.close == null || !c.date) continue;
+      const day = String(c.date).slice(0, 10);
+      let m = closeByDate.get(day);
+      if (!m) { m = new Map(); closeByDate.set(day, m); }
+      m.set(arr, c.close); // key by the series ref (one entry per constituent)
+    }
+  }
+  const dates = [...closeByDate.keys()].sort();
+  const prevClose = new Map();  // series ref -> last seen close
+  let index = 1000;
+  const out = [];
+  for (const day of dates) {
+    const todays = closeByDate.get(day);
+    const rets = [];
+    for (const [ref, close] of todays.entries()) {
+      const prev = prevClose.get(ref);
+      if (prev != null && prev > 0) rets.push(close / prev - 1);
+    }
+    for (const [ref, close] of todays.entries()) prevClose.set(ref, close);
+    if (rets.length > 0) {
+      const avg = rets.reduce((a, b) => a + b, 0) / rets.length;
+      index = index * (1 + avg);
+    }
+    out.push({ date: day, close: +index.toFixed(2) });
+  }
+  return out;
+}
+
+async function computeSectorComposite(sectorKey) {
+  const { constituents } = await resolveSectorConstituents(sectorKey);
+  const seriesByToken = new Map();
+  let used = 0;
+  for (const c of constituents) {
+    if (!c.token) continue;
+    try {
+      const { data, cached } = await getOrFetchFullHistory(c.token);
+      if (Array.isArray(data) && data.length > 0) {
+        seriesByToken.set(c.token, data.map(d => ({ date: d.date, close: d.close })));
+        used++;
+      }
+      // Space out only the cold upstream fetches to respect the rate limit.
+      if (!cached) await new Promise(r => setTimeout(r, 250));
+    } catch (e) {
+      if (e.statusCode === 429) throw e; // bubble rate-limits to the caller
+      console.warn(`composite: history failed for ${c.symbol}:`, e.message);
+    }
+  }
+  const series = buildEqualWeightComposite(seriesByToken);
+  const lastClose = series.length ? series[series.length - 1].close : null;
+  const prevClose = series.length >= 2 ? series[series.length - 2].close : null;
+  return {
+    sector: sectorKey,
+    series,
+    lastClose,
+    prevClose,
+    constituentsUsed: used,
+    constituentsTotal: constituents.length,
+    method: 'equal-weight-return, base 1000',
+  };
+}
+
+app.get('/api/sector-composite/:sector', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: 'MCP not connected' });
+  try {
+    const sectorKey = decodeURIComponent(req.params.sector);
+    const cached = sectorCompositeCache[sectorKey];
+    if (cached && Date.now() - cached.timestamp < SECTOR_COMPOSITE_TTL) {
+      return res.json(cached.data);
+    }
+    const data = await computeSectorComposite(sectorKey);
+    sectorCompositeCache[sectorKey] = { data, timestamp: Date.now() };
+    res.json(data);
+  } catch (err) {
+    if (err.statusCode === 404) return res.status(404).json({ error: err.message });
+    if (err.statusCode === 429) return res.status(429).set('Retry-After', String(err.retryAfter || 5)).json({ error: 'rate_limited', retryAfter: err.retryAfter || 5 });
+    console.error('sector-composite error:', err);
+    res.status(500).json({ error: 'Failed to compute sector composite: ' + err.message });
+  }
+});
+
 // ─── Thematic Baskets (user-defined themes) ─────────────────────
 // A "theme" is a user-curated basket of instruments, persisted in Supabase
 // (themes + theme_instruments). Constituents and technical alerts reuse the

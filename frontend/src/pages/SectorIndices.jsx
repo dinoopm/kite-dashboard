@@ -71,6 +71,9 @@ const INDICES = [
   { key: "NSE:NIFTY CHEMICALS", name: "NIFTY CHEMICALS", category: "sector" },
   { key: "NSE:NIFTY OIL AND GAS", name: "NIFTY OIL AND GAS", category: "sector" },
   { key: "NSE:NIFTY IND DEFENCE", name: "NIFTY INDIA DEFENCE", category: "sector" },
+  // Synthetic: no tradable Kite index exists, so this row is built from an
+  // equal-weighted composite of its constituents (see /api/sector-composite).
+  { key: "NSE:NIFTY CAPITAL GOODS", name: "NIFTY CAPITAL GOODS", category: "sector", synthetic: true },
   { key: "NSE:GOLDBEES", name: "GOLDBEES", category: "commodity" },
   { key: "NSE:SILVERBEES", name: "SILVERBEES", category: "commodity" },
   { key: "NSE:HINDZINC", name: "HINDUSTAN ZINC", category: "commodity" },
@@ -238,7 +241,10 @@ function SectorIndices() {
     const { signal } = controller;
     let refreshTimer = null;
 
-    const activeIndices = INDICES.filter(i => loadedTabs.has(i.category) || RRG_BENCHMARK_KEYS.has(i.key));
+    // Exclude synthetic indices — they have no Kite quote, so a batch request
+    // would return nothing and the merge below would reset their price/1D. They
+    // are populated separately from the composite endpoint.
+    const activeIndices = INDICES.filter(i => !i.synthetic && (loadedTabs.has(i.category) || RRG_BENCHMARK_KEYS.has(i.key)));
     if (activeIndices.length === 0) return;
     const activeKeys = activeIndices.map(i => i.key);
 
@@ -329,6 +335,62 @@ function SectorIndices() {
       controller.abort();
       if (refreshTimer) clearInterval(refreshTimer);
     };
+  }, [loadedTabs]);
+
+  // ─── Synthetic sector composites ────────────────────────────────
+  // Indices flagged `synthetic: true` have no Kite instrument, so quotes/history
+  // don't reach them above. Build their row from the backend equal-weighted
+  // composite instead, deriving the same fields (returns, RSI, SMA, sparkline)
+  // a normal history load would. A sentinel token marks the row clickable so it
+  // drills into the constituents at /sector/:id.
+  useEffect(() => {
+    const synthetic = INDICES.filter(i => i.synthetic && loadedTabs.has(i.category));
+    if (synthetic.length === 0) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    const enrichFromSeries = (sorted, latestPrice) => {
+      const historyObj = calculateHistoricalReturns(sorted, latestPrice);
+      let aboveSma50 = null;
+      if (sorted.length >= 50) {
+        const sma50 = sorted.slice(-50).reduce((s, c) => s + c.close, 0) / 50;
+        aboveSma50 = latestPrice > sma50;
+      }
+      const rsi14 = rsi14At(sorted, sorted.length - 1);
+      const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
+      const history = sorted.slice(-120).map(c => ({ date: c.date, close: c.close }));
+      return { ...historyObj, sparkline, aboveSma50, rsi14, history };
+    };
+
+    const loadComposites = async () => {
+      for (const idx of synthetic) {
+        try {
+          const res = await fetchWithAbort(`/api/sector-composite/${encodeURIComponent(idx.key)}`, { signal });
+          const cdata = await res.json();
+          if (signal.aborted || !mountedRef.current) return;
+          const sorted = Array.isArray(cdata.series) ? cdata.series : [];
+          if (sorted.length === 0) continue;
+          const latestPrice = cdata.lastClose ?? sorted[sorted.length - 1].close;
+          const prev = cdata.prevClose;
+          const pct1D = (prev && prev > 0) ? ((latestPrice - prev) / prev) * 100 : null;
+          const enriched = enrichFromSeries(sorted, latestPrice);
+          setData(prevData => prevData.map(item => item.id === idx.key
+            ? { ...item, ...enriched, price: latestPrice, '1D': pct1D, token: 'synthetic' }
+            : item));
+        } catch (e) {
+          if (e.name === 'AbortError' || signal.aborted) return;
+          if (e.name === 'RateLimitedError') return;
+          console.warn('composite load failed for', idx.key, e.message);
+        }
+      }
+    };
+
+    loadComposites();
+    const t = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') loadComposites();
+    }, RRG_REFRESH_MS);
+    return () => { controller.abort(); clearInterval(t); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadedTabs]);
 
   // ─── RRG Data Fetch ─────────────────────────────────────────
