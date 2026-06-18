@@ -176,6 +176,7 @@ export default function Screener() {
   const [screens, setScreens] = useState(null)
   const [screenName, setScreenName] = useState('')
   const [saveStatus, setSaveStatus] = useState('idle')
+  const [activeScreenId, setActiveScreenId] = useState(null)
 
   const pollTimer = useRef(null)
   const mountedRef = useRef(true)
@@ -281,6 +282,7 @@ export default function Screener() {
     setResult(null)
     setJobStatus(null)
     setError(null)
+    setActiveScreenId(screen.id)
   }, [])
 
   const deleteScreen = useCallback(async (id) => {
@@ -289,6 +291,7 @@ export default function Screener() {
       const res = await fetchWithAbort(`/api/screener/screens/${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error(`Delete failed (${res.status})`)
       setScreens(s => (s || []).filter(x => x.id !== id))
+      setActiveScreenId(cur => (cur === id ? null : cur))
     } catch (e) { setError(e.message) }
   }, [])
 
@@ -300,7 +303,7 @@ export default function Screener() {
 
   const scopeBtn = (type, label) => (
     <button
-      onClick={() => setScopeType(type)}
+      onClick={() => { setScopeType(type); setActiveScreenId(null) }}
       style={{
         background: scopeType === type ? 'var(--accent)' : 'transparent',
         color: scopeType === type ? '#0f172a' : 'var(--text-secondary)',
@@ -330,13 +333,13 @@ export default function Screener() {
         {scopeBtn('sector', 'Sector')}
         {scopeBtn('theme', 'Theme')}
         {scopeType === 'sector' && (
-          <select value={sectorKey} onChange={e => setSectorKey(e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }}>
+          <select value={sectorKey} onChange={e => { setSectorKey(e.target.value); setActiveScreenId(null) }} style={{ ...inputStyle, cursor: 'pointer' }}>
             {sectors.map(s => <option key={s} value={s}>{s.replace(/^NSE:/, '')}</option>)}
           </select>
         )}
         {scopeType === 'theme' && (
           themes.length > 0 ? (
-            <select value={themeId} onChange={e => setThemeId(e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }}>
+            <select value={themeId} onChange={e => { setThemeId(e.target.value); setActiveScreenId(null) }} style={{ ...inputStyle, cursor: 'pointer' }}>
               {themes.map(t => <option key={t.id} value={t.id}>{t.name} ({t.instrumentCount})</option>)}
             </select>
           ) : <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>No themes yet — create one on the Basket page.</span>
@@ -354,13 +357,13 @@ export default function Screener() {
                 key={i}
                 cond={c}
                 fields={fields}
-                onChange={next => setConditions(cs => cs.map((x, j) => (j === i ? next : x)))}
-                onRemove={() => setConditions(cs => cs.filter((_, j) => j !== i))}
+                onChange={next => { setConditions(cs => cs.map((x, j) => (j === i ? next : x))); setActiveScreenId(null) }}
+                onRemove={() => { setConditions(cs => cs.filter((_, j) => j !== i)); setActiveScreenId(null) }}
               />
             ))}
             <div>
               <button
-                onClick={() => setConditions(cs => [...cs, { field: 'rsi14', op: 'lt', value: 30 }])}
+                onClick={() => { setConditions(cs => [...cs, { field: 'rsi14', op: 'lt', value: 30 }]); setActiveScreenId(null) }}
                 disabled={conditions.length >= 12}
                 style={{ background: 'transparent', border: '1px dashed var(--border)', color: 'var(--accent)', borderRadius: '8px', padding: '0.4rem 1rem', cursor: 'pointer', fontSize: '0.82rem' }}
               >
@@ -441,9 +444,25 @@ export default function Screener() {
         : screens.length === 0 ? <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No saved screens yet.</p>
         : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {screens.map(s => (
-              <div key={s.id} className="glass-panel" style={{ padding: '0.7rem 1rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+            {screens.map(s => {
+              const isActive = s.id === activeScreenId
+              return (
+              <div
+                key={s.id}
+                className="glass-panel"
+                style={{
+                  padding: '0.7rem 1rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap',
+                  border: isActive ? '1px solid var(--accent)' : undefined,
+                  background: isActive ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : undefined,
+                }}
+              >
+                {isActive && <span style={{ color: 'var(--accent)', fontSize: '0.9rem', lineHeight: 1 }} title="Currently loaded">●</span>}
                 <strong style={{ minWidth: '140px' }}>{s.name}</strong>
+                {isActive && (
+                  <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.05em', border: '1px solid var(--accent)', borderRadius: '4px', padding: '0.1rem 0.4rem' }}>
+                    Loaded
+                  </span>
+                )}
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flex: 1 }}>
                   {(s.scope?.type === 'sector' ? (s.scope.sectorKey || '').replace(/^NSE:/, '') : s.scope?.type) || ''}
                   {' · '}
@@ -451,9 +470,17 @@ export default function Screener() {
                 </span>
                 <button
                   onClick={() => loadScreen(s)}
-                  style={{ background: 'transparent', border: '1px solid var(--accent)', color: 'var(--accent)', borderRadius: '6px', padding: '0.25rem 0.8rem', cursor: 'pointer', fontSize: '0.78rem' }}
+                  disabled={isActive}
+                  style={{
+                    background: isActive ? 'var(--accent)' : 'transparent',
+                    border: '1px solid var(--accent)',
+                    color: isActive ? '#0f172a' : 'var(--accent)',
+                    borderRadius: '6px', padding: '0.25rem 0.8rem',
+                    cursor: isActive ? 'default' : 'pointer', fontSize: '0.78rem',
+                    fontWeight: isActive ? 700 : 400,
+                  }}
                 >
-                  Load
+                  {isActive ? 'Loaded' : 'Load'}
                 </button>
                 <button
                   onClick={() => deleteScreen(s.id)}
@@ -462,7 +489,8 @@ export default function Screener() {
                   Delete
                 </button>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
     </div>
