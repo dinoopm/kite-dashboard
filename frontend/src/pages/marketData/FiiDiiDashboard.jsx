@@ -173,6 +173,10 @@ export default function FiiDiiDashboard() {
       series, oiSeries, latest, N, fiiSellDays,
       fii5: sumNet(series, 'fii_net', 5), dii5: sumNet(series, 'dii_net', 5),
       fii20: sumNet(series, 'fii_net', 20), dii20: sumNet(series, 'dii_net', 20),
+      // Totals over the full selected range — these track the date selector.
+      fiiRange: sumNet(series, 'fii_net', series.length),
+      diiRange: sumNet(series, 'dii_net', series.length),
+      rangeSessions: series.length,
       fiiLS, diiLS, correlations,
     }
   }, [data])
@@ -199,6 +203,7 @@ export default function FiiDiiDashboard() {
 
   const { series, oiSeries, latest, fiiLS, diiLS, correlations } = derived
   const hasOi = oiSeries.some(r => r.fii_fut_idx_long != null)
+  const activeLabel = (PRESETS.find(p => p.key === presetKey) || PRESETS[2]).label
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
@@ -233,6 +238,8 @@ export default function FiiDiiDashboard() {
         <MetricCard label={`FII Net · ${fmtDate(latest.trade_date)}`} value={fmtCr(latest.fii_net, true)} valueColor={signColor(latest.fii_net)} accent={FII_COLOR} />
         <MetricCard label={`DII Net · ${fmtDate(latest.trade_date)}`} value={fmtCr(latest.dii_net, true)} valueColor={signColor(latest.dii_net)} accent={DII_COLOR} />
         <MetricCard label="Combined Net (latest)" value={fmtCr(latest.combined_net, true)} valueColor={signColor(latest.combined_net)} />
+        <MetricCard label={`FII Net · ${activeLabel}`} value={fmtCr(derived.fiiRange, true)} valueColor={signColor(derived.fiiRange)} sub={`${derived.rangeSessions} sessions`} accent={FII_COLOR} />
+        <MetricCard label={`DII Net · ${activeLabel}`} value={fmtCr(derived.diiRange, true)} valueColor={signColor(derived.diiRange)} sub={`${derived.rangeSessions} sessions`} accent={DII_COLOR} />
         <MetricCard label="FII Net · 5-day" value={fmtCr(derived.fii5, true)} valueColor={signColor(derived.fii5)} sub={`20-day ${fmtCr(derived.fii20, true)}`} />
         <MetricCard label="DII Net · 5-day" value={fmtCr(derived.dii5, true)} valueColor={signColor(derived.dii5)} sub={`20-day ${fmtCr(derived.dii20, true)}`} />
         <MetricCard
