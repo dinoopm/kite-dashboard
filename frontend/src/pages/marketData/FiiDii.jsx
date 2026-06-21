@@ -1,9 +1,14 @@
 import MarketDataTable from '../../components/MarketDataTable'
+import FiiDiiDashboard from './FiiDiiDashboard'
 
 // FII (Foreign Institutional Investors) and DII (Domestic Institutional
 // Investors) daily cash-market activity. Source: NSE, daily sync.
+// The visual dashboard (flows, derivatives positioning, Nifty correlation)
+// sits on top; the full historical table remains below for the raw numbers.
 function FiiDii() {
   return (
+    <>
+    <FiiDiiDashboard />
     <MarketDataTable
       title="FII / DII Activity"
       description="Daily cash-market flows — Foreign Institutional Investors and Domestic Institutional Investors. Source: NSE archive, daily sync."
@@ -31,6 +36,7 @@ function FiiDii() {
       ]}
       exportFilename={({ from, to }) => `fii_dii_${from || 'all'}_to_${to || 'now'}.csv`}
     />
+    </>
   )
 }
 

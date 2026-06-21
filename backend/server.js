@@ -479,15 +479,153 @@ app.get('/api/fiidii', async (req, res) => {
 app.get('/api/participant-oi', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
   try {
-    const { data, error } = await supabase
+    // Default to the latest 20 rows (back-compat). The FII/DII dashboard passes
+    // ?from/?to with ?limit up to 1000 to chart the long/short trend, and may
+    // narrow to a single ?client_type (FII / DII / Pro / Client).
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 1000);
+    const { from, to, client_type } = req.query;
+    let q = supabase
       .from('participant_oi')
       .select('*')
-      .order('trade_date', { ascending: false })
-      .limit(20);
-      
+      .order('trade_date', { ascending: false });
+    if (from) q = q.gte('trade_date', from);
+    if (to)   q = q.lte('trade_date', to);
+    if (client_type) q = q.eq('client_type', client_type.toUpperCase());
+    q = q.limit(limit);
+
+    const { data, error } = await q;
     if (error) throw error;
     res.json(data);
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── FII/DII Overview (institutional dashboard) ─────────────────
+// One aggregating fetch for the FII/DII visual dashboard: daily cash-market
+// flows (fii_dii_activity) + FII/DII index-futures positioning (participant_oi)
+// + aligned daily closes for three market-cap segments (Nifty 50 / Midcap 100 /
+// Smallcap 250) so flows can be read against price across the cap spectrum.
+// The index overlays are best-effort: if Kite is unreachable the endpoint still
+// returns flows + OI, with each index field null and marked unavailable in meta.
+const fiidiiOverviewCache = {};            // { 'from|to': { data, timestamp } }
+const FIIDII_OVERVIEW_TTL = 10 * 60 * 1000; // 10 min
+
+// Cap-segment overlays. `field` is the per-flow-row key the frontend charts on.
+const FLOW_OVERLAY_INDICES = [
+  { key: 'NSE:NIFTY 50',          field: 'nifty50_close',    label: 'Nifty 50' },
+  { key: 'NSE:NIFTY MIDCAP 100',  field: 'midcap100_close',  label: 'Midcap 100' },
+  { key: 'NSE:NIFTY SMLCAP 250',  field: 'smallcap250_close', label: 'Smallcap 250' },
+];
+
+const indexTokenCache = {}; // { 'NSE:...': token }
+async function resolveIndexTokens(keys) {
+  // Seed from the RRG cache where it already resolved the same key.
+  for (const k of keys) if (!indexTokenCache[k] && rrgTokenCache[k]) indexTokenCache[k] = rrgTokenCache[k];
+  const missing = keys.filter(k => !indexTokenCache[k]);
+  if (missing.length) {
+    const q = await callWithTimeout({ name: 'get_quotes', arguments: { instruments: missing } });
+    const quotes = parseMcpText(q) || {};
+    for (const k of missing) if (quotes[k]?.instrument_token) indexTokenCache[k] = String(quotes[k].instrument_token);
+  }
+  return keys.map(k => ({ key: k, token: indexTokenCache[k] || null }));
+}
+
+app.get('/api/fiidii-overview', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: "Supabase not configured in backend" });
+  try {
+    const { from, to } = req.query;
+    const cacheKey = `${from || ''}|${to || ''}`;
+    const cachedHit = fiidiiOverviewCache[cacheKey];
+    if (cachedHit && Date.now() - cachedHit.timestamp < FIIDII_OVERVIEW_TTL) {
+      return res.json(cachedHit.data);
+    }
+
+    // 1. Cash-market flows, ascending by date for charting.
+    let fq = supabase.from('fii_dii_activity').select('*').order('trade_date', { ascending: true });
+    if (from) fq = fq.gte('trade_date', from);
+    if (to)   fq = fq.lte('trade_date', to);
+    const { data: flowsRaw, error: fErr } = await fq.limit(1500);
+    if (fErr) throw fErr;
+
+    // 2. FII + DII index-futures positioning, reshaped to one row per date.
+    let oq = supabase.from('participant_oi').select('*')
+      .in('client_type', ['FII', 'DII'])
+      .order('trade_date', { ascending: true });
+    if (from) oq = oq.gte('trade_date', from);
+    if (to)   oq = oq.lte('trade_date', to);
+    const { data: oiRaw, error: oErr } = await oq.limit(3000);
+    if (oErr) throw oErr;
+
+    const oiByDate = new Map();
+    for (const r of oiRaw || []) {
+      let row = oiByDate.get(r.trade_date);
+      if (!row) { row = { trade_date: r.trade_date }; oiByDate.set(r.trade_date, row); }
+      const p = r.client_type === 'FII' ? 'fii' : 'dii';
+      row[`${p}_fut_idx_long`]  = r.future_index_long;
+      row[`${p}_fut_idx_short`] = r.future_index_short;
+    }
+    const oi = [...oiByDate.values()];
+
+    // 3. Cap-segment daily closes per trade_date — best-effort, never fails the
+    // response. Each index gets its own date→close map; a failure for one index
+    // leaves only that overlay null.
+    const closeMaps = {};                 // field -> Map(date -> close)
+    const indicesMeta = FLOW_OVERLAY_INDICES.map(i => ({ field: i.field, label: i.label, available: false, lastClose: null, token: null }));
+    try {
+      if (mcpClient) {
+        const resolved = await resolveIndexTokens(FLOW_OVERLAY_INDICES.map(i => i.key));
+        for (let i = 0; i < FLOW_OVERLAY_INDICES.length; i++) {
+          const cfg = FLOW_OVERLAY_INDICES[i];
+          const token = resolved[i].token;
+          if (!token) continue;
+          try {
+            const { data: bars } = await getOrFetchFullHistory(token);
+            if (Array.isArray(bars) && bars.length > 0) {
+              const m = new Map();
+              for (const b of bars) if (b?.date && b.close != null) m.set(String(b.date).slice(0, 10), b.close);
+              if (m.size > 0) {
+                closeMaps[cfg.field] = m;
+                indicesMeta[i] = { field: cfg.field, label: cfg.label, available: true, lastClose: bars[bars.length - 1].close, token };
+              }
+            }
+          } catch (e) {
+            console.warn(`fiidii-overview: ${cfg.label} overlay unavailable:`, e.message);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('fiidii-overview: index token resolve failed:', e.message);
+    }
+
+    const flows = (flowsRaw || []).map(r => {
+      const day = String(r.trade_date).slice(0, 10);
+      const row = {
+        trade_date: r.trade_date,
+        fii_buy: r.fii_buy, fii_sell: r.fii_sell, fii_net: r.fii_net,
+        dii_buy: r.dii_buy, dii_sell: r.dii_sell, dii_net: r.dii_net,
+      };
+      for (const cfg of FLOW_OVERLAY_INDICES) row[cfg.field] = closeMaps[cfg.field]?.get(day) ?? null;
+      return row;
+    });
+
+    const anyIndexAvailable = indicesMeta.some(m => m.available);
+    const allIndicesAvailable = indicesMeta.every(m => m.available);
+    const payload = {
+      flows,
+      oi,
+      indices: indicesMeta,
+      meta: { from: from || null, to: to || null, indicesAvailable: anyIndexAvailable },
+    };
+    // Only cache a fully-populated payload. If any overlay was unavailable
+    // (e.g. broker session briefly down), skip caching so the next request
+    // self-heals rather than serving a degraded result for the full TTL.
+    if (allIndicesAvailable) {
+      fiidiiOverviewCache[cacheKey] = { data: payload, timestamp: Date.now() };
+    }
+    res.json(payload);
+  } catch (err) {
+    console.error('fiidii-overview error:', err);
     res.status(500).json({ error: err.message });
   }
 });
