@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import VixWidget from '../components/VixWidget'
 import MacroWidget from '../components/MacroWidget'
 import EyeIcon from '../components/EyeIcon'
 
 function Dashboard() {
+  const navigate = useNavigate();
   const [data, setData] = useState({
     profile: null,
     holdings: null,
@@ -198,8 +200,20 @@ function Dashboard() {
             const change = quote.net_change !== undefined ? quote.net_change : (quote.last_price - (quote.ohlc?.close || quote.last_price));
             const changePct = quote.ohlc?.close ? parseFloat(((change / quote.ohlc.close) * 100).toFixed(2)) : 0;
             const isPositive = change >= 0;
+            // Open the index's instrument page. The page degrades gracefully on
+            // a missing token (falls back to 0), so guard with `?? 0`.
+            const openIndex = () => navigate(`/instrument/${quote.instrument_token ?? 0}?symbol=${encodeURIComponent(name)}`);
             return (
-              <div key={symbol} className="glass-panel stat-card" style={{ flex: '1', minWidth: '220px', padding: '1.25rem', background: 'linear-gradient(145deg, rgba(30,41,59,0.8) 0%, rgba(15,23,42,0.9) 100%)' }}>
+              <div
+                key={symbol}
+                className="glass-panel stat-card"
+                onClick={openIndex}
+                role="link"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIndex(); } }}
+                title={`View ${name}`}
+                style={{ flex: '1', minWidth: '220px', padding: '1.25rem', background: 'linear-gradient(145deg, rgba(30,41,59,0.8) 0%, rgba(15,23,42,0.9) 100%)', cursor: 'pointer', outline: 'none' }}
+              >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
                   <span className="label" style={{ margin: 0 }}>{name}</span>
                   <div style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', background: isPositive ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', color: isPositive ? 'var(--success)' : 'var(--danger)', fontSize: '0.75rem', fontWeight: 600 }}>
