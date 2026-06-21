@@ -365,7 +365,11 @@ function SectorIndices() {
     const loadComposites = async () => {
       for (const idx of synthetic) {
         try {
-          const res = await fetchWithAbort(`/api/sector-composite/${encodeURIComponent(idx.key)}`, { signal });
+          // Cold cache means the backend fetches ~50 constituent histories
+          // sequentially (250ms-spaced to respect Kite's rate limit), which
+          // overruns fetchWithAbort's 60s default and leaves the row stuck on
+          // its ₹0 placeholder. Give it a wide window; warm loads return in ms.
+          const res = await fetchWithAbort(`/api/sector-composite/${encodeURIComponent(idx.key)}`, { signal, timeoutMs: 180_000 });
           const cdata = await res.json();
           if (signal.aborted || !mountedRef.current) return;
           const sorted = Array.isArray(cdata.series) ? cdata.series : [];

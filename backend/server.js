@@ -189,8 +189,18 @@ function computeSectorConcentration(alerts) {
 // Kite MCP returns at most ~1 year of daily candles per request.
 // To get multi-year data we fetch in 1-year chunks and concatenate.
 async function fetchHistoricalMultiYear(token, years = 5) {
+  const tok = parseInt(token, 10);
   const allCandles = [];
   const now = new Date();
+
+  const dedupeSort = (arr) => {
+    const seen = new Set();
+    const out = [];
+    for (const c of arr) {
+      if (c && c.date && !seen.has(c.date)) { seen.add(c.date); out.push(c); }
+    }
+    return out.sort((a, b) => new Date(a.date) - new Date(b.date));
+  };
 
   for (let y = years; y > 0; y--) {
     const chunkEnd = new Date(now);
@@ -198,29 +208,53 @@ async function fetchHistoricalMultiYear(token, years = 5) {
     const chunkStart = new Date(now);
     chunkStart.setFullYear(now.getFullYear() - y);
 
-    try {
-      const data = await fetchHistorical(parseInt(token, 10), chunkStart, chunkEnd, 'day');
-      if (Array.isArray(data)) {
-        allCandles.push(...data);
+    // fetchHistorical returns null on an MCP error (e.g. a transient rate
+    // limit). A dropped chunk silently punches a hole in the series; when it's
+    // the most-recent chunk the cached history is left a full year stale (this
+    // is what made ASHOKLEY's 1W–1Y returns all read 0.00%). Retry before
+    // giving up so a single flaky call doesn't poison the 1h cache.
+    let data = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        data = await fetchHistorical(tok, chunkStart, chunkEnd, 'day');
+      } catch (err) {
+        console.log(`  ⚠️  Chunk ${y}Y-${y - 1}Y attempt ${attempt} threw for token ${token}: ${err.message}`);
       }
-    } catch (err) {
-      console.log(`  ⚠️  Chunk ${y}Y-${y - 1}Y failed for token ${token}: ${err.message}`);
+      if (Array.isArray(data) && data.length > 0) break;
+      if (attempt < 3) await new Promise(r => setTimeout(r, 600 * attempt));
+    }
+    if (Array.isArray(data) && data.length > 0) {
+      allCandles.push(...data);
+    } else {
+      console.log(`  ⚠️  Chunk ${y}Y-${y - 1}Y empty for token ${token} after retries`);
     }
     // Respect rate limit
     await new Promise(r => setTimeout(r, 400));
   }
 
-  // Deduplicate by date and sort
-  const seen = new Set();
-  const deduped = [];
-  for (const c of allCandles) {
-    const key = c.date;
-    if (!seen.has(key)) {
-      seen.add(key);
-      deduped.push(c);
+  let deduped = dedupeSort(allCandles);
+
+  // Self-heal a stale tail. If the most-recent chunk still came back empty, the
+  // newest bar will sit well behind today even though the instrument is trading.
+  // A single recent-window daily call is the request Kite serves most reliably,
+  // so fetch it once and merge — this guarantees fresh short-window returns even
+  // when a yearly chunk fails. Healthy series (tail within a week) skip this.
+  const last = deduped.length ? new Date(deduped[deduped.length - 1].date) : null;
+  const staleDays = last ? (now - last) / 86400000 : Infinity;
+  if (staleDays > 7) {
+    const recentStart = new Date(now);
+    recentStart.setDate(now.getDate() - 400);
+    try {
+      const recent = await fetchHistorical(tok, recentStart, now, 'day');
+      if (Array.isArray(recent) && recent.length > 0) {
+        deduped = dedupeSort([...deduped, ...recent]);
+      }
+    } catch (err) {
+      console.log(`  ⚠️  Recent-window catch-up failed for token ${token}: ${err.message}`);
     }
   }
-  return deduped.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  return deduped;
 }
 
 // ─── Cache warm-up ─────────────────────────────────────────────
