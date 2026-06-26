@@ -12,6 +12,14 @@ const DEFAULT_VISIBLE_SECTORS = [
   'NSE:NIFTY METAL', 'NSE:NIFTY FMCG'
 ];
 
+// Default benchmark choices (Kite/India). The US page passes its own via the
+// `benchmarkOptions` prop. Kept here so existing callers need no changes.
+const DEFAULT_BENCHMARK_OPTIONS = [
+  { value: 'NSE:NIFTY 50', label: 'NIFTY 50 (Large Cap)' },
+  { value: 'NSE:NIFTY 500', label: 'NIFTY 500 (Broad Market)' },
+  { value: 'NSE:NIFTY MIDCAP 100', label: 'MIDCAP 100 (Growth/Risk)' },
+];
+
 export const QUADRANT_COLORS = {
   Leading:   { bg: 'rgba(34, 197, 94, 0.1)',  border: '#22c55e', text: '#22c55e', emoji: '🟢' },
   Weakening: { bg: 'rgba(234, 179, 8, 0.1)',  border: '#eab308', text: '#eab308', emoji: '🟡' },
@@ -46,6 +54,12 @@ export default function RRGChart({
   rrgAnimFrame, setRrgAnimFrame, rrgScrubEnd, setRrgScrubEnd,
   rrgAnimRef, rrgTooltip, setRrgTooltip, rrgSvgRef, rrgContainerRef, navigate,
   benchmarkReadOnly = false,
+  // Market-agnostic hooks — default to Kite/India behavior so existing callers
+  // are unaffected; the US page overrides these.
+  benchmarkOptions = DEFAULT_BENCHMARK_OPTIONS,
+  defaultVisibleKeys = DEFAULT_VISIBLE_SECTORS,
+  getNavHref = (sector) => `/instrument/${sector.token}?symbol=${encodeURIComponent(sector.key.split(':')[1])}`,
+  shortNameFn = (name) => name.replace('NIFTY ', '').replace('NIFTY', ''),
 }) {
   const CHART_W = 1000, CHART_H = 650;
   const PAD = { top: 40, right: 60, bottom: 65, left: 75 };
@@ -59,7 +73,7 @@ export default function RRGChart({
       if (!benchmarkReadOnly) {
         const initial = {};
         for (const s of rrg.sectors) {
-          if (!DEFAULT_VISIBLE_SECTORS.includes(s.key)) {
+          if (!defaultVisibleKeys.includes(s.key)) {
             initial[s.key] = true;
           }
         }
@@ -321,9 +335,9 @@ export default function RRGChart({
                   borderRadius: '6px', padding: '0.3rem 0.5rem', fontSize: '0.85rem', cursor: 'pointer', outline: 'none'
                 }}
               >
-                <option value="NSE:NIFTY 50">NIFTY 50 (Large Cap)</option>
-                <option value="NSE:NIFTY 500">NIFTY 500 (Broad Market)</option>
-                <option value="NSE:NIFTY MIDCAP 100">MIDCAP 100 (Growth/Risk)</option>
+                {benchmarkOptions.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
               </select>
             )}
           </div>
@@ -418,7 +432,7 @@ export default function RRGChart({
               const points = visible.map(pt => ({ x: scaleX(pt.rsRatio), y: scaleY(pt.rsMomentum), ...pt }));
               const pathD = generateSmoothPath(points);
               const latest = points[points.length - 1];
-              const shortName = sector.name.replace('NIFTY ', '').replace('NIFTY', '');
+              const shortName = shortNameFn(sector.name);
               const labelY = getAdjustedLabelY(latest.x, latest.y);
 
               return (
@@ -441,7 +455,7 @@ export default function RRGChart({
                           });
                         }}
                         onMouseLeave={() => setRrgTooltip(null)}
-                        onClick={(e) => { e.stopPropagation(); navigate(`/instrument/${sector.token}?symbol=${encodeURIComponent(sector.key.split(':')[1])}`); }}
+                        onClick={(e) => { e.stopPropagation(); navigate(getNavHref(sector)); }}
                       />
                     );
                   })}
@@ -536,7 +550,7 @@ export default function RRGChart({
                         }}
                       >
                         <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: hidden ? 'var(--text-secondary)' : color, display: 'inline-block', flexShrink: 0 }} />
-                        {s.name.replace('NIFTY ', '')}
+                        {shortNameFn(s.name)}
                       </button>
                     );
                   })}
