@@ -11,6 +11,8 @@ import Basket from './pages/Basket'
 import ThemeDetail from './pages/ThemeDetail'
 import VixIndex from './pages/VixIndex'
 import Screener from './pages/Screener'
+import UsMarkets from './pages/us/UsMarkets'
+import UsInstrument from './pages/us/UsInstrument'
 import Chat from './pages/Chat'
 import FiiDii from './pages/marketData/FiiDii'
 import LargeDeals from './pages/marketData/LargeDeals'
@@ -157,6 +159,8 @@ function App() {
           <Route path="/basket" element={<Basket />} />
           <Route path="/basket/:themeId" element={<ThemeDetail />} />
           <Route path="/screener" element={<Screener />} />
+          <Route path="/us" element={<UsMarkets />} />
+          <Route path="/us/:symbol" element={<UsInstrument />} />
         </Routes>
       </div>
     </BrowserRouter>

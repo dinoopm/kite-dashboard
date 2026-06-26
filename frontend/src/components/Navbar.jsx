@@ -51,6 +51,7 @@ function Navbar({ onDisconnect }) {
       <Link to="/screener" style={linkStyle(location.pathname === '/screener')}>Screener</Link>
       <Link to="/indices" style={linkStyle(location.pathname === '/indices')}>Indices</Link>
       <Link to="/vix" style={linkStyle(location.pathname === '/vix')}>VIX</Link>
+      <Link to="/us" style={linkStyle(location.pathname.startsWith('/us'))}>US Markets</Link>
 
       {/* Market Data dropdown. The outer wrapper keeps cursor-tracking
           continuous across the trigger and the panel — no inter-element gap. */}

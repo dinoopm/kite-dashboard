@@ -10,6 +10,8 @@ const cheerio = require('cheerio');
 
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const { createClient } = require('@supabase/supabase-js');
+// Alpaca US market-data router (required after dotenv so it sees the keys).
+const { alpacaRouter } = require('./alpaca');
 let supabase = null;
 if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
   supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -4621,6 +4623,9 @@ app.post('/api/chat', async (req, res) => {
   const result = await runSqlAgent(question.trim());
   res.json(result);
 });
+
+// ─── US market data (Alpaca) ───────────────────────────────────
+app.use('/api/us', alpacaRouter);
 
 // Serve frontend in production (Railway)
 app.use(express.static(path.join(__dirname, '../frontend/dist')));

@@ -12,7 +12,8 @@ function Dashboard() {
     mfHoldings: null,
     margins: null,
     indices: null,
-    fiiDii: null
+    fiiDii: null,
+    usMarkets: null
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -29,7 +30,7 @@ function Dashboard() {
       setLoading(true);
       setError(null);
 
-      const [profileRes, holdingsRes, mfRes, marginsRes, quotesRes, fiiDiiRes] = await Promise.all([
+      const [profileRes, holdingsRes, mfRes, marginsRes, quotesRes, fiiDiiRes, usRes] = await Promise.all([
         fetch('/api/profile', { signal }),
         fetch('/api/holdings', { signal }),
         fetch('/api/mf-holdings', { signal }),
@@ -40,7 +41,9 @@ function Dashboard() {
           body: JSON.stringify({ instruments: ["NSE:NIFTY 50", "BSE:SENSEX", "NSE:NIFTY 100", "NSE:NIFTY MIDCAP 100", "NSE:NIFTY SMLCAP 100"] }),
           signal
         }),
-        fetch('/api/fiidii', { signal }).catch(() => null)
+        fetch('/api/fiidii', { signal }).catch(() => null),
+        // US markets (Alpaca) — best-effort; a 503 (no keys) leaves us null and the section hides itself.
+        fetch('/api/us/overview', { signal }).catch(() => null)
       ]);
       const profileData = await profileRes.json();
       const holdingsData = await holdingsRes.json();
@@ -48,8 +51,10 @@ function Dashboard() {
       const marginsData = await marginsRes.json();
       const quotesData = await quotesRes.json();
       const fiiDiiData = fiiDiiRes ? await fiiDiiRes.json() : null;
+      const usData = usRes && usRes.ok ? await usRes.json().catch(() => null) : null;
 
       let p = null, h = null, m = null, cash = null, idx = null, fd = null;
+      const us = usData?.indices ? usData : null;
 
       if (profileData?.content?.[0]?.text) {
         try { p = JSON.parse(profileData.content[0].text); } catch (e) { }
@@ -81,7 +86,7 @@ function Dashboard() {
         fd = fiiDiiData;
       }
 
-      setData({ profile: p, holdings: h, mfHoldings: m, margins: cash, indices: idx, fiiDii: fd });
+      setData({ profile: p, holdings: h, mfHoldings: m, margins: cash, indices: idx, fiiDii: fd, usMarkets: us });
 
     } catch (err) {
       if (err.name === 'AbortError') return;
@@ -227,6 +232,56 @@ function Dashboard() {
               </div>
             );
           })}
+        </section>
+      )}
+
+      {/* US Markets (Alpaca) — hidden entirely when keys aren't configured */}
+      {data.usMarkets?.indices?.length > 0 && (
+        <section style={{ marginBottom: '2.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-primary)' }}>
+              <span style={{ color: 'var(--accent)' }}>★</span> US Markets
+            </h2>
+            <span
+              onClick={() => navigate('/us')}
+              role="link"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/us'); } }}
+              style={{ cursor: 'pointer', fontSize: '0.8rem', color: 'var(--accent)', fontWeight: 600 }}
+            >
+              View all →
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+            {data.usMarkets.indices.map((item) => {
+              const q = item.quote || {};
+              const isPositive = (q.changePct ?? 0) >= 0;
+              const open = () => navigate(`/us/${item.symbol}`);
+              return (
+                <div
+                  key={item.symbol}
+                  className="glass-panel stat-card"
+                  onClick={open}
+                  role="link"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } }}
+                  title={`View ${item.label}`}
+                  style={{ flex: '1', minWidth: '200px', padding: '1.25rem', background: 'linear-gradient(145deg, rgba(30,41,59,0.8) 0%, rgba(15,23,42,0.9) 100%)', cursor: 'pointer', outline: 'none' }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                    <span className="label" style={{ margin: 0 }}>{item.label}</span>
+                    <div style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', background: isPositive ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)', color: isPositive ? 'var(--success)' : 'var(--danger)', fontSize: '0.75rem', fontWeight: 600 }}>
+                      {isPositive ? '▲' : '▼'} {q.changePct != null ? q.changePct.toFixed(2) : '0.00'}%
+                    </div>
+                  </div>
+                  <span className="value" style={{ fontSize: '1.75rem' }}>{q.last != null ? `$${q.last.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</span>
+                  <span className={`label ${isPositive ? 'positive' : 'negative'}`} style={{ marginTop: '0.25rem', marginBottom: 0, textTransform: 'none' }}>
+                    {item.symbol} · {isPositive ? '+' : ''}{q.change != null ? `$${q.change.toFixed(2)}` : '$0.00'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </section>
       )}
 
