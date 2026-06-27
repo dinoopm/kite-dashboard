@@ -14,6 +14,7 @@ import Screener from './pages/Screener'
 import UsIndices from './pages/us/UsIndices'
 import UsSectorDetail from './pages/us/UsSectorDetail'
 import UsInstrument from './pages/us/UsInstrument'
+import UsScreener from './pages/us/UsScreener'
 import Chat from './pages/Chat'
 import FiiDii from './pages/marketData/FiiDii'
 import LargeDeals from './pages/marketData/LargeDeals'
@@ -161,6 +162,7 @@ function App() {
           <Route path="/basket/:themeId" element={<ThemeDetail />} />
           <Route path="/screener" element={<Screener />} />
           <Route path="/us" element={<UsIndices />} />
+          <Route path="/us/screener" element={<UsScreener />} />
           <Route path="/us/sector/:sectorId" element={<UsSectorDetail />} />
           <Route path="/us/:symbol" element={<UsInstrument />} />
         </Routes>

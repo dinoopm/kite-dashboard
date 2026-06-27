@@ -58,7 +58,7 @@ const barTime = (b) => {
 // Slow SMA stays warm even on a 1-month view; these only pan/zoom the time axis.
 const VIEW_DAYS = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '3Y': 1095, '5Y': null };
 
-function SignalChart({ token, symbol }) {
+function SignalChart({ token, symbol, fetchUrl }) {
   const [view, setView] = useState('1Y');
   const [bars, setBars] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -96,7 +96,7 @@ function SignalChart({ token, symbol }) {
     setLoading(true); setError(null);
     (async () => {
       try {
-        const res = await fetchWithAbort(`/api/historical/${token}?tf=5Y`, { signal: controller.signal });
+        const res = await fetchWithAbort(fetchUrl || `/api/historical/${token}?tf=5Y`, { signal: controller.signal });
         const json = await res.json();
         if (json?.content?.[0]?.text) {
           const parsed = JSON.parse(json.content[0].text);
@@ -127,7 +127,7 @@ function SignalChart({ token, symbol }) {
       }
     })();
     return () => controller.abort();
-  }, [token]);
+  }, [token, fetchUrl]);
 
   // Recompute the engine output whenever bars or the control params change.
   const engine = useMemo(

@@ -10,6 +10,13 @@
 // the SPDR sector ETFs. The free "iex" feed is used by default (15-min delayed);
 // set ALPACA_DATA_FEED=sip if the account has a paid SIP subscription.
 const express = require('express');
+const YahooFinance = require('yahoo-finance2').default;
+const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
+// Reuse the exact screener engine the Indian screener uses — it operates on raw
+// daily candles, which is precisely the shape Alpaca bars produce.
+const { SCREENER_FIELDS, computeScreenerRow, validateConditions, evaluateConditions } = require('./screener/engine');
+const { getSP500, getNasdaq100 } = require('./usUniverses');
+const MIN_SCREENER_BARS = 60;
 
 const DATA_BASE = 'https://data.alpaca.markets/v2';
 // Trading API base — used only for read-only asset metadata (company names).
@@ -140,10 +147,14 @@ function rangeToQuery(range) {
   switch (range) {
     case '1D': start.setDate(now.getDate() - 4);  return { timeframe: '15Min', start };
     case '5D': start.setDate(now.getDate() - 8);  return { timeframe: '1Hour', start };
+    case '1W': start.setDate(now.getDate() - 9);  return { timeframe: '1Day', start };
     case '1M': start.setMonth(now.getMonth() - 1); return { timeframe: '1Day', start };
     case '3M': start.setMonth(now.getMonth() - 3); return { timeframe: '1Day', start };
     case '6M': start.setMonth(now.getMonth() - 6); return { timeframe: '1Day', start };
     case '1Y': start.setFullYear(now.getFullYear() - 1); return { timeframe: '1Day', start };
+    case '2Y': start.setFullYear(now.getFullYear() - 2); return { timeframe: '1Day', start };
+    case '3Y': start.setFullYear(now.getFullYear() - 3); return { timeframe: '1Day', start };
+    case '4Y': start.setFullYear(now.getFullYear() - 4); return { timeframe: '1Day', start };
     case '5Y': start.setFullYear(now.getFullYear() - 5); return { timeframe: '1Week', start };
     default:   start.setMonth(now.getMonth() - 6); return { timeframe: '1Day', start };
   }
@@ -491,22 +502,278 @@ router.get('/rrg', async (req, res) => {
 });
 
 // ─── GET /api/us/sector-constituents/:symbol — drilldown holdings ───────────
-router.get('/sector-constituents/:symbol', (req, res) => {
+router.get('/sector-constituents/:symbol', async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
   const list = US_CONSTITUENTS[sym];
   if (!list) return res.status(404).json({ error: `No constituents defined for ${sym}` });
+  // Resolve real company names (Alpaca asset metadata, 24h cached) — small lists.
+  const names = await Promise.all(list.map(s => fetchAssetName(s).catch(() => null)));
   res.json({
     sector: { key: sym, name: labelFor(sym) },
     // Shape mirrors the Indian /api/sector-constituents consumer: key/symbol/token.
-    constituents: list.map(s => ({
+    constituents: list.map((s, i) => ({
       key: s,
       symbol: s,
       token: s,
       tradingsymbol: s,
       instrument_token: s,
-      name: labelFor(s),
+      name: names[i] || labelFor(s),
       exchange: 'US',
     })),
+  });
+});
+
+// ─── GET /api/us/search — US ticker/name search (Yahoo) ─────────────────────
+const US_EXCHANGES = new Set(['NMS', 'NYQ', 'PCX', 'ASE', 'NGM', 'NCM', 'BATS', 'BTS']);
+const searchCache = {}; // q -> { data, ts }
+const SEARCH_TTL = 5 * 60 * 1000;
+router.get('/search', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (q.length < 2) return res.json({ results: [] });
+  const key = q.toLowerCase();
+  const hit = searchCache[key];
+  if (hit && Date.now() - hit.ts < SEARCH_TTL) return res.json(hit.data);
+  try {
+    const r = await yf.search(q, { quotesCount: 15, newsCount: 0, enableFuzzyQuery: false }, { validateResult: false });
+    const allowed = new Set(['EQUITY', 'ETF']);
+    const results = (r.quotes || [])
+      .filter(x => x.symbol && allowed.has(x.quoteType) && (US_EXCHANGES.has(x.exchange) || !x.symbol.includes('.')))
+      .map(x => ({
+        symbol: x.symbol,
+        name: x.shortname || x.longname || x.symbol,
+        exchange: x.exchDisp || x.exchange || '',
+        type: x.quoteType === 'ETF' ? 'ETF' : 'EQ',
+      }))
+      .slice(0, 10);
+    const payload = { results };
+    searchCache[key] = { data: payload, ts: Date.now() };
+    res.json(payload);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/us/fundamentals/:symbol — Yahoo Finance fundamentals ──────────
+const fundamentalsCache = {}; // sym -> { data, ts }
+const FUND_TTL = 60 * 60 * 1000; // 1h
+router.get('/fundamentals/:symbol', async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const hit = fundamentalsCache[sym];
+  if (hit && Date.now() - hit.ts < FUND_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const modules = ['price', 'summaryDetail', 'defaultKeyStatistics', 'financialData', 'assetProfile'];
+    let q;
+    try { q = await yf.quoteSummary(sym, { modules }); }
+    catch { q = await yf.quoteSummary(sym, { modules: ['price', 'summaryDetail'] }); }
+    const price = q.price || {}, sd = q.summaryDetail || {}, ks = q.defaultKeyStatistics || {}, fd = q.financialData || {}, ap = q.assetProfile || {};
+    const pct = (v) => (v != null ? v * 100 : null);
+    const data = {
+      symbol: sym,
+      name: price.longName || price.shortName || labelFor(sym),
+      quoteType: price.quoteType || null,
+      currency: price.currency || 'USD',
+      sector: ap.sector || null, industry: ap.industry || null, website: ap.website || null,
+      country: ap.country || null, employees: ap.fullTimeEmployees || null, summary: ap.longBusinessSummary || null,
+      price: {
+        last: fd.currentPrice ?? price.regularMarketPrice ?? null,
+        marketCap: price.marketCap ?? sd.marketCap ?? null,
+        sharesOut: ks.sharesOutstanding ?? null,
+        beta: sd.beta ?? ks.beta ?? null,
+        week52High: sd.fiftyTwoWeekHigh ?? null, week52Low: sd.fiftyTwoWeekLow ?? null,
+        avgVolume: sd.averageVolume ?? null,
+      },
+      valuation: {
+        trailingPE: sd.trailingPE ?? null, forwardPE: sd.forwardPE ?? ks.forwardPE ?? null,
+        pegRatio: ks.pegRatio ?? null, priceToBook: ks.priceToBook ?? null,
+        priceToSales: sd.priceToSalesTrailing12Months ?? null,
+        evToEbitda: ks.enterpriseToEbitda ?? null, evToRevenue: ks.enterpriseToRevenue ?? null,
+        enterpriseValue: ks.enterpriseValue ?? null,
+      },
+      profitability: {
+        roe: pct(fd.returnOnEquity), roa: pct(fd.returnOnAssets),
+        grossMargin: pct(fd.grossMargins), operatingMargin: pct(fd.operatingMargins),
+        profitMargin: pct(fd.profitMargins ?? ks.profitMargins),
+      },
+      growth: { revenue: pct(fd.revenueGrowth), earnings: pct(fd.earningsGrowth) },
+      financials: {
+        totalRevenue: fd.totalRevenue ?? null, ebitda: fd.ebitda ?? null,
+        grossProfits: fd.grossProfits ?? null, freeCashflow: fd.freeCashflow ?? null,
+        totalCash: fd.totalCash ?? null, totalDebt: fd.totalDebt ?? null,
+        debtToEquity: fd.debtToEquity ?? null, currentRatio: fd.currentRatio ?? null,
+      },
+      dividend: { yield: pct(sd.dividendYield), rate: sd.dividendRate ?? null, payoutRatio: pct(sd.payoutRatio) },
+      eps: { trailing: ks.trailingEps ?? null, forward: ks.forwardEps ?? null },
+      analyst: {
+        targetMean: fd.targetMeanPrice ?? null, targetHigh: fd.targetHighPrice ?? null,
+        targetLow: fd.targetLowPrice ?? null, recommendation: fd.recommendationKey ?? null,
+        analysts: fd.numberOfAnalystOpinions ?? null,
+      },
+    };
+    fundamentalsCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/us/pnl/:symbol — annual + quarterly income statement (Yahoo) ──
+const pnlCache = {}; // sym -> { data, ts }
+const PNL_TTL = 6 * 60 * 60 * 1000; // 6h — statements rarely change intraday
+router.get('/pnl/:symbol', async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const hit = pnlCache[sym];
+  if (hit && Date.now() - hit.ts < PNL_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const now = new Date();
+    const period1 = new Date(now.getFullYear() - 5, 0, 1);
+    const pct = (a, b) => (a != null && b ? (a / b) * 100 : null);
+    const mapRow = (r, isQuarter) => {
+      const d = r.date ? new Date(r.date) : null;
+      const revenue = r.totalRevenue ?? null;
+      const grossProfit = r.grossProfit ?? (revenue != null && r.costOfRevenue != null ? revenue - r.costOfRevenue : null);
+      const operatingIncome = r.operatingIncome ?? null;
+      const netIncome = r.netIncome ?? null;
+      const label = d
+        ? (isQuarter ? `Q${Math.floor(d.getUTCMonth() / 3) + 1} '${String(d.getUTCFullYear()).slice(2)}` : `FY ${d.getUTCFullYear()}`)
+        : '—';
+      return {
+        label, endDate: d ? d.toISOString().slice(0, 10) : null, sortKey: d ? d.getTime() : 0,
+        revenue,
+        costOfRevenue: r.costOfRevenue ?? null,
+        grossProfit,
+        operatingExpense: r.operatingExpense ?? null,
+        operatingIncome,
+        interestExpense: r.interestExpense ?? r.netInterestIncome ?? null,
+        pretaxIncome: r.pretaxIncome ?? null,
+        tax: r.taxProvision ?? null,
+        netIncome,
+        eps: r.dilutedEPS ?? r.basicEPS ?? null,
+        grossMargin: pct(grossProfit, revenue),
+        operatingMargin: pct(operatingIncome, revenue),
+        netMargin: pct(netIncome, revenue),
+      };
+    };
+    const fetchTS = async (type) => {
+      try {
+        const rows = await yf.fundamentalsTimeSeries(sym, { period1, period2: now, type, module: 'financials' });
+        return (rows || []).map(r => mapRow(r, type === 'quarterly')).filter(r => r.revenue != null || r.netIncome != null).sort((a, b) => a.sortKey - b.sortKey);
+      } catch { return []; }
+    };
+    const [annual, quarterly] = await Promise.all([fetchTS('annual'), fetchTS('quarterly')]);
+    const data = { symbol: sym, currency: 'USD', annual, quarterly };
+    pnlCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── US Screener ────────────────────────────────────────────────────────────
+// Fetch daily bars for many symbols using Alpaca's multi-symbol bars endpoint
+// (one request per ~100 symbols), then run the shared screener engine per stock.
+async function fetchBarsMulti(symbols, start) {
+  const out = {}; // symbol -> candles[]
+  const CHUNK = 100;
+  for (let i = 0; i < symbols.length; i += CHUNK) {
+    const chunk = symbols.slice(i, i + CHUNK);
+    let pageToken = null, guard = 0;
+    do {
+      const params = { symbols: chunk.join(','), timeframe: '1Day', start: start.toISOString(), limit: 10000, adjustment: 'all' };
+      if (pageToken) params.page_token = pageToken;
+      const data = await alpacaGet('/stocks/bars', params, 60 * 60 * 1000);
+      const bars = data?.bars || {};
+      for (const s of Object.keys(bars)) {
+        (out[s] = out[s] || []).push(...bars[s].map(b => ({ date: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v })));
+      }
+      pageToken = data?.next_page_token || null;
+    } while (pageToken && ++guard < 60);
+  }
+  return out;
+}
+
+async function resolveUsUniverse(scope) {
+  if (scope.type === 'nasdaq100') return { label: 'Nasdaq 100', symbols: (await getNasdaq100()).map(x => x.symbol) };
+  if (scope.type === 'sector') {
+    const want = String(scope.sector || '').toLowerCase();
+    const symbols = (await getSP500()).filter(x => (x.sector || '').toLowerCase() === want).map(x => x.symbol);
+    return { label: `${scope.sector} (S&P 500)`, symbols };
+  }
+  if (scope.type === 'custom') {
+    return { label: scope.name || 'Custom basket', symbols: [...new Set((scope.symbols || []).map(s => String(s).toUpperCase()))] };
+  }
+  return { label: 'S&P 500', symbols: (await getSP500()).map(x => x.symbol) };
+}
+
+const usScreenerJobs = {};
+let usScreenerSeq = 0;
+
+async function runUsScreenerJob(job, { scope, conditions }) {
+  const { label, symbols } = await resolveUsUniverse(scope);
+  job.progress.total = symbols.length;
+  job.progress.symbol = 'fetching price history…';
+  const start = new Date(); start.setFullYear(start.getFullYear() - 2); // ~500 sessions: enough for SMA200 / 52w / 1Y return
+  const barsBySym = await fetchBarsMulti(symbols, start);
+  const matches = [], notReady = [];
+  for (const sym of symbols) {
+    job.progress.symbol = sym;
+    try {
+      const candles = barsBySym[sym];
+      if (!Array.isArray(candles) || candles.length < MIN_SCREENER_BARS) { notReady.push(sym); }
+      else {
+        const values = computeScreenerRow(candles);
+        if (evaluateConditions(values, conditions)) matches.push({ symbol: sym, token: sym, values });
+      }
+    } catch { notReady.push(sym); }
+    finally { job.progress.loaded++; }
+  }
+  // Resolve company names for the matched set only (cached; chunked to be gentle).
+  job.progress.symbol = 'resolving names…';
+  for (let i = 0; i < matches.length; i += 25) {
+    const chunk = matches.slice(i, i + 25);
+    const names = await Promise.all(chunk.map(m => fetchAssetName(m.symbol).catch(() => null)));
+    chunk.forEach((m, j) => { m.name = names[j] || m.symbol; });
+  }
+  return { label, scope, conditions, matches, scanned: symbols.length - notReady.length, total: symbols.length, notReady, generatedAt: new Date().toISOString() };
+}
+
+router.get('/screener/fields', (req, res) => {
+  res.json({ fields: SCREENER_FIELDS.map(f => (f.key === 'price' ? { ...f, label: 'Price ($)' } : f)) });
+});
+
+router.get('/screener/sectors', async (req, res) => {
+  try {
+    const sectors = [...new Set((await getSP500()).map(x => x.sector).filter(Boolean))].sort();
+    res.json(sectors);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/screener/run', async (req, res) => {
+  if (!isConfigured()) return res.status(503).json({ error: 'Alpaca keys not configured', configured: false });
+  const { scope, conditions } = req.body || {};
+  if (!scope?.type) return res.status(400).json({ error: 'scope.type is required' });
+  if (scope.type === 'custom' && (!scope.symbols || scope.symbols.length === 0)) return res.status(400).json({ error: 'Basket is empty' });
+  try { validateConditions(conditions); } catch (e) { return res.status(400).json({ error: e.message }); }
+
+  // Prune old finished jobs.
+  for (const id of Object.keys(usScreenerJobs)) {
+    if (usScreenerJobs[id].status !== 'running' && Date.now() - usScreenerJobs[id].createdAt > 10 * 60 * 1000) delete usScreenerJobs[id];
+  }
+  const jobId = `us${++usScreenerSeq}-${Date.now().toString(36)}`;
+  const job = { id: jobId, status: 'running', progress: { loaded: 0, total: 0, symbol: null }, result: null, error: null, createdAt: Date.now() };
+  usScreenerJobs[jobId] = job;
+  runUsScreenerJob(job, { scope, conditions })
+    .then(r => { job.result = r; job.status = 'done'; })
+    .catch(e => { job.status = 'error'; job.error = e.message; console.error('[us-screener]', e.message); });
+  res.json({ jobId });
+});
+
+router.get('/screener/run/:jobId', (req, res) => {
+  const job = usScreenerJobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: 'Job not found (jobs are in-memory and pruned on restart)' });
+  res.json({
+    status: job.status, progress: job.progress,
+    ...(job.status === 'done' ? { result: job.result } : {}),
+    ...(job.status === 'error' ? { error: job.error } : {}),
   });
 });
 

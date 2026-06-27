@@ -820,7 +820,7 @@ export default function UsSectorDetail() {
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{s.symbol}</div>
                 </td>
                 <td style={{ padding: '0.4rem', textAlign: 'right', fontWeight: 600 }}>
-                  {s.price ? `₹${s.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : '–'}
+                  {s.price ? `$${s.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '–'}
                 </td>
                 <Cell value={s['1D']} />
                 <Cell value={s['1W']} />
@@ -1264,7 +1264,7 @@ export default function UsSectorDetail() {
           {sectorQuote && (
             <>
               <span style={{ fontSize: '1.25rem', fontWeight: 700 }}>
-                ₹{sectorQuote.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                ${sectorQuote.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}
               </span>
               <span style={{ fontSize: '0.85rem', fontWeight: 600, color: pctColor(sectorQuote.change1D) }}>
                 {fmtPct(sectorQuote.change1D)}

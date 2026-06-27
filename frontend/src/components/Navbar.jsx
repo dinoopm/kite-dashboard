@@ -14,6 +14,12 @@ const MARKET_DATA_LINKS = [
   { to: '/market-data/macro',               label: 'Macro Economics',           hint: 'GDP, inflation, RBI policy, fiscal & external balances.' },
 ];
 
+// Sublinks under the "US" dropdown (Alpaca-powered US market data).
+const US_LINKS = [
+  { to: '/us',          label: 'Indices',  hint: 'US indices & sectors performance, RRG, and drilldown.' },
+  { to: '/us/screener', label: 'Screener', hint: 'Screen the S&P 500, Nasdaq 100, a sector, or your own basket.' },
+];
+
 function Navbar({ onDisconnect }) {
   const location = useLocation();
   const [marketDataOpen, setMarketDataOpen] = useState(false);
@@ -29,8 +35,21 @@ function Navbar({ onDisconnect }) {
     closeTimerRef.current = setTimeout(() => setMarketDataOpen(false), 180);
   };
 
+  // US dropdown — its own state/timer so it opens independently of Market Data.
+  const [usOpen, setUsOpen] = useState(false);
+  const usCloseTimerRef = useRef(null);
+  const openUsMenu = () => {
+    if (usCloseTimerRef.current) { clearTimeout(usCloseTimerRef.current); usCloseTimerRef.current = null; }
+    setUsOpen(true);
+  };
+  const scheduleUsClose = () => {
+    if (usCloseTimerRef.current) clearTimeout(usCloseTimerRef.current);
+    usCloseTimerRef.current = setTimeout(() => setUsOpen(false), 180);
+  };
+
   // Highlight the parent trigger when the user is on any child page.
   const onMarketDataPage = location.pathname.startsWith('/market-data');
+  const onUsPage = location.pathname.startsWith('/us');
 
   const linkStyle = (active) => ({
     textDecoration: 'none',
@@ -51,7 +70,40 @@ function Navbar({ onDisconnect }) {
       <Link to="/screener" style={linkStyle(location.pathname === '/screener')}>Screener</Link>
       <Link to="/indices" style={linkStyle(location.pathname === '/indices')}>Indices</Link>
       <Link to="/vix" style={linkStyle(location.pathname === '/vix')}>VIX</Link>
-      <Link to="/us" style={linkStyle(location.pathname.startsWith('/us'))}>US Markets</Link>
+      {/* US dropdown (Indices + Screener) */}
+      <div onMouseEnter={openUsMenu} onMouseLeave={scheduleUsClose} style={{ position: 'relative' }}>
+        <span style={{ ...linkStyle(onUsPage), cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+          US
+          <span style={{ fontSize: '0.7rem', transition: 'transform 0.15s', transform: usOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
+        </span>
+        {usOpen && (
+          <div onMouseEnter={openUsMenu} onMouseLeave={scheduleUsClose} style={{ position: 'absolute', top: '100%', left: 0, paddingTop: '0.5rem', minWidth: '220px', zIndex: 10000 }}>
+            <div style={{ background: 'var(--bg-card, #0f172a)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.4rem 0', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+              {US_LINKS.map(l => {
+                const active = l.to === '/us' ? (onUsPage && !location.pathname.startsWith('/us/screener')) : location.pathname.startsWith(l.to);
+                return (
+                  <Link
+                    key={l.to}
+                    to={l.to}
+                    title={l.hint}
+                    onClick={() => setUsOpen(false)}
+                    style={{
+                      display: 'block', padding: '0.55rem 0.9rem', textDecoration: 'none',
+                      color: active ? 'white' : 'var(--text-secondary)',
+                      background: active ? 'rgba(56,189,248,0.10)' : 'transparent',
+                      fontSize: '0.85rem', fontWeight: active ? 600 : 500,
+                    }}
+                    onMouseOver={(e) => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
+                    onMouseOut={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    {l.label}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Market Data dropdown. The outer wrapper keeps cursor-tracking
           continuous across the trigger and the panel — no inter-element gap. */}

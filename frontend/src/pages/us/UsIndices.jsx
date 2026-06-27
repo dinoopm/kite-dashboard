@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Cell as RechartsCell, ResponsiveContainer } from 'recharts';
 import RRGChart from '../../components/RRGChart';
+import UsSearch from '../../components/UsSearch';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 
 // ─── RRG Color Palette ─────────────────────────────────────────
@@ -1073,6 +1074,7 @@ function UsIndices() {
           <h1>US Indices Performance</h1>
           <p>Real-time & Historical performance of market sectors</p>
         </div>
+        <UsSearch />
       </header>
 
       {/* Major Indices — headline cards (always visible, click to drill in) */}
