@@ -9,12 +9,18 @@ import SectorIndices from './pages/SectorIndices'
 import SectorDetail from './pages/SectorDetail'
 import Basket from './pages/Basket'
 import ThemeDetail from './pages/ThemeDetail'
+import VirtualPortfolio from './pages/VirtualPortfolio'
+import VirtualPortfolioDetail from './pages/VirtualPortfolioDetail'
 import VixIndex from './pages/VixIndex'
 import Screener from './pages/Screener'
 import UsIndices from './pages/us/UsIndices'
 import UsSectorDetail from './pages/us/UsSectorDetail'
 import UsInstrument from './pages/us/UsInstrument'
 import UsScreener from './pages/us/UsScreener'
+import UsBasket from './pages/us/UsBasket'
+import UsBasketDetail from './pages/us/UsBasketDetail'
+import UsVirtualPortfolio from './pages/us/UsVirtualPortfolio'
+import UsVirtualPortfolioDetail from './pages/us/UsVirtualPortfolioDetail'
 import Chat from './pages/Chat'
 import FiiDii from './pages/marketData/FiiDii'
 import LargeDeals from './pages/marketData/LargeDeals'
@@ -160,9 +166,15 @@ function App() {
           <Route path="/sector/:sectorId" element={<SectorDetail />} />
           <Route path="/basket" element={<Basket />} />
           <Route path="/basket/:themeId" element={<ThemeDetail />} />
+          <Route path="/virtual" element={<VirtualPortfolio />} />
+          <Route path="/virtual/:portfolioId" element={<VirtualPortfolioDetail />} />
           <Route path="/screener" element={<Screener />} />
           <Route path="/us" element={<UsIndices />} />
           <Route path="/us/screener" element={<UsScreener />} />
+          <Route path="/us/basket" element={<UsBasket />} />
+          <Route path="/us/basket/:id" element={<UsBasketDetail />} />
+          <Route path="/us/virtual" element={<UsVirtualPortfolio />} />
+          <Route path="/us/virtual/:id" element={<UsVirtualPortfolioDetail />} />
           <Route path="/us/sector/:sectorId" element={<UsSectorDetail />} />
           <Route path="/us/:symbol" element={<UsInstrument />} />
         </Routes>

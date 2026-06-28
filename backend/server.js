@@ -321,9 +321,17 @@ async function warmCache(retries = 3) {
     cacheWarming = false;
     console.log(`✅ Cache warm-up complete: ${cached}/${holdings.length} instruments cached`);
 
-    // Fire-and-forget: warm the sector RRG cache so the Sector Indices page
-    // sees complete data on first open instead of partial/flickering results.
-    prewarmRrgHistoricalCache().catch(e => console.error("RRG prewarm error:", e.message));
+    // Fire-and-forget: warm the index history cache so the Indices Performance
+    // page sees complete data on first open instead of partial/flickering rows.
+    prewarmRrgHistoricalCache().catch(e => console.error("Index prewarm error:", e.message));
+    // Keep it warm: re-run before the 1h historical-full TTL lapses. Guarded so
+    // reconnects don't stack intervals; the prewarm itself skips still-fresh tokens.
+    if (!indexPrewarmTimer) {
+      indexPrewarmTimer = setInterval(
+        () => prewarmRrgHistoricalCache().catch(e => console.error("Index prewarm (timer) error:", e.message)),
+        50 * 60 * 1000,
+      );
+    }
   } catch (err) {
     cacheWarming = false;
     console.error("❌ Cache warm-up failed:", err.message);
@@ -348,6 +356,27 @@ async function connectToKiteMcp() {
   try {
     await mcpClient.connect(mcpTransport);
     console.log("Successfully connected to Kite MCP!");
+    // Proactively warm the Indices history cache once the MCP is up — independent
+    // of the holdings warm-up (which a flaky get_holdings can block), so the
+    // Indices Performance page is fast even on a direct first visit. Right after a
+    // (re)connect the session can be slow to answer get_quotes (token resolution),
+    // so retry with backoff until the cache actually has entries. Idempotent.
+    const kickIndexPrewarm = (attempt = 0) => {
+      prewarmRrgHistoricalCache()
+        .catch(e => console.error("Index prewarm (connect) error:", e.message))
+        .finally(() => {
+          if (Object.keys(historicalFullCache).length === 0 && attempt < 5) {
+            setTimeout(() => kickIndexPrewarm(attempt + 1), 30000);
+          }
+        });
+    };
+    setTimeout(() => kickIndexPrewarm(), 12000);
+    if (!indexPrewarmTimer) {
+      indexPrewarmTimer = setInterval(
+        () => prewarmRrgHistoricalCache().catch(e => console.error("Index prewarm (timer) error:", e.message)),
+        50 * 60 * 1000,
+      );
+    }
   } catch (err) {
     console.error("Failed to connect to MCP:", err);
   }
@@ -840,6 +869,7 @@ const indicatorPromises = {};
 // multiple parallel callers each launch their own fetchHistoricalMultiYear MCP storm.
 const historicalFullPromises = {};   // { token: Promise<data[]> }
 const historicalFullWarming = { active: false, total: 0, loaded: 0, startedAt: null };
+let indexPrewarmTimer = null;        // periodic re-warm so the 1h TTL never lapses cold
 
 async function getOrFetchFullHistory(token) {
   const cached = historicalFullCache[token];
@@ -2625,6 +2655,8 @@ app.get('/api/screener-balance-sheet/:symbol', async (req, res) => {
 
     let usedBasis = consolidated ? 'consolidated' : 'standalone';
     let years;
+    // Latest fiscal year in a parsed series (0 when empty/missing).
+    const latestFY = (ys) => (ys && ys.length) ? Math.max(...ys.map(y => y.fy)) : 0;
     if (consolidated) {
       let consolidatedYears = null;
       try {
@@ -2635,14 +2667,24 @@ app.get('/api/screener-balance-sheet/:symbol', async (req, res) => {
         // to standalone below; many companies only file standalone anyway.
         console.log(`[screener-balance-sheet] ${symbol} consolidated unusable (${err.message}) — falling back to standalone`);
       }
-      // Screener occasionally serves a degenerate single-column consolidated
-      // table (e.g. GVT&D's stale "Dec 2010") while the standalone page carries
-      // the full year history. Treat a one-column consolidated result as suspect
-      // and prefer standalone whenever it actually has more year columns.
-      if (!consolidatedYears || consolidatedYears.length < 2) {
+      // The consolidated page is suspect when it's missing, has too few columns
+      // (degenerate single-column tables like GVT&D's stale "Dec 2010"), OR is
+      // STALE — e.g. Tata Elxsi stopped filing consolidated after FY15, so its
+      // consolidated page still serves FY08–FY15 while standalone runs to the
+      // current year. "Stale" = latest FY is >=2 years behind the current
+      // calendar year (Indian FYs end in March, so a 1-year lag is normal).
+      const currentYear = new Date().getFullYear();
+      const consSuspect = !consolidatedYears
+        || consolidatedYears.length < 2
+        || (currentYear - latestFY(consolidatedYears) >= 2);
+      if (consSuspect) {
         try {
           const standaloneYears = await parseBasis(false);
-          if (!consolidatedYears || standaloneYears.length > consolidatedYears.length) {
+          // Prefer standalone when it carries fresher data, or (same latest FY)
+          // more year columns. Otherwise keep whatever consolidated we have.
+          if (!consolidatedYears
+              || latestFY(standaloneYears) > latestFY(consolidatedYears)
+              || (latestFY(standaloneYears) === latestFY(consolidatedYears) && standaloneYears.length > consolidatedYears.length)) {
             years = standaloneYears;
             usedBasis = 'standalone';
           } else {
@@ -2774,6 +2816,19 @@ app.get('/api/screener-shareholding/:symbol', async (req, res) => {
   }
 });
 
+// Lightweight cache probe: given a list of tokens, report which already have a
+// warm historical-full entry. Lets the Indices page fetch warm tokens in
+// parallel (pure in-memory reads) while keeping cold MCP fetches serial + spaced.
+app.post('/api/historical-full/cached', (req, res) => {
+  const tokens = Array.isArray(req.body?.tokens) ? req.body.tokens.map(String) : [];
+  const now = Date.now();
+  const cachedTokens = tokens.filter(t => {
+    const c = historicalFullCache[t];
+    return c && (now - c.timestamp < HISTORICAL_FULL_TTL);
+  });
+  res.json({ cachedTokens });
+});
+
 // ─── Multi-year historical data (for Sector Indices) ──────────
 app.get('/api/historical-full/:token', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
@@ -2810,6 +2865,15 @@ const RRG_SECTOR_KEYS = [
   "NSE:NIFTY PVT BANK", "NSE:NIFTY CONSR DURBL", "NSE:NIFTY HEALTHCARE",
   "NSE:NIFTY MEDIA", "NSE:NIFTY COMMODITIES", "NSE:NIFTY CHEMICALS", "NSE:NIFTY OIL AND GAS",
   "NSE:NIFTY IND DEFENCE"
+];
+
+// Broad-market + commodity rows the Indices Performance table renders that are
+// NOT RRG sectors. Prewarmed alongside the sectors so every tab opens warm.
+const INDEX_BROAD_COMMODITY_KEYS = [
+  "NSE:NIFTY NEXT 50", "NSE:NIFTY 100", "NSE:NIFTY 200", "NSE:NIFTY TOTAL MKT",
+  "NSE:NIFTY MIDCAP 150", "NSE:NIFTY MID SELECT", "NSE:NIFTY SMLCAP 250", "NSE:NIFTY SMLCAP 100",
+  "BSE:SENSEX",
+  "NSE:GOLDBEES", "NSE:SILVERBEES", "NSE:HINDZINC", "NSE:HINDCOPPER",
 ];
 
 const RRG_SECTOR_NAMES = {
@@ -2895,23 +2959,30 @@ const rrgTokenCache = {};
 async function prewarmRrgHistoricalCache() {
   if (historicalFullWarming.active) return;
 
-  if (Object.keys(rrgTokenCache).length === 0) {
-    const allKeys = ["NSE:NIFTY 50", "NSE:NIFTY 500", "NSE:NIFTY MIDCAP 100", ...RRG_SECTOR_KEYS];
+  // Full key set the Indices Performance table renders: RRG sectors + the 3 RS
+  // benchmarks + broad-market & commodity rows. Resolve tokens for any we don't
+  // have yet (one batch quote) so every tab opens against a warm cache.
+  const allKeys = [...new Set([
+    "NSE:NIFTY 50", "NSE:NIFTY 500", "NSE:NIFTY MIDCAP 100",
+    ...RRG_SECTOR_KEYS, ...INDEX_BROAD_COMMODITY_KEYS,
+  ])];
+  const missing = allKeys.filter(k => !rrgTokenCache[k]);
+  if (missing.length) {
     try {
-      const q = await callWithTimeout({ name: "get_quotes", arguments: { instruments: allKeys } });
+      const q = await callWithTimeout({ name: "get_quotes", arguments: { instruments: missing } });
       const quotes = parseMcpText(q) || {};
-      for (const k of allKeys) {
+      for (const k of missing) {
         if (quotes[k]?.instrument_token) rrgTokenCache[k] = String(quotes[k].instrument_token);
       }
     } catch (e) {
-      console.log(`⚠️ RRG prewarm token resolve failed: ${e.message}`);
-      return;
+      console.log(`⚠️ index prewarm token resolve failed: ${e.message}`);
+      // Proceed with whatever tokens we already have rather than bailing entirely.
     }
   }
 
-  const tokens = [...new Set(Object.values(rrgTokenCache))];
+  const tokens = [...new Set(allKeys.map(k => rrgTokenCache[k]).filter(Boolean))];
   Object.assign(historicalFullWarming, { active: true, total: tokens.length, loaded: 0, startedAt: Date.now() });
-  console.log(`🔥 Pre-warming historicalFullCache for ${tokens.length} sector tokens...`);
+  console.log(`🔥 Pre-warming historicalFullCache for ${tokens.length} index tokens...`);
 
   for (const token of tokens) {
     const c = historicalFullCache[token];
@@ -2929,7 +3000,7 @@ async function prewarmRrgHistoricalCache() {
   }
 
   historicalFullWarming.active = false;
-  console.log(`✅ RRG prewarm complete: ${historicalFullWarming.loaded}/${tokens.length} cached`);
+  console.log(`✅ Index prewarm complete: ${historicalFullWarming.loaded}/${tokens.length} cached`);
 }
 
 app.get('/api/rrg', async (req, res) => {
@@ -3642,6 +3713,185 @@ app.get('/api/themes/:id/alerts', async (req, res) => {
     if (err.statusCode === 429) return res.status(429).set('Retry-After', String(err.retryAfter || 5)).json({ error: 'rate_limited', retryAfter: err.retryAfter || 5 });
     console.error('theme-alerts error:', err);
     res.status(500).json({ error: 'Failed to compute theme alerts: ' + err.message });
+  }
+});
+
+// ─── Virtual ("paper") portfolios ───────────────────────────────
+// User-defined buckets of hypothetical holdings (symbol + avg cost + qty).
+// LTP / day-change come live from quotes; everything else is derived FE-side.
+// Run `node migrate_portfolios.js` once to create the tables.
+
+async function getPortfolioWithRows(portfolioId) {
+  const { data: portfolio, error: pErr } = await supabase
+    .from('portfolios').select('*').eq('id', portfolioId).single();
+  if (pErr || !portfolio) { const e = new Error('Portfolio not found'); e.statusCode = 404; throw e; }
+  const { data: rows, error } = await supabase
+    .from('portfolio_holdings').select('*').eq('portfolio_id', portfolioId)
+    .order('sort_order').order('created_at');
+  if (error) throw new Error(error.message);
+  return { portfolio, rows: rows || [] };
+}
+
+// List portfolios with holding counts.
+app.get('/api/portfolios', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    const { data: portfolios, error } = await supabase
+      .from('portfolios').select('*').order('sort_order').order('created_at');
+    if (error) throw new Error(error.message);
+    const { data: holdings } = await supabase.from('portfolio_holdings').select('portfolio_id');
+    const counts = {};
+    (holdings || []).forEach(h => { counts[h.portfolio_id] = (counts[h.portfolio_id] || 0) + 1; });
+    res.json({ portfolios: (portfolios || []).map(p => ({ ...p, holdingsCount: counts[p.id] || 0 })) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Create a portfolio.
+app.post('/api/portfolios', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const name = (req.body?.name || '').toString().trim();
+  if (!name) return res.status(400).json({ error: 'Portfolio name is required' });
+  try {
+    const { data, error } = await supabase.from('portfolios').insert({ name }).select().single();
+    if (error) throw new Error(error.message);
+    res.json({ portfolio: { ...data, holdingsCount: 0 } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Rename a portfolio.
+app.patch('/api/portfolios/:id', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const name = (req.body?.name || '').toString().trim();
+  if (!name) return res.status(400).json({ error: 'Portfolio name is required' });
+  try {
+    const { data, error } = await supabase
+      .from('portfolios').update({ name }).eq('id', req.params.id).select().single();
+    if (error) throw new Error(error.message);
+    if (!data) return res.status(404).json({ error: 'Portfolio not found' });
+    res.json({ portfolio: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Delete a portfolio (cascade removes its holdings via the FK).
+app.delete('/api/portfolios/:id', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    const { error } = await supabase.from('portfolios').delete().eq('id', req.params.id);
+    if (error) throw new Error(error.message);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Add a holding to a portfolio. If the same symbol already exists, the new lot
+// is merged into it: quantities add and the average cost becomes the
+// quantity-weighted average of the two lots (like a real averaging-up/down).
+app.post('/api/portfolios/:id/holdings', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const { symbol, name, isin, exchange, avgCost, quantity } = req.body || {};
+  if (!symbol) return res.status(400).json({ error: 'symbol is required' });
+  const sym = symbol.toString().toUpperCase();
+  const addCost = Number(avgCost) || 0;
+  const addQty = Number(quantity) || 0;
+  try {
+    const { data: existing, error: findErr } = await supabase
+      .from('portfolio_holdings')
+      .select('*')
+      .eq('portfolio_id', req.params.id)
+      .eq('symbol', sym)
+      .maybeSingle();
+    if (findErr) throw new Error(findErr.message);
+
+    if (existing) {
+      const exQty = Number(existing.quantity) || 0;
+      const exCost = Number(existing.avg_cost) || 0;
+      const newQty = exQty + addQty;
+      // Weighted average of the combined cost basis. Fall back to whichever cost
+      // is known if the combined quantity is zero (avoids divide-by-zero).
+      const newAvg = newQty > 0
+        ? Number((((exCost * exQty) + (addCost * addQty)) / newQty).toFixed(4))
+        : (addCost || exCost);
+      const { data, error } = await supabase.from('portfolio_holdings')
+        .update({ quantity: newQty, avg_cost: newAvg })
+        .eq('id', existing.id)
+        .select().single();
+      if (error) throw new Error(error.message);
+      return res.json({ holding: data, merged: true });
+    }
+
+    const { data, error } = await supabase.from('portfolio_holdings').insert({
+      portfolio_id: req.params.id,
+      symbol: sym,
+      name: name || symbol,
+      isin: isin || null,
+      exchange: (exchange || 'NSE').toString().toUpperCase(),
+      avg_cost: addCost,
+      quantity: addQty,
+    }).select().single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Already in this portfolio' });
+      throw new Error(error.message);
+    }
+    res.json({ holding: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Update a holding's average cost and/or quantity.
+app.patch('/api/portfolios/:id/holdings/:holdingId', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  const updates = {};
+  if (req.body?.avgCost != null) updates.avg_cost = Number(req.body.avgCost) || 0;
+  if (req.body?.quantity != null) updates.quantity = Number(req.body.quantity) || 0;
+  if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
+  try {
+    const { data, error } = await supabase.from('portfolio_holdings')
+      .update(updates).eq('id', req.params.holdingId).eq('portfolio_id', req.params.id)
+      .select().single();
+    if (error) throw new Error(error.message);
+    if (!data) return res.status(404).json({ error: 'Holding not found' });
+    res.json({ holding: data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Remove a holding from a portfolio.
+app.delete('/api/portfolios/:id/holdings/:holdingId', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  try {
+    const { error } = await supabase.from('portfolio_holdings')
+      .delete().eq('id', req.params.holdingId).eq('portfolio_id', req.params.id);
+    if (error) throw new Error(error.message);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Resolve a portfolio's holdings with live LTP + previous close, merged with the
+// stored avg cost / quantity. Derived columns (invested, P&L, allocation…) are
+// computed on the frontend so they stay live as the user edits inputs.
+app.get('/api/portfolios/:id/holdings', async (req, res) => {
+  if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
+  if (!mcpClient) return res.status(500).json({ error: 'MCP not connected' });
+  try {
+    const { portfolio, rows } = await getPortfolioWithRows(req.params.id);
+    const constituents = await resolveConstituentsFromRows(rows);
+    const bySymbol = {};
+    constituents.forEach(c => { bySymbol[c.symbol] = c; });
+    const holdings = rows.map(r => {
+      const c = bySymbol[r.symbol] || {};
+      return {
+        id: r.id,
+        symbol: r.symbol,
+        name: r.name,
+        exchange: r.exchange,
+        token: c.token || null,
+        avgCost: Number(r.avg_cost) || 0,
+        quantity: Number(r.quantity) || 0,
+        ltp: c.lastPrice ?? null,
+        previousClose: c.previousClose ?? null,
+      };
+    });
+    res.json({ portfolio: { id: portfolio.id, name: portfolio.name }, holdings });
+  } catch (err) {
+    if (err.statusCode === 404) return res.status(404).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 

@@ -32,6 +32,34 @@ const inputStyle = {
 }
 const pnlClass = (v) => (v == null ? '' : v > 0 ? 'positive' : v < 0 ? 'negative' : '')
 
+// CSV cell escaping: quote if the value contains a comma, quote, or newline.
+const csvEscape = (val) => {
+  if (val == null) return ''
+  const s = String(val)
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+// Export the (already sorted) result rows to a CSV file download. Numeric values
+// are written raw — no +/% decoration — so they stay usable in spreadsheets.
+function exportMatchesCsv(rows, label) {
+  const headers = ['Symbol', ...RESULT_COLUMNS.map(c => c.label)]
+  const lines = [headers.map(csvEscape).join(',')]
+  for (const m of rows) {
+    const cells = [m.symbol, ...RESULT_COLUMNS.map(c => m.values[c.key])]
+    lines.push(cells.map(csvEscape).join(','))
+  }
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  const slug = (label || 'results').replace(/^NSE:/, '').replace(/[^a-z0-9]+/gi, '-').toLowerCase()
+  a.href = url
+  a.download = `screener-${slug}-${new Date().toISOString().slice(0, 10)}.csv`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 // One editable condition row: field → operator → value.
 function ConditionRow({ cond, fields, onChange, onRemove }) {
   const field = fields.find(f => f.key === cond.field)
@@ -89,7 +117,7 @@ function ConditionRow({ cond, fields, onChange, onRemove }) {
   )
 }
 
-function ResultsTable({ matches }) {
+function ResultsTable({ matches, label }) {
   const [sort, setSort] = useState({ key: 'change1D', dir: 'desc' })
   const sorted = useMemo(() => {
     const arr = [...(matches || [])]
@@ -117,6 +145,20 @@ function ResultsTable({ matches }) {
 
   return (
     <div className="glass-panel" style={{ padding: '0.5rem 1rem 1rem', overflowX: 'auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0.4rem 0 0.2rem' }}>
+        <button
+          onClick={() => exportMatchesCsv(sorted, label)}
+          disabled={sorted.length === 0}
+          title="Download matches as CSV"
+          style={{
+            background: 'transparent', border: '1px solid var(--accent)', color: 'var(--accent)',
+            borderRadius: '6px', padding: '0.3rem 0.9rem', cursor: 'pointer', fontSize: '0.78rem',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          ↓ Export CSV
+        </button>
+      </div>
       <table>
         <thead>
           <tr>
@@ -303,7 +345,7 @@ export default function Screener() {
 
   const scopeBtn = (type, label) => (
     <button
-      onClick={() => { setScopeType(type); setActiveScreenId(null) }}
+      onClick={() => setScopeType(type)}
       style={{
         background: scopeType === type ? 'var(--accent)' : 'transparent',
         color: scopeType === type ? '#0f172a' : 'var(--text-secondary)',
@@ -333,13 +375,13 @@ export default function Screener() {
         {scopeBtn('sector', 'Sector')}
         {scopeBtn('theme', 'Theme')}
         {scopeType === 'sector' && (
-          <select value={sectorKey} onChange={e => { setSectorKey(e.target.value); setActiveScreenId(null) }} style={{ ...inputStyle, cursor: 'pointer' }}>
+          <select value={sectorKey} onChange={e => setSectorKey(e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }}>
             {sectors.map(s => <option key={s} value={s}>{s.replace(/^NSE:/, '')}</option>)}
           </select>
         )}
         {scopeType === 'theme' && (
           themes.length > 0 ? (
-            <select value={themeId} onChange={e => { setThemeId(e.target.value); setActiveScreenId(null) }} style={{ ...inputStyle, cursor: 'pointer' }}>
+            <select value={themeId} onChange={e => setThemeId(e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }}>
               {themes.map(t => <option key={t.id} value={t.id}>{t.name} ({t.instrumentCount})</option>)}
             </select>
           ) : <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>No themes yet — create one on the Basket page.</span>
@@ -434,7 +476,7 @@ export default function Screener() {
             </span>
           </h2>
           {result.matches.length > 0
-            ? <ResultsTable matches={result.matches} />
+            ? <ResultsTable matches={result.matches} label={result.label} />
             : <p style={{ color: 'var(--text-secondary)' }}>No stocks matched all conditions.</p>}
         </div>
       )}

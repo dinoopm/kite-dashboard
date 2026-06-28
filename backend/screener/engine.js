@@ -9,6 +9,7 @@ const { buildSeries, rollingMax } = require('../backtest/indicators');
 const SCREENER_FIELDS = [
   { key: 'price',       label: 'Price (₹)',                type: 'number', group: 'Price' },
   { key: 'change1D',    label: '1-day change %',           type: 'number', group: 'Price' },
+  { key: 'change1W',    label: '1-week change %',          type: 'number', group: 'Price' },
   { key: 'ret1M',       label: '1-month return %',         type: 'number', group: 'Returns' },
   { key: 'ret3M',       label: '3-month return %',         type: 'number', group: 'Returns' },
   { key: 'ret6M',       label: '6-month return %',         type: 'number', group: 'Returns' },
@@ -107,6 +108,7 @@ function computeScreenerRow(candles) {
   return {
     price: +price.toFixed(2),
     change1D: last >= 1 && closes[last - 1] > 0 ? +(((price / closes[last - 1]) - 1) * 100).toFixed(2) : null,
+    change1W: retOver(closes, 5),
     ret1M: retOver(closes, 22),
     ret3M: retOver(closes, 66),
     ret6M: retOver(closes, 132),

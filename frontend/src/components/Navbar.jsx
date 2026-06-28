@@ -18,6 +18,8 @@ const MARKET_DATA_LINKS = [
 const US_LINKS = [
   { to: '/us',          label: 'Indices',  hint: 'US indices & sectors performance, RRG, and drilldown.' },
   { to: '/us/screener', label: 'Screener', hint: 'Screen the S&P 500, Nasdaq 100, a sector, or your own basket.' },
+  { to: '/us/basket',   label: 'Baskets',  hint: 'Build thematic baskets of US stocks with performance + RRG.' },
+  { to: '/us/virtual',  label: 'Virtual',  hint: 'Paper portfolios of US stocks — invested, P&L, day change, allocation.' },
 ];
 
 function Navbar({ onDisconnect }) {
@@ -66,6 +68,7 @@ function Navbar({ onDisconnect }) {
       </Link>
       <Link to="/" style={linkStyle(location.pathname === '/')}>Dashboard</Link>
       <Link to="/portfolio" style={linkStyle(location.pathname === '/portfolio')}>Portfolio</Link>
+      <Link to="/virtual" style={linkStyle(location.pathname.startsWith('/virtual'))}>Virtual</Link>
       <Link to="/basket" style={linkStyle(location.pathname.startsWith('/basket'))}>Basket</Link>
       <Link to="/screener" style={linkStyle(location.pathname === '/screener')}>Screener</Link>
       <Link to="/indices" style={linkStyle(location.pathname === '/indices')}>Indices</Link>
@@ -80,7 +83,9 @@ function Navbar({ onDisconnect }) {
           <div onMouseEnter={openUsMenu} onMouseLeave={scheduleUsClose} style={{ position: 'absolute', top: '100%', left: 0, paddingTop: '0.5rem', minWidth: '220px', zIndex: 10000 }}>
             <div style={{ background: 'var(--bg-card, #0f172a)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.4rem 0', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
               {US_LINKS.map(l => {
-                const active = l.to === '/us' ? (onUsPage && !location.pathname.startsWith('/us/screener')) : location.pathname.startsWith(l.to);
+                const active = l.to === '/us'
+                  ? (onUsPage && !['/us/screener', '/us/basket', '/us/virtual'].some(p => location.pathname.startsWith(p)))
+                  : location.pathname.startsWith(l.to);
                 return (
                   <Link
                     key={l.to}

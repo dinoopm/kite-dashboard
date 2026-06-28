@@ -16,7 +16,16 @@ const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 // daily candles, which is precisely the shape Alpaca bars produce.
 const { SCREENER_FIELDS, computeScreenerRow, validateConditions, evaluateConditions } = require('./screener/engine');
 const { getSP500, getNasdaq100 } = require('./usUniverses');
+const { getEtfHoldings } = require('./etfHoldings');
 const MIN_SCREENER_BARS = 60;
+
+// Supabase for persisting US user data (baskets, virtual portfolios, screens).
+// Reads env that server.js already loaded via dotenv before requiring this file.
+const { createClient } = require('@supabase/supabase-js');
+const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY)
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY)
+  : null;
+const requireDb = (res) => { if (!supabase) { res.status(503).json({ error: 'Supabase not configured' }); return false; } return true; };
 
 const DATA_BASE = 'https://data.alpaca.markets/v2';
 // Trading API base — used only for read-only asset metadata (company names).
@@ -502,25 +511,68 @@ router.get('/rrg', async (req, res) => {
 });
 
 // ─── GET /api/us/sector-constituents/:symbol — drilldown holdings ───────────
+// SPDR sector ETFs drill into their FULL GICS membership from the S&P 500
+// (e.g. XLK → all ~74 Information Technology names), not a curated top-10.
+const SECTOR_ETF_TO_GICS = {
+  XLK: 'Information Technology', XLF: 'Financials', XLV: 'Health Care',
+  XLY: 'Consumer Discretionary', XLP: 'Consumer Staples', XLE: 'Energy',
+  XLI: 'Industrials', XLB: 'Materials', XLRE: 'Real Estate',
+  XLU: 'Utilities', XLC: 'Communication Services',
+};
+const mkConstituent = (s, name) => ({ key: s, symbol: s, token: s, tradingsymbol: s, instrument_token: s, name: name || s, exchange: 'US' });
+
+// Industry/thematic ETFs whose drilldown shows real, full membership fetched
+// live (see etfHoldings.js). Broad indices and GICS sector ETFs are handled
+// above and intentionally excluded.
+const LIVE_HOLDINGS_FUNDS = new Set(['SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GDX', 'IGV', 'DIA']);
+
+// Industry/thematic universes the screener can scan in addition to the 11 GICS
+// sectors. Each resolves to its ETF's live holdings (see resolveUsUniverse).
+const US_INDUSTRY_ETFS = ['SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GDX', 'IGV'];
+
 router.get('/sector-constituents/:symbol', async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
-  const list = US_CONSTITUENTS[sym];
-  if (!list) return res.status(404).json({ error: `No constituents defined for ${sym}` });
-  // Resolve real company names (Alpaca asset metadata, 24h cached) — small lists.
-  const names = await Promise.all(list.map(s => fetchAssetName(s).catch(() => null)));
-  res.json({
-    sector: { key: sym, name: labelFor(sym) },
-    // Shape mirrors the Indian /api/sector-constituents consumer: key/symbol/token.
-    constituents: list.map((s, i) => ({
-      key: s,
-      symbol: s,
-      token: s,
-      tradingsymbol: s,
-      instrument_token: s,
-      name: names[i] || labelFor(s),
-      exchange: 'US',
-    })),
-  });
+  try {
+    // Full GICS sector membership (names already come from the index scrape).
+    const gics = SECTOR_ETF_TO_GICS[sym];
+    if (gics) {
+      const members = (await getSP500()).filter(x => (x.sector || '').toLowerCase() === gics.toLowerCase());
+      return res.json({
+        sector: { key: sym, name: `${labelFor(sym)} (S&P 500)` },
+        constituents: members.map(m => mkConstituent(m.symbol, m.name)),
+      });
+    }
+    // QQQ drills into the full Nasdaq 100.
+    if (sym === 'QQQ') {
+      const members = await getNasdaq100();
+      return res.json({
+        sector: { key: sym, name: 'Nasdaq 100' },
+        constituents: members.map(m => mkConstituent(m.symbol, m.name)),
+      });
+    }
+    // Industry/thematic ETFs → live, full holdings from the issuer (SSGA xlsx)
+    // or StockAnalysis. Broad indices (SPY, VTI, …) deliberately stay mapped to
+    // their sector ETFs via the curated list below, so they're excluded here.
+    if (LIVE_HOLDINGS_FUNDS.has(sym)) {
+      const live = await getEtfHoldings(sym).catch(() => null);
+      if (live?.length) {
+        return res.json({
+          sector: { key: sym, name: labelFor(sym) },
+          constituents: live.map(h => mkConstituent(h.symbol, h.name)),
+        });
+      }
+    }
+    // Everything else (and the live fallback) → curated list with names.
+    const list = US_CONSTITUENTS[sym];
+    if (!list) return res.status(404).json({ error: `No constituents defined for ${sym}` });
+    const names = await Promise.all(list.map(s => fetchAssetName(s).catch(() => null)));
+    res.json({
+      sector: { key: sym, name: labelFor(sym) },
+      constituents: list.map((s, i) => mkConstituent(s, names[i])),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── GET /api/us/search — US ticker/name search (Yahoo) ─────────────────────
@@ -548,6 +600,94 @@ router.get('/search', async (req, res) => {
     const payload = { results };
     searchCache[key] = { data: payload, ts: Date.now() };
     res.json(payload);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/us/global-indices — world markets performance (Yahoo) ─────────
+const GLOBAL_INDICES = [
+  // Americas
+  { symbol: '^GSPC', label: 'S&P 500', region: 'Americas', country: 'United States' },
+  { symbol: '^DJI', label: 'Dow Jones', region: 'Americas', country: 'United States' },
+  { symbol: '^IXIC', label: 'Nasdaq Composite', region: 'Americas', country: 'United States' },
+  { symbol: '^RUT', label: 'Russell 2000', region: 'Americas', country: 'United States' },
+  { symbol: '^GSPTSE', label: 'S&P/TSX Composite', region: 'Americas', country: 'Canada' },
+  { symbol: '^BVSP', label: 'Bovespa', region: 'Americas', country: 'Brazil' },
+  { symbol: '^MXX', label: 'IPC Mexico', region: 'Americas', country: 'Mexico' },
+  // Europe
+  { symbol: '^GDAXI', label: 'DAX', region: 'Europe', country: 'Germany' },
+  { symbol: '^FTSE', label: 'FTSE 100', region: 'Europe', country: 'United Kingdom' },
+  { symbol: '^FCHI', label: 'CAC 40', region: 'Europe', country: 'France' },
+  { symbol: '^STOXX50E', label: 'Euro Stoxx 50', region: 'Europe', country: 'Eurozone' },
+  { symbol: '^IBEX', label: 'IBEX 35', region: 'Europe', country: 'Spain' },
+  { symbol: 'FTSEMIB.MI', label: 'FTSE MIB', region: 'Europe', country: 'Italy' },
+  { symbol: '^SSMI', label: 'SMI', region: 'Europe', country: 'Switzerland' },
+  { symbol: '^AEX', label: 'AEX', region: 'Europe', country: 'Netherlands' },
+  // Asia-Pacific
+  { symbol: '^N225', label: 'Nikkei 225', region: 'Asia-Pacific', country: 'Japan' },
+  { symbol: '^HSI', label: 'Hang Seng', region: 'Asia-Pacific', country: 'Hong Kong' },
+  { symbol: '000001.SS', label: 'Shanghai Composite', region: 'Asia-Pacific', country: 'China' },
+  { symbol: '^STI', label: 'Straits Times', region: 'Asia-Pacific', country: 'Singapore' },
+  { symbol: '^KS11', label: 'KOSPI', region: 'Asia-Pacific', country: 'South Korea' },
+  { symbol: '^TWII', label: 'Taiwan Weighted', region: 'Asia-Pacific', country: 'Taiwan' },
+  { symbol: '^AXJO', label: 'S&P/ASX 200', region: 'Asia-Pacific', country: 'Australia' },
+  { symbol: '^BSESN', label: 'BSE Sensex', region: 'Asia-Pacific', country: 'India' },
+  { symbol: '^NSEI', label: 'Nifty 50', region: 'Asia-Pacific', country: 'India' },
+];
+
+function computeIdxReturns(closes, dates) {
+  if (!closes || closes.length === 0) return {};
+  const last = closes[closes.length - 1];
+  const anchor = (n) => { const i = closes.length - 1 - n; return i >= 0 ? closes[i] : null; };
+  const pct = (old) => (old ? +(((last - old) / old) * 100).toFixed(2) : null);
+  let ytd = null;
+  const yr = new Date(dates[dates.length - 1]).getUTCFullYear();
+  for (let i = 0; i < dates.length; i++) {
+    if (new Date(dates[i]).getUTCFullYear() === yr) { ytd = pct(closes[i]); break; }
+  }
+  return { ret1W: pct(anchor(5)), ret1M: pct(anchor(22)), ret3M: pct(anchor(66)), ret6M: pct(anchor(132)), retYTD: ytd, ret1Y: pct(anchor(252)) };
+}
+
+const globalCache = { data: null, ts: 0 };
+const GLOBAL_TTL = 10 * 60 * 1000;
+router.get('/global-indices', async (req, res) => {
+  if (globalCache.data && Date.now() - globalCache.ts < GLOBAL_TTL) return res.json({ ...globalCache.data, cached: true });
+  try {
+    const syms = GLOBAL_INDICES.map(g => g.symbol);
+    const quotes = {};
+    try {
+      const q = await yf.quote(syms, {}, { validateResult: false });
+      (Array.isArray(q) ? q : [q]).forEach(x => { if (x?.symbol) quotes[x.symbol] = x; });
+    } catch { /* fall back to chart-derived 1D below */ }
+
+    const now = new Date();
+    const start = new Date(now); start.setDate(now.getDate() - 420);
+    const retBySym = {};
+    for (let i = 0; i < syms.length; i += 8) {
+      const chunk = syms.slice(i, i + 8);
+      await Promise.all(chunk.map(async s => {
+        try {
+          const ch = await yf.chart(s, { period1: start, interval: '1d' }, { validateResult: false });
+          const bars = (ch?.quotes || []).filter(b => b.close != null);
+          retBySym[s] = computeIdxReturns(bars.map(b => b.close), bars.map(b => b.date));
+        } catch { /* leave returns blank for this index */ }
+      }));
+    }
+
+    const rows = GLOBAL_INDICES.map(g => {
+      const q = quotes[g.symbol] || {};
+      return {
+        ...g,
+        price: q.regularMarketPrice ?? null,
+        change1D: q.regularMarketChangePercent ?? null,
+        currency: q.currency || null,
+        ...(retBySym[g.symbol] || {}),
+      };
+    });
+    const data = { rows, asOf: new Date().toISOString() };
+    globalCache.data = data; globalCache.ts = Date.now();
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -695,6 +835,15 @@ async function resolveUsUniverse(scope) {
   if (scope.type === 'nasdaq100') return { label: 'Nasdaq 100', symbols: (await getNasdaq100()).map(x => x.symbol) };
   if (scope.type === 'sector') {
     const want = String(scope.sector || '').toLowerCase();
+    // Industry/thematic universe (e.g. "Semiconductors") → that ETF's live
+    // holdings; falls back to the curated stub if the live fetch fails.
+    const etf = US_INDUSTRY_ETFS.find(k => labelFor(k).toLowerCase() === want);
+    if (etf) {
+      const holdings = await getEtfHoldings(etf).catch(() => null);
+      const syms = holdings?.length ? holdings.map(h => h.symbol) : (US_CONSTITUENTS[etf] || []);
+      return { label: labelFor(etf), symbols: [...new Set(syms.map(s => String(s).toUpperCase()))] };
+    }
+    // Otherwise a GICS sector → its S&P 500 members.
     const symbols = (await getSP500()).filter(x => (x.sector || '').toLowerCase() === want).map(x => x.symbol);
     return { label: `${scope.sector} (S&P 500)`, symbols };
   }
@@ -742,8 +891,9 @@ router.get('/screener/fields', (req, res) => {
 
 router.get('/screener/sectors', async (req, res) => {
   try {
-    const sectors = [...new Set((await getSP500()).map(x => x.sector).filter(Boolean))].sort();
-    res.json(sectors);
+    const gics = [...new Set((await getSP500()).map(x => x.sector).filter(Boolean))].sort();
+    const industries = US_INDUSTRY_ETFS.map(k => labelFor(k));
+    res.json({ gics, industries });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -767,6 +917,39 @@ router.post('/screener/run', async (req, res) => {
   res.json({ jobId });
 });
 
+// Resolve {key,symbol,token,name} for an arbitrary symbol list (basket detail).
+router.post('/basket-constituents', async (req, res) => {
+  const symbols = [...new Set((req.body?.symbols || []).map(s => String(s).toUpperCase()))];
+  const names = await Promise.all(symbols.map(s => fetchAssetName(s).catch(() => null)));
+  res.json({
+    constituents: symbols.map((s, i) => ({ key: s, symbol: s, token: s, instrument_token: s, name: names[i] || s, exchange: 'US' })),
+  });
+});
+
+// Compute screener-style metric rows for an arbitrary symbol list (thematic
+// baskets). Reuses the multi-symbol bar fetch + shared engine + name lookup.
+router.post('/basket-rows', async (req, res) => {
+  if (!isConfigured()) return res.status(503).json({ error: 'Alpaca keys not configured', configured: false });
+  const symbols = [...new Set((req.body?.symbols || []).map(s => String(s).toUpperCase()))];
+  if (symbols.length === 0) return res.json({ rows: [], notReady: [] });
+  try {
+    const start = new Date(); start.setFullYear(start.getFullYear() - 2);
+    const barsBySym = await fetchBarsMulti(symbols, start);
+    const rows = [], notReady = [];
+    for (const sym of symbols) {
+      const candles = barsBySym[sym];
+      if (!Array.isArray(candles) || candles.length < MIN_SCREENER_BARS) { notReady.push(sym); continue; }
+      try { rows.push({ symbol: sym, token: sym, values: computeScreenerRow(candles) }); } catch { notReady.push(sym); }
+    }
+    for (let i = 0; i < rows.length; i += 25) {
+      const chunk = rows.slice(i, i + 25);
+      const names = await Promise.all(chunk.map(r => fetchAssetName(r.symbol).catch(() => null)));
+      chunk.forEach((r, j) => { r.name = names[j] || r.symbol; });
+    }
+    res.json({ rows, notReady });
+  } catch (err) { res.status(err.statusCode || 500).json({ error: err.message }); }
+});
+
 router.get('/screener/run/:jobId', (req, res) => {
   const job = usScreenerJobs[req.params.jobId];
   if (!job) return res.status(404).json({ error: 'Job not found (jobs are in-memory and pruned on restart)' });
@@ -775,6 +958,107 @@ router.get('/screener/run/:jobId', (req, res) => {
     ...(job.status === 'done' ? { result: job.result } : {}),
     ...(job.status === 'error' ? { error: job.error } : {}),
   });
+});
+
+// ─── Persistence: US baskets / virtual portfolios / saved screens (Supabase) ─
+// jsonb-per-entity tables (see migrate_us_tables.js). Each list endpoint returns
+// newest-first; mutations return the affected row.
+const dbErr = (res, error) => res.status(500).json({ error: error.message || String(error) });
+
+// Baskets — { id, name, symbols: [] }
+router.get('/baskets', async (req, res) => {
+  if (!requireDb(res)) return;
+  const { data, error } = await supabase.from('us_baskets').select('*').order('created_at', { ascending: true });
+  if (error) return dbErr(res, error);
+  res.json({ baskets: data || [] });
+});
+router.get('/baskets/:id', async (req, res) => {
+  if (!requireDb(res)) return;
+  const { data, error } = await supabase.from('us_baskets').select('*').eq('id', req.params.id).single();
+  if (error) return res.status(404).json({ error: error.message });
+  res.json({ basket: data });
+});
+router.post('/baskets', async (req, res) => {
+  if (!requireDb(res)) return;
+  const name = (req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  const { data, error } = await supabase.from('us_baskets').insert({ name, symbols: req.body?.symbols || [] }).select().single();
+  if (error) return dbErr(res, error);
+  res.json({ basket: data });
+});
+router.patch('/baskets/:id', async (req, res) => {
+  if (!requireDb(res)) return;
+  const patch = {};
+  if (req.body?.name != null) patch.name = String(req.body.name).trim();
+  if (req.body?.symbols != null) patch.symbols = req.body.symbols;
+  const { data, error } = await supabase.from('us_baskets').update(patch).eq('id', req.params.id).select().single();
+  if (error) return dbErr(res, error);
+  res.json({ basket: data });
+});
+router.delete('/baskets/:id', async (req, res) => {
+  if (!requireDb(res)) return;
+  const { error } = await supabase.from('us_baskets').delete().eq('id', req.params.id);
+  if (error) return dbErr(res, error);
+  res.json({ ok: true });
+});
+
+// Virtual portfolios — { id, name, holdings: [{id,symbol,name,avgCost,quantity}] }
+router.get('/portfolios', async (req, res) => {
+  if (!requireDb(res)) return;
+  const { data, error } = await supabase.from('us_virtual_portfolios').select('*').order('created_at', { ascending: true });
+  if (error) return dbErr(res, error);
+  res.json({ portfolios: data || [] });
+});
+router.get('/portfolios/:id', async (req, res) => {
+  if (!requireDb(res)) return;
+  const { data, error } = await supabase.from('us_virtual_portfolios').select('*').eq('id', req.params.id).single();
+  if (error) return res.status(404).json({ error: error.message });
+  res.json({ portfolio: data });
+});
+router.post('/portfolios', async (req, res) => {
+  if (!requireDb(res)) return;
+  const name = (req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  const { data, error } = await supabase.from('us_virtual_portfolios').insert({ name, holdings: req.body?.holdings || [] }).select().single();
+  if (error) return dbErr(res, error);
+  res.json({ portfolio: data });
+});
+router.patch('/portfolios/:id', async (req, res) => {
+  if (!requireDb(res)) return;
+  const patch = {};
+  if (req.body?.name != null) patch.name = String(req.body.name).trim();
+  if (req.body?.holdings != null) patch.holdings = req.body.holdings;
+  const { data, error } = await supabase.from('us_virtual_portfolios').update(patch).eq('id', req.params.id).select().single();
+  if (error) return dbErr(res, error);
+  res.json({ portfolio: data });
+});
+router.delete('/portfolios/:id', async (req, res) => {
+  if (!requireDb(res)) return;
+  const { error } = await supabase.from('us_virtual_portfolios').delete().eq('id', req.params.id);
+  if (error) return dbErr(res, error);
+  res.json({ ok: true });
+});
+
+// Saved screens — { id, name, scope, conditions }
+router.get('/screens', async (req, res) => {
+  if (!requireDb(res)) return;
+  const { data, error } = await supabase.from('us_screens').select('*').order('created_at', { ascending: true });
+  if (error) return dbErr(res, error);
+  res.json({ screens: data || [] });
+});
+router.post('/screens', async (req, res) => {
+  if (!requireDb(res)) return;
+  const name = (req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  const { data, error } = await supabase.from('us_screens').insert({ name, scope: req.body?.scope || {}, conditions: req.body?.conditions || [] }).select().single();
+  if (error) return dbErr(res, error);
+  res.json({ screen: data });
+});
+router.delete('/screens/:id', async (req, res) => {
+  if (!requireDb(res)) return;
+  const { error } = await supabase.from('us_screens').delete().eq('id', req.params.id);
+  if (error) return dbErr(res, error);
+  res.json({ ok: true });
 });
 
 module.exports = { alpacaRouter: router, isAlpacaConfigured: isConfigured };

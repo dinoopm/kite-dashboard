@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { fetchWithAbort } from '../hooks/useFetchWithAbort';
-import TechnicalAlertsPanel from '../components/alerts/TechnicalAlertsPanel';
-import { breakoutRank, breakoutLabel } from '../lib/breakout';
+import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
+import TechnicalAlertsPanel from '../../components/alerts/TechnicalAlertsPanel';
+import { breakoutRank, breakoutLabel } from '../../lib/breakout';
 
 const API = import.meta.env.VITE_API_URL || '';
 
@@ -145,8 +145,8 @@ function exportStockRows(rows, themeName) {
   URL.revokeObjectURL(url);
 }
 
-export default function ThemeDetail() {
-  const { themeId } = useParams();
+export default function UsBasketDetail() {
+  const { id: themeId } = useParams();
   const navigate = useNavigate();
   const [theme, setTheme] = useState(null);
   const [constituents, setConstituents] = useState(null); // null = loading
@@ -174,10 +174,18 @@ export default function ThemeDetail() {
 
   const loadConstituents = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/api/themes/${themeId}/constituents`);
+      const bRes = await fetch(`${API}/api/us/baskets/${themeId}`);
+      const bData = await bRes.json();
+      if (!bRes.ok) throw new Error(bData.error || 'Basket not found');
+      const b = bData.basket;
+      setTheme({ id: b.id, name: b.name, symbols: b.symbols || [] });
+      if (!b.symbols || b.symbols.length === 0) { setConstituents([]); setError(null); return; }
+      const res = await fetch(`${API}/api/us/basket-constituents`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbols: b.symbols }),
+      });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to load theme');
-      setTheme(data.theme);
+      if (!res.ok) throw new Error(data.error || 'Failed to load basket');
       setConstituents(data.constituents || []);
       setError(null);
     } catch (e) {
@@ -199,7 +207,7 @@ export default function ThemeDetail() {
       let quotes = {};
       if (instruments.length) {
         try {
-          const qRes = await fetchWithAbort(`${API}/api/quotes`, {
+          const qRes = await fetchWithAbort(`${API}/api/us/quotes`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ instruments }), signal,
           });
@@ -227,7 +235,7 @@ export default function ThemeDetail() {
         if (signal.aborted) break;
         if (!c.token) continue;
         try {
-          const hRes = await fetchWithAbort(`${API}/api/historical-full/${c.token}`, { signal });
+          const hRes = await fetchWithAbort(`${API}/api/us/historical-full/${c.token}`, { signal });
           const hData = await hRes.json();
           let arr = null;
           if (hData?.content?.[0]?.text) {
@@ -272,7 +280,7 @@ export default function ThemeDetail() {
       const controller = new AbortController();
       searchAbort.current = controller;
       try {
-        const res = await fetchWithAbort(`${API}/api/search-instruments?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal });
+        const res = await fetchWithAbort(`${API}/api/us/search?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal });
         const data = await res.json();
         setResults(data.results || []);
       } catch (e) { if (e.name !== 'AbortError') setResults([]); }
@@ -284,34 +292,40 @@ export default function ThemeDetail() {
     if (adding) return;
     setAdding(true);
     try {
-      const res = await fetch(`${API}/api/themes/${themeId}/instruments`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol: row.symbol, name: row.name, isin: row.isin, exchange: row.exchange }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok && res.status !== 409) throw new Error(data.error || 'Add failed');
+      const cur = theme?.symbols || [];
+      if (!cur.includes(row.symbol)) {
+        const res = await fetch(`${API}/api/us/baskets/${themeId}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbols: [...cur, row.symbol] }),
+        });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Add failed'); }
+      }
       setQuery(''); setResults([]);
       await loadConstituents();
     } catch (e) { setError(e.message); }
     finally { setAdding(false); }
   };
 
-  const removeInstrument = async (instrumentId, name) => {
-    if (!instrumentId) return;
-    if (!window.confirm(`Remove ${name} from this theme?`)) return;
+  const removeInstrument = async (symbol) => {
+    if (!symbol) return;
+    if (!window.confirm(`Remove ${symbol} from this basket?`)) return;
     try {
-      const res = await fetch(`${API}/api/themes/${themeId}/instruments/${instrumentId}`, { method: 'DELETE' });
+      const next = (theme?.symbols || []).filter(s => s !== symbol);
+      const res = await fetch(`${API}/api/us/baskets/${themeId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbols: next }),
+      });
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Remove failed'); }
       await loadConstituents();
     } catch (e) { setError(e.message); }
   };
 
   const deleteTheme = async () => {
-    if (!window.confirm(`Delete theme "${theme?.name}"? This removes the theme and all its instruments.`)) return;
+    if (!window.confirm(`Delete basket "${theme?.name}"?`)) return;
     try {
-      const res = await fetch(`${API}/api/themes/${themeId}`, { method: 'DELETE' });
+      const res = await fetch(`${API}/api/us/baskets/${themeId}`, { method: 'DELETE' });
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Delete failed'); }
-      navigate('/basket');
+      navigate('/us/basket');
     } catch (e) { setError(e.message); }
   };
 
@@ -319,12 +333,11 @@ export default function ThemeDetail() {
     const name = nameDraft.trim();
     if (!name || name === theme?.name) { setEditingName(false); return; }
     try {
-      const res = await fetch(`${API}/api/themes/${themeId}`, {
+      const res = await fetch(`${API}/api/us/baskets/${themeId}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Rename failed');
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Rename failed'); }
       setTheme(t => ({ ...t, name }));
       setEditingName(false);
     } catch (e) { setError(e.message); }
@@ -398,7 +411,7 @@ export default function ThemeDetail() {
   return (
     <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Link to="/basket" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', textDecoration: 'none' }}>← Back to Baskets</Link>
+        <Link to="/us/basket" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', textDecoration: 'none' }}>← Back to Baskets</Link>
         {theme && (
           <button
             onClick={deleteTheme}
@@ -481,7 +494,7 @@ export default function ThemeDetail() {
       {/* Tabs */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'stretch', gap: '1rem', borderBottom: '1px solid var(--border)', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', gap: '1.5rem' }}>
-          {[['stocks', 'Stocks'], ['alerts', 'Technical Alerts']].map(([key, label]) => (
+          {[['stocks', 'Stocks']].map(([key, label]) => (
             <button
               key={key}
               onClick={() => setActiveTab(key)}
@@ -528,12 +541,12 @@ export default function ThemeDetail() {
               {sortedStockData.map(s => (
                 <tr key={s.key}>
                   <td style={{ ...td, textAlign: 'left', cursor: s.token ? 'pointer' : 'default', width: '150px', maxWidth: '150px' }}
-                    onClick={() => s.token && navigate(`/instrument/${s.token}?symbol=${encodeURIComponent(s.symbol)}`)}>
+                    onClick={() => s.symbol && navigate(`/us/${encodeURIComponent(s.symbol)}`)}>
                     <div title={s.name} style={{ fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{s.symbol}</div>
                   </td>
                   <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
-                    {s.price ? `₹${s.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : '—'}
+                    {s.price ? `$${s.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'}
                   </td>
                   {RET_COLS.map(c => (
                     <td key={c} style={{ ...td, textAlign: 'right', color: pctColor(s[c]), fontVariantNumeric: 'tabular-nums' }}>
@@ -546,7 +559,7 @@ export default function ThemeDetail() {
                   <td style={{ ...td, textAlign: 'center' }}>{breakoutBadge(s.breakout)}</td>
                   <td style={{ ...td, textAlign: 'right' }}>{momentumBadge(s.momentum)}</td>
                   <td style={{ ...td, textAlign: 'center' }}>
-                    <button onClick={() => removeInstrument(s.instrumentId, s.symbol)} title="Remove from theme"
+                    <button onClick={() => removeInstrument(s.symbol)} title="Remove from theme"
                       style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.9rem' }}>✕</button>
                   </td>
                 </tr>

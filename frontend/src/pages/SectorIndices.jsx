@@ -31,9 +31,9 @@ const RRG_REFRESH_MS = 5 * 60_000;  // RRG is weekly data, 5 min is ample
 const RRG_POLL_MS = 10_000;         // Warm-up poll while cache hydrates
 const RRG_MAX_WARMUP_POLLS = 18;    // Give up after ~3 minutes
 
-// Delay between serial history fetches (rate-limit headroom). Skipped on cache hits.
+// Delay between serial COLD history fetches (rate-limit headroom). Warm tokens
+// are probed up-front and fetched in parallel, so they skip this entirely.
 const HIST_FETCH_DELAY_MS = 1500;
-const HIST_CACHE_DELAY_MS = 50;
 
 // Benchmarks the RRG/RS columns can be evaluated against. Loaded regardless of
 // which tab is active so "RS vs <benchmark>" is populated on first render.
@@ -87,6 +87,36 @@ const emptyRowFor = (entry) => ({
   '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null,
   sparkline: null, aboveSma50: null, rsi14: null, dist52WHigh: null, rs1M: null,
 });
+
+// ─── localStorage snapshot for instant paint on revisit ────────
+const SNAPSHOT_KEY = 'indices-perf-snapshot-v1';
+const SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Read the last-rendered rows so the table paints immediately on revisit. The
+// (large) history arrays are stripped from the snapshot — they reload in the
+// background. Rows are re-keyed onto the current INDICES list so the structure
+// stays in sync even if the index list changes between releases.
+function loadIndicesSnapshot() {
+  try {
+    const raw = localStorage.getItem(SNAPSHOT_KEY);
+    if (!raw) return null;
+    const { ts, rows } = JSON.parse(raw);
+    if (!Array.isArray(rows) || !ts || Date.now() - ts > SNAPSHOT_MAX_AGE_MS) return null;
+    const byId = new Map(rows.map(r => [r.id, r]));
+    return INDICES.map(e => ({ ...emptyRowFor(e), ...(byId.get(e.key) || {}) }));
+  } catch { return null; }
+}
+
+function saveIndicesSnapshot(data) {
+  try {
+    const rows = data.map(({ history, ...rest }) => rest); // drop history (large, reloads anyway)
+    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ ts: Date.now(), rows }));
+  } catch { /* quota / serialization — non-fatal */ }
+}
+
+function hasIndicesSnapshot() {
+  try { return !!localStorage.getItem(SNAPSHOT_KEY); } catch { return false; }
+}
 
 // HTML overlay that draws end-of-line % pills with an anti-overlap pass. Sits
 // absolutely over the LineChart container so we control y-positioning precisely
@@ -157,8 +187,9 @@ function EndLabelsOverlay({
 
 function SectorIndices() {
   const navigate = useNavigate();
-  const [data, setData] = useState(() => INDICES.map(emptyRowFor));
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(() => loadIndicesSnapshot() || INDICES.map(emptyRowFor));
+  // If we painted a cached snapshot, don't block the page on the first fetch.
+  const [loading, setLoading] = useState(() => !hasIndicesSnapshot());
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('sector');
@@ -223,6 +254,12 @@ function SectorIndices() {
       pageAbortRef.current?.abort();
     };
   }, []);
+
+  // Persist a compact snapshot (debounced) so the table paints instantly next visit.
+  useEffect(() => {
+    const t = setTimeout(() => saveIndicesSnapshot(data), 1500);
+    return () => clearTimeout(t);
+  }, [data]);
 
   // Cmd/Ctrl+K focuses the search input.
   useEffect(() => {
@@ -468,94 +505,125 @@ function SectorIndices() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rrgBenchmark]);
 
-  const loadHistoricalDataProgressively = async (indicesList) => {
-    const signal = pageAbortRef.current?.signal;
-    for (let index of indicesList) {
-      if (!mountedRef.current || signal?.aborted) break;
+  // Apply a fetched /api/historical-full payload to a row: returns, RSI(14),
+  // SMA50 flag, sparkline and the (trimmed) history tail. Shared by the parallel
+  // warm path and the serial cold path below.
+  const applyHistoryPayload = (index, resData) => {
+    if (!resData?.content?.[0]?.text) return;
+    let parsed;
+    try { parsed = JSON.parse(resData.content[0].text); } catch { return; }
 
-      let wasCached = false;
-      try {
-        // Use the multi-year endpoint that fetches 5Y data in yearly chunks
-        const res = await fetchWithAbort(`/api/historical-full/${index.token}`, { signal });
-        const resData = await res.json();
-        wasCached = !!resData?.cached;
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const sorted = parsed.sort((a, b) => new Date(a.date) - new Date(b.date));
+      const latestPrice = index.price;
+      const historyObj = calculateHistoricalReturns(sorted, latestPrice);
 
-        if (resData?.content?.[0]?.text) {
-          let parsed = JSON.parse(resData.content[0].text);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const sorted = parsed.sort((a,b) => new Date(a.date) - new Date(b.date));
-            const latestPrice = index.price;
-            const historyObj = calculateHistoricalReturns(sorted, latestPrice);
-
-            // Compute SMA50
-            let aboveSma50 = null;
-            if (sorted.length >= 50) {
-              const last50 = sorted.slice(-50);
-              const sma50 = last50.reduce((s, c) => s + c.close, 0) / 50;
-              aboveSma50 = latestPrice > sma50;
-            }
-
-            // Compute RSI-14 (Wilder's smoothed method)
-            let rsi14 = null;
-            if (sorted.length >= 15) {
-              const closes = sorted.map(c => c.close);
-              const changes = closes.slice(1).map((v, i) => v - closes[i]);
-              let avgGain = 0, avgLoss = 0;
-              for (let i = 0; i < 14; i++) {
-                if (changes[i] > 0) avgGain += changes[i];
-                else avgLoss += Math.abs(changes[i]);
-              }
-              avgGain /= 14;
-              avgLoss /= 14;
-              for (let i = 14; i < changes.length; i++) {
-                avgGain = (avgGain * 13 + (changes[i] > 0 ? changes[i] : 0)) / 14;
-                avgLoss = (avgLoss * 13 + (changes[i] < 0 ? Math.abs(changes[i]) : 0)) / 14;
-              }
-              const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-              rsi14 = parseFloat((100 - 100 / (1 + rs)).toFixed(1));
-            }
-
-            // Last 30 candles for sparkline
-            const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
-
-            // Commodity rows + NIFTY 50 (commodity-chart benchmark) retain the
-            // full daily series so the Commodities tab can plot a normalized
-            // performance line chart. All other rows keep a compact 120-bar
-            // tail — enough for the momentum ranking's 1M-lookback rank-delta
-            // (needs 3M return + 22-day shift + RSI warmup ≈ 88 bars; 120 is
-            // a comfortable margin without bloating the payload).
-            const keepFullHistory = index.category === 'commodity' || index.id === 'NSE:NIFTY 50';
-            const TAIL_FOR_RANK_DELTA = 120;
-            const history = keepFullHistory
-              ? sorted.map(c => ({ date: c.date, close: c.close }))
-              : sorted.slice(-TAIL_FOR_RANK_DELTA).map(c => ({ date: c.date, close: c.close }));
-
-            setData(prevData => prevData.map(item =>
-              item.id === index.id
-                ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14, history }
-                : item
-            ));
-          } else {
-             setData(prevData => prevData.map(item => 
-              item.id === index.id 
-                ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '2Y': 0, '3Y': 0, sparkline: null, aboveSma50: null, rsi14: null }
-                : item
-            ));
-          }
-        }
-      } catch (e) {
-        if (e.name === 'AbortError' || signal?.aborted) break;
-        if (e.name === 'RateLimitedError') break;
-        console.error("Failed history for", index.name, e);
+      // Compute SMA50
+      let aboveSma50 = null;
+      if (sorted.length >= 50) {
+        const sma50 = sorted.slice(-50).reduce((s, c) => s + c.close, 0) / 50;
+        aboveSma50 = latestPrice > sma50;
       }
 
-      if (signal?.aborted || !mountedRef.current) break;
-      // Only enforce rate-limit spacing when the backend actually hit the upstream.
-      await new Promise(r => setTimeout(r, wasCached ? HIST_CACHE_DELAY_MS : HIST_FETCH_DELAY_MS));
+      // Compute RSI-14 (Wilder's smoothed method)
+      let rsi14 = null;
+      if (sorted.length >= 15) {
+        const closes = sorted.map(c => c.close);
+        const changes = closes.slice(1).map((v, i) => v - closes[i]);
+        let avgGain = 0, avgLoss = 0;
+        for (let i = 0; i < 14; i++) {
+          if (changes[i] > 0) avgGain += changes[i];
+          else avgLoss += Math.abs(changes[i]);
+        }
+        avgGain /= 14;
+        avgLoss /= 14;
+        for (let i = 14; i < changes.length; i++) {
+          avgGain = (avgGain * 13 + (changes[i] > 0 ? changes[i] : 0)) / 14;
+          avgLoss = (avgLoss * 13 + (changes[i] < 0 ? Math.abs(changes[i]) : 0)) / 14;
+        }
+        const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+        rsi14 = parseFloat((100 - 100 / (1 + rs)).toFixed(1));
+      }
+
+      const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
+
+      // Commodity rows + NIFTY 50 (commodity-chart benchmark) retain the full
+      // daily series for the normalized performance line chart. All other rows
+      // keep a compact 120-bar tail — enough for the momentum ranking's
+      // 1M-lookback rank-delta without bloating the payload.
+      const keepFullHistory = index.category === 'commodity' || index.id === 'NSE:NIFTY 50';
+      const TAIL_FOR_RANK_DELTA = 120;
+      const history = keepFullHistory
+        ? sorted.map(c => ({ date: c.date, close: c.close }))
+        : sorted.slice(-TAIL_FOR_RANK_DELTA).map(c => ({ date: c.date, close: c.close }));
+
+      setData(prevData => prevData.map(item =>
+        item.id === index.id
+          ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14, history }
+          : item
+      ));
+    } else {
+      setData(prevData => prevData.map(item =>
+        item.id === index.id
+          ? { ...item, '1W': 0, '1M': 0, '3M': 0, '6M': 0, '1Y': 0, '2Y': 0, '3Y': 0, sparkline: null, aboveSma50: null, rsi14: null }
+          : item
+      ));
     }
-    // After all historical data is loaded, do a final RRG refresh to pick up all sectors
+  };
+
+  const loadHistoricalDataProgressively = async (indicesList) => {
+    const signal = pageAbortRef.current?.signal;
+    if (!indicesList.length) return;
+
+    const fetchOne = async (index) => {
+      try {
+        const res = await fetchWithAbort(`/api/historical-full/${index.token}`, { signal });
+        const resData = await res.json();
+        if (signal?.aborted || !mountedRef.current) return;
+        applyHistoryPayload(index, resData);
+      } catch (e) {
+        if (e.name === 'AbortError' || e.name === 'RateLimitedError' || signal?.aborted) return;
+        console.error('Failed history for', index.name, e);
+      }
+    };
+
+    // Probe which tokens are already warm. Warm ones are pure in-memory cache
+    // reads, so we fetch them in parallel; cold ones still go serial + rate-limit
+    // spaced to protect Kite's upstream history limit.
+    let warmSet = new Set();
+    try {
+      const res = await fetchWithAbort('/api/historical-full/cached', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tokens: indicesList.map(i => String(i.token)) }), signal,
+      });
+      const j = await res.json();
+      warmSet = new Set((j.cachedTokens || []).map(String));
+    } catch { /* probe unavailable — treat all as cold (serial) */ }
+    if (signal?.aborted || !mountedRef.current) return;
+
+    const warm = indicesList.filter(i => warmSet.has(String(i.token)));
+    const cold = indicesList.filter(i => !warmSet.has(String(i.token)));
+
+    // Warm tokens: bounded-concurrency parallel pool.
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(6, warm.length) }, async () => {
+      while (cursor < warm.length) {
+        if (signal?.aborted || !mountedRef.current) return;
+        await fetchOne(warm[cursor++]);
+      }
+    });
+    await Promise.all(workers);
+
+    // Cold tokens: serial with rate-limit spacing (unchanged discipline).
+    for (const index of cold) {
+      if (signal?.aborted || !mountedRef.current) break;
+      await fetchOne(index);
+      if (signal?.aborted || !mountedRef.current) break;
+      await new Promise(r => setTimeout(r, HIST_FETCH_DELAY_MS));
+    }
+
+    // After all historical data is loaded, refresh RRG to pick up all sectors.
     if (mountedRef.current && !signal?.aborted) {
-      console.log('Progressive loading complete — refreshing RRG data...');
       fetchRRGData(signal);
     }
   };

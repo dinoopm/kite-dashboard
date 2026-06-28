@@ -1,13 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
-import UsSearch from '../../components/UsSearch';
 
 const POLL_MS = 1500;
 const NUMBER_OPS = [{ v: 'gt', label: '>' }, { v: 'gte', label: '≥' }, { v: 'lt', label: '<' }, { v: 'lte', label: '≤' }];
 const ENUM_OPS = [{ v: 'is', label: 'is' }, { v: 'isnot', label: 'is not' }];
-const BASKETS_KEY = 'us-screener-baskets-v1';
-const SCREENS_KEY = 'us-screener-screens-v1';
 
 // Built-in preset screens (scope defaults to S&P 500; switch the universe after
 // loading to apply the same conditions to Nasdaq 100, a sector, or a basket).
@@ -37,9 +34,6 @@ const RESULT_COLUMNS = [
 
 const inputStyle = { background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-primary)', padding: '0.4rem 0.6rem', fontSize: '0.85rem' };
 const pnlClass = (v) => (v == null ? '' : v > 0 ? 'positive' : v < 0 ? 'negative' : '');
-const loadLS = (k, def) => { try { return JSON.parse(localStorage.getItem(k)) ?? def; } catch { return def; } };
-const saveLS = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota */ } };
-const uid = () => Math.random().toString(36).slice(2, 9);
 
 function ConditionRow({ cond, fields, onChange, onRemove }) {
   const field = fields.find(f => f.key === cond.field);
@@ -115,36 +109,45 @@ function ResultsTable({ matches }) {
 
 export default function UsScreener() {
   const [fields, setFields] = useState(null);
-  const [sectors, setSectors] = useState([]);
+  const [sectors, setSectors] = useState({ gics: [], industries: [] });
   const [conditions, setConditions] = useState([{ field: 'rsi14', op: 'gt', value: 60 }, { field: 'pctVsSma200', op: 'gt', value: 0 }]);
   const [scopeType, setScopeType] = useState('sp500'); // sp500 | nasdaq100 | sector | basket
   const [sector, setSector] = useState('');
-  const [baskets, setBaskets] = useState(() => loadLS(BASKETS_KEY, []));
-  const [activeBasketId, setActiveBasketId] = useState(() => loadLS(BASKETS_KEY, [])[0]?.id || null);
-  const [newBasketName, setNewBasketName] = useState('');
-  const [screens, setScreens] = useState(() => loadLS(SCREENS_KEY, []));
+  const [baskets, setBaskets] = useState([]);
+  const [activeBasketId, setActiveBasketId] = useState(null);
+  const [screens, setScreens] = useState([]);
   const [screenName, setScreenName] = useState('');
   const [jobStatus, setJobStatus] = useState(null);
   const [progress, setProgress] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [activeScreenId, setActiveScreenId] = useState(null); // currently-loaded preset/saved screen
   const pollRef = useRef(null);
 
+  const loadScreens = useCallback(async () => {
+    try { const r = await (await fetchWithAbort('/api/us/screens')).json(); if (Array.isArray(r.screens)) setScreens(r.screens); } catch { /* */ }
+  }, []);
   useEffect(() => {
     (async () => {
       try { const r = await (await fetchWithAbort('/api/us/screener/fields')).json(); setFields(r.fields); } catch { /* */ }
-      try { const s = await (await fetchWithAbort('/api/us/screener/sectors')).json(); if (Array.isArray(s)) { setSectors(s); setSector(k => k || s[0] || ''); } } catch { /* */ }
+      try {
+        const s = await (await fetchWithAbort('/api/us/screener/sectors')).json();
+        // New shape: { gics, industries }. Tolerate the old flat array too.
+        const grouped = Array.isArray(s) ? { gics: s, industries: [] } : { gics: s.gics || [], industries: s.industries || [] };
+        setSectors(grouped);
+        setSector(k => k || grouped.gics[0] || grouped.industries[0] || '');
+      } catch { /* */ }
+      try { const b = await (await fetchWithAbort('/api/us/baskets')).json(); if (Array.isArray(b.baskets)) { setBaskets(b.baskets); setActiveBasketId(id => id || b.baskets[0]?.id || null); } } catch { /* */ }
+      loadScreens();
     })();
-  }, []);
-  useEffect(() => { saveLS(BASKETS_KEY, baskets); }, [baskets]);
-  useEffect(() => { saveLS(SCREENS_KEY, screens); }, [screens]);
+  }, [loadScreens]);
   useEffect(() => () => clearTimeout(pollRef.current), []);
 
   const activeBasket = baskets.find(b => b.id === activeBasketId) || null;
 
   const buildScope = useCallback(() => {
     if (scopeType === 'sector') return { type: 'sector', sector };
-    if (scopeType === 'basket') return { type: 'custom', name: activeBasket?.name, symbols: activeBasket?.symbols || [] };
+    if (scopeType === 'basket') return { type: 'custom', basketId: activeBasketId, name: activeBasket?.name, symbols: activeBasket?.symbols || [] };
     return { type: scopeType };
   }, [scopeType, sector, activeBasket]);
 
@@ -170,32 +173,33 @@ export default function UsScreener() {
     } catch (e) { setError(e.message); setJobStatus('error'); }
   }, [scopeType, sector, activeBasket, conditions, buildScope, poll]);
 
-  // Basket ops
-  const createBasket = () => {
-    const name = newBasketName.trim(); if (!name) return;
-    const b = { id: uid(), name, symbols: [] };
-    setBaskets(bs => [...bs, b]); setActiveBasketId(b.id); setNewBasketName('');
-  };
-  const addToBasket = (row) => setBaskets(bs => bs.map(b => b.id === activeBasketId && !b.symbols.includes(row.symbol) ? { ...b, symbols: [...b.symbols, row.symbol] } : b));
-  const removeFromBasket = (sym) => setBaskets(bs => bs.map(b => b.id === activeBasketId ? { ...b, symbols: b.symbols.filter(s => s !== sym) } : b));
-  const deleteBasket = (id) => { setBaskets(bs => bs.filter(b => b.id !== id)); if (activeBasketId === id) setActiveBasketId(null); };
-
-  // Saved screens (localStorage)
-  const saveScreen = () => {
+  // Saved screens (Supabase)
+  const saveScreen = async () => {
     const name = screenName.trim(); if (!name) return;
-    setScreens(ss => [...ss, { id: uid(), name, scope: buildScope(), conditions }]); setScreenName('');
+    try {
+      const res = await fetchWithAbort('/api/us/screens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, scope: buildScope(), conditions }) });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Save failed'); }
+      setScreenName(''); loadScreens();
+    } catch (e) { setError(e.message); }
   };
   const loadScreen = (s) => {
+    setActiveScreenId(s.id);
     setConditions(s.conditions || []);
     const sc = s.scope || {};
     if (sc.type === 'sector') { setScopeType('sector'); setSector(sc.sector || ''); }
     else if (sc.type === 'custom') {
-      let b = baskets.find(x => x.name === sc.name && JSON.stringify(x.symbols) === JSON.stringify(sc.symbols));
-      if (!b) { b = { id: uid(), name: sc.name || 'Loaded basket', symbols: sc.symbols || [] }; setBaskets(bs => [...bs, b]); }
-      setActiveBasketId(b.id); setScopeType('basket');
+      const match = baskets.find(x => x.id === sc.basketId) || baskets.find(x => x.name === sc.name);
+      setActiveBasketId(match ? match.id : null);
+      setScopeType('basket');
     } else setScopeType(sc.type || 'sp500');
   };
-  const deleteScreen = (id) => setScreens(ss => ss.filter(s => s.id !== id));
+  const deleteScreen = async (id) => {
+    try {
+      const res = await fetchWithAbort(`/api/us/screens/${id}`, { method: 'DELETE' });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Delete failed'); }
+      loadScreens();
+    } catch (e) { setError(e.message); }
+  };
 
   const running = jobStatus === 'running';
   const pct = progress && progress.total > 0 ? Math.round((progress.loaded / progress.total) * 100) : 0;
@@ -203,7 +207,7 @@ export default function UsScreener() {
   const describe = (c) => { const f = fields?.find(x => x.key === c.field); return `${f ? f.label : c.field} ${OP_SYM[c.op] || c.op} ${c.value}`; };
   const scopeLabel = (sc) => sc?.type === 'sector' ? sc.sector : sc?.type === 'custom' ? `basket: ${sc.name}` : sc?.type === 'nasdaq100' ? 'Nasdaq 100' : 'S&P 500';
   const scopeBtn = (type, label) => (
-    <button onClick={() => { setScopeType(type); setError(null); }} style={{
+    <button onClick={() => { setScopeType(type); setError(null); setActiveScreenId(null); }} style={{
       background: scopeType === type ? 'var(--accent)' : 'transparent', color: scopeType === type ? '#0f172a' : 'var(--text-secondary)',
       border: `1px solid ${scopeType === type ? 'var(--accent)' : 'var(--border)'}`, borderRadius: '8px', padding: '0.4rem 0.9rem', cursor: 'pointer', fontSize: '0.85rem', fontWeight: scopeType === type ? 700 : 500,
     }}>{label}</button>
@@ -227,42 +231,33 @@ export default function UsScreener() {
         {scopeBtn('sector', 'Sector')}
         {scopeBtn('basket', 'My Basket')}
         {scopeType === 'sector' && (
-          <select value={sector} onChange={e => setSector(e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }}>
-            {sectors.map(s => <option key={s} value={s}>{s}</option>)}
+          <select value={sector} onChange={e => { setSector(e.target.value); setActiveScreenId(null); }} style={{ ...inputStyle, cursor: 'pointer' }}>
+            <optgroup label="GICS Sectors">
+              {sectors.gics.map(s => <option key={s} value={s}>{s}</option>)}
+            </optgroup>
+            {sectors.industries.length > 0 && (
+              <optgroup label="Industries">
+                {sectors.industries.map(s => <option key={s} value={s}>{s}</option>)}
+              </optgroup>
+            )}
           </select>
         )}
         {scopeType === 'basket' && (
-          <select value={activeBasketId || ''} onChange={e => setActiveBasketId(e.target.value)} style={{ ...inputStyle, cursor: 'pointer', minWidth: '160px' }}>
+          <select value={activeBasketId || ''} onChange={e => { setActiveBasketId(e.target.value); setActiveScreenId(null); }} style={{ ...inputStyle, cursor: 'pointer', minWidth: '160px' }}>
             <option value="">— select basket —</option>
             {baskets.map(b => <option key={b.id} value={b.id}>{b.name} ({b.symbols.length})</option>)}
           </select>
         )}
       </div>
 
-      {/* Basket manager */}
+      {/* Basket scope — baskets are created/managed on the Baskets page */}
       {scopeType === 'basket' && (
-        <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <input placeholder="New basket name…" value={newBasketName} onChange={e => setNewBasketName(e.target.value)} onKeyDown={e => e.key === 'Enter' && createBasket()} style={{ ...inputStyle, width: '200px' }} />
-            <button onClick={createBasket} disabled={!newBasketName.trim()} style={{ background: 'transparent', border: '1px solid var(--accent)', color: 'var(--accent)', borderRadius: '8px', padding: '0.4rem 1rem', cursor: 'pointer', fontSize: '0.82rem' }}>+ Create basket</button>
-            {activeBasket && <button onClick={() => deleteBasket(activeBasket.id)} style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)', borderRadius: '8px', padding: '0.4rem 1rem', cursor: 'pointer', fontSize: '0.82rem' }}>Delete “{activeBasket.name}”</button>}
-          </div>
-          {activeBasket ? (
-            <>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Add to <strong style={{ color: 'var(--text-primary)' }}>{activeBasket.name}</strong>:</span>
-                <UsSearch width="240px" placeholder="Search to add…" onSelect={addToBasket} />
-              </div>
-              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                {activeBasket.symbols.length === 0 && <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>No symbols yet — search above to add.</span>}
-                {activeBasket.symbols.map(s => (
-                  <span key={s} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', background: 'rgba(56,189,248,0.1)', border: '1px solid var(--border)', borderRadius: '999px', padding: '0.2rem 0.6rem', fontSize: '0.8rem', fontWeight: 600 }}>
-                    {s}<span onClick={() => removeFromBasket(s)} style={{ cursor: 'pointer', color: 'var(--text-secondary)' }} title="Remove">✕</span>
-                  </span>
-                ))}
-              </div>
-            </>
-          ) : <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Create or select a basket to add US stocks.</span>}
+        <div className="glass-panel" style={{ padding: '0.85rem 1.1rem', marginBottom: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+          {baskets.length === 0
+            ? <>No baskets yet — create one on the <Link to="/us/basket" style={{ color: 'var(--accent)' }}>Baskets page</Link>, then select it here.</>
+            : activeBasket
+              ? <>Screening <strong style={{ color: 'var(--text-primary)' }}>{activeBasket.name}</strong> ({activeBasket.symbols.length} stocks). Edit it on the <Link to="/us/basket" style={{ color: 'var(--accent)' }}>Baskets page</Link>.</>
+              : <>Select a basket above, or manage baskets on the <Link to="/us/basket" style={{ color: 'var(--accent)' }}>Baskets page</Link>.</>}
         </div>
       )}
 
@@ -272,10 +267,10 @@ export default function UsScreener() {
         {!fields ? <p style={{ color: 'var(--text-secondary)', margin: 0 }}>Loading fields…</p> : (
           <>
             {conditions.map((c, i) => (
-              <ConditionRow key={i} cond={c} fields={fields} onChange={next => setConditions(cs => cs.map((x, j) => j === i ? next : x))} onRemove={() => setConditions(cs => cs.filter((_, j) => j !== i))} />
+              <ConditionRow key={i} cond={c} fields={fields} onChange={next => { setConditions(cs => cs.map((x, j) => j === i ? next : x)); setActiveScreenId(null); }} onRemove={() => { setConditions(cs => cs.filter((_, j) => j !== i)); setActiveScreenId(null); }} />
             ))}
             <div>
-              <button onClick={() => setConditions(cs => [...cs, { field: 'rsi14', op: 'lt', value: 30 }])} disabled={conditions.length >= 12} style={{ background: 'transparent', border: '1px dashed var(--border)', color: 'var(--accent)', borderRadius: '8px', padding: '0.4rem 1rem', cursor: 'pointer', fontSize: '0.82rem' }}>+ Add condition</button>
+              <button onClick={() => { setConditions(cs => [...cs, { field: 'rsi14', op: 'lt', value: 30 }]); setActiveScreenId(null); }} disabled={conditions.length >= 12} style={{ background: 'transparent', border: '1px dashed var(--border)', color: 'var(--accent)', borderRadius: '8px', padding: '0.4rem 1rem', cursor: 'pointer', fontSize: '0.82rem' }}>+ Add condition</button>
             </div>
           </>
         )}
@@ -317,30 +312,38 @@ export default function UsScreener() {
       {/* Preset screens */}
       <h3 style={{ margin: '0.5rem 0 0.75rem' }}>Preset screens</h3>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
-        {PRESET_SCREENS.map(s => (
-          <div key={s.id} className="glass-panel" style={{ padding: '0.7rem 1rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+        {PRESET_SCREENS.map(s => {
+          const isActive = s.id === activeScreenId;
+          return (
+          <div key={s.id} className="glass-panel" style={{ padding: '0.7rem 1rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', border: isActive ? '1px solid var(--accent)' : undefined, background: isActive ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : undefined }}>
+            {isActive && <span style={{ color: 'var(--accent)', fontSize: '0.9rem', lineHeight: 1 }} title="Currently loaded">●</span>}
             <strong style={{ minWidth: '180px' }}>{s.name}</strong>
             <span style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.05em', border: '1px solid var(--accent)', borderRadius: '4px', padding: '0.1rem 0.4rem' }}>Preset</span>
             <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flex: 1 }}>{(s.conditions || []).map(describe).join('  AND  ')}</span>
-            <button onClick={() => loadScreen(s)} style={{ background: 'transparent', border: '1px solid var(--accent)', color: 'var(--accent)', borderRadius: '6px', padding: '0.25rem 0.8rem', cursor: 'pointer', fontSize: '0.78rem' }}>Load</button>
+            <button onClick={() => loadScreen(s)} disabled={isActive} style={{ background: isActive ? 'var(--accent)' : 'transparent', border: '1px solid var(--accent)', color: isActive ? '#0f172a' : 'var(--accent)', borderRadius: '6px', padding: '0.25rem 0.8rem', cursor: isActive ? 'default' : 'pointer', fontSize: '0.78rem', fontWeight: isActive ? 700 : 400 }}>{isActive ? '✓ Loaded' : 'Load'}</button>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Saved screens */}
       <h3 style={{ margin: '0.5rem 0 0.75rem' }}>Saved screens</h3>
       {screens.length === 0 ? <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No saved screens yet.</p> : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          {screens.map(s => (
-            <div key={s.id} className="glass-panel" style={{ padding: '0.7rem 1rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+          {screens.map(s => {
+            const isActive = s.id === activeScreenId;
+            return (
+            <div key={s.id} className="glass-panel" style={{ padding: '0.7rem 1rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', border: isActive ? '1px solid var(--accent)' : undefined, background: isActive ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : undefined }}>
+              {isActive && <span style={{ color: 'var(--accent)', fontSize: '0.9rem', lineHeight: 1 }} title="Currently loaded">●</span>}
               <strong style={{ minWidth: '140px' }}>{s.name}</strong>
               <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flex: 1 }}>
                 {scopeLabel(s.scope)}{' · '}{(s.conditions || []).map(describe).join('  AND  ')}
               </span>
-              <button onClick={() => loadScreen(s)} style={{ background: 'transparent', border: '1px solid var(--accent)', color: 'var(--accent)', borderRadius: '6px', padding: '0.25rem 0.8rem', cursor: 'pointer', fontSize: '0.78rem' }}>Load</button>
+              <button onClick={() => loadScreen(s)} disabled={isActive} style={{ background: isActive ? 'var(--accent)' : 'transparent', border: '1px solid var(--accent)', color: isActive ? '#0f172a' : 'var(--accent)', borderRadius: '6px', padding: '0.25rem 0.8rem', cursor: isActive ? 'default' : 'pointer', fontSize: '0.78rem', fontWeight: isActive ? 700 : 400 }}>{isActive ? '✓ Loaded' : 'Load'}</button>
               <button onClick={() => deleteScreen(s.id)} style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)', borderRadius: '6px', padding: '0.25rem 0.8rem', cursor: 'pointer', fontSize: '0.78rem' }}>Delete</button>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

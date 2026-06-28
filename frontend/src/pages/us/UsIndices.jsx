@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Cell as RechartsCell, ResponsiveContainer } from 'recharts';
 import RRGChart from '../../components/RRGChart';
 import UsSearch from '../../components/UsSearch';
+import UsGlobalIndices from './UsGlobalIndices';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 
 // ─── RRG Color Palette ─────────────────────────────────────────
@@ -1079,6 +1080,7 @@ function UsIndices() {
 
       {/* Major Indices — headline cards (always visible, click to drill in) */}
       {(() => {
+        if (activeTab === 'global') return null;
         const MAJORS = ['SPY', 'QQQ', 'DIA', 'IWM', 'VTI'];
         const cards = MAJORS.map(k => data.find(r => r.id === k)).filter(Boolean);
         if (cards.length === 0) return null;
@@ -1120,6 +1122,7 @@ function UsIndices() {
           {[
             { key: 'sector', label: 'Sectors' },
             { key: 'broad', label: 'Broad Market' },
+            { key: 'global', label: 'Global' },
           ].map(tab => (
             <button
               key={tab.key}
@@ -1211,6 +1214,8 @@ function UsIndices() {
         .pulse-glow { animation: pulse-glow 2s infinite; }
       `}</style>
       {(() => {
+        // Global markets tab — world indices (Europe / Asia / Americas) via Yahoo.
+        if (activeTab === 'global') return <UsGlobalIndices />;
         const getBarColor = (score) => {
           if (score >= 80) return '#10b981';
           if (score >= 60) return '#6ee7b7';
@@ -1608,6 +1613,7 @@ function UsIndices() {
         shortNameFn={(name) => name}
       />}
 
+      {activeTab !== 'global' && (
       <section className="glass-panel" style={{ padding: '1rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', paddingBottom: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)', gap: '1rem', flexWrap: 'wrap' }}>
           <div>
@@ -1933,6 +1939,7 @@ function UsIndices() {
         </table>
         </div>
       </section>
+      )}
 
       {/* Signal Education Modal */}
       {activeSignalModal && (
