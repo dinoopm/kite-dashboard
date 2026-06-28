@@ -42,10 +42,10 @@ const csvEscape = (val) => {
 // Export the (already sorted) result rows to a CSV file download. Numeric values
 // are written raw — no +/% decoration — so they stay usable in spreadsheets.
 function exportMatchesCsv(rows, label) {
-  const headers = ['Symbol', 'Sector', 'Industry', ...RESULT_COLUMNS.map(c => c.label)]
+  const headers = ['Symbol', 'Name', 'Sector', 'Industry', ...RESULT_COLUMNS.map(c => c.label)]
   const lines = [headers.map(csvEscape).join(',')]
   for (const m of rows) {
-    const cells = [m.symbol, m.sector || '', m.industry || '', ...RESULT_COLUMNS.map(c => m.values[c.key])]
+    const cells = [m.symbol, m.name || '', m.sector || '', m.industry || '', ...RESULT_COLUMNS.map(c => m.values[c.key])]
     lines.push(cells.map(csvEscape).join(','))
   }
   const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
@@ -175,6 +175,7 @@ function ResultsTable({ matches, label }) {
                 <Link to={`/instrument/${m.token}?symbol=${encodeURIComponent(m.symbol)}`} style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>
                   {m.symbol}
                 </Link>
+                {m.name && m.name !== m.symbol && <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div>}
               </td>
               <td style={{ ...td, textAlign: 'left' }} title={m.industry || ''}>
                 {m.sector
@@ -221,6 +222,7 @@ export default function Screener() {
   const [jobStatus, setJobStatus] = useState(null)
   const [progress, setProgress] = useState(null)
   const [result, setResult] = useState(null)
+  const [partial, setPartial] = useState([]) // matches streamed in while still scanning
   const [error, setError] = useState(null)
 
   const [screens, setScreens] = useState(null)
@@ -264,6 +266,7 @@ export default function Screener() {
       if (!res.ok) throw new Error(data.error || `Poll failed (${res.status})`)
       if (!mountedRef.current) return
       setProgress(data.progress)
+      if (Array.isArray(data.partialMatches)) setPartial(data.partialMatches)
       if (data.status === 'done') { setResult(data.result); setJobStatus('done'); return }
       if (data.status === 'error') { setError(data.error || 'Screen failed'); setJobStatus('error'); return }
       pollTimer.current = setTimeout(() => poll(jobId), POLL_MS)
@@ -284,6 +287,7 @@ export default function Screener() {
     if (scopeType === 'theme' && !themeId) { setError('Pick a theme'); return }
     setError(null)
     setResult(null)
+    setPartial([])
     setJobStatus('running')
     setProgress({ loaded: 0, total: 0, symbol: null })
     try {
@@ -469,6 +473,18 @@ export default function Screener() {
           <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: '0.5rem 0 0' }}>
             Cold instruments need rate-limited history fetches — warm caches scan instantly.
           </p>
+        </div>
+      )}
+
+      {running && partial.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+          <h2 style={{ margin: 0 }}>
+            {partial.length} match{partial.length === 1 ? '' : 'es'} so far
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 400, marginLeft: '0.75rem' }}>
+              still scanning… (sectors resolve when the scan finishes)
+            </span>
+          </h2>
+          <ResultsTable matches={partial} label={progress?.label || 'scan'} />
         </div>
       )}
 

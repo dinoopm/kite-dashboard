@@ -913,6 +913,28 @@ async function getOrFetchFullHistory(token) {
   return { data: await historicalFullPromises[token], cached: false };
 }
 
+// Lighter history for the screener: it only needs ~2 years (SMA200 + 1Y return
+// / 52w-high all fit in <500 NSE sessions), so a cold symbol fetches 2 one-year
+// chunks instead of 4 — halving the Kite calls per symbol. Reuses the richer 4Y
+// cache whenever it's already warm (it's a superset), and keeps its own 2Y cache
+// for repeat scans, so other features' deeper history is never downgraded.
+const screenerHistCache = {};    // token -> { data, timestamp } (2Y depth)
+const screenerHistPromises = {}; // token -> Promise<data[]>
+async function getScreenerHistory(token) {
+  const full = historicalFullCache[token];
+  if (full && (Date.now() - full.timestamp < HISTORICAL_FULL_TTL)) return full.data;
+  const sc = screenerHistCache[token];
+  if (sc && (Date.now() - sc.timestamp < HISTORICAL_FULL_TTL)) return sc.data;
+  if (screenerHistPromises[token]) return screenerHistPromises[token];
+  screenerHistPromises[token] = fetchHistoricalMultiYear(token, 2)
+    .then(data => {
+      if (Array.isArray(data) && data.length > 0) screenerHistCache[token] = { data, timestamp: Date.now() };
+      return data || [];
+    })
+    .finally(() => { delete screenerHistPromises[token]; });
+  return screenerHistPromises[token];
+}
+
 async function fetchWithCache(toolName, cacheKey, args = {}) {
   const now = Date.now();
   if (apiCache[cacheKey].data && (now - apiCache[cacheKey].timestamp < CACHE_TTL)) {
@@ -954,6 +976,31 @@ app.get('/api/profile', async (req, res) => {
 // Indian tickers, so we prefer Kite as the canonical source.
 const instrumentInfoCache = {}; // symbol -> { data, ts }
 const INSTRUMENT_INFO_TTL = 24 * 60 * 60 * 1000; // 24h — company names don't change
+
+// Reusable company-name lookup (Kite search_instruments, shares the cache with
+// the /api/instrument-info route). Returns the name string or null. Used by the
+// screener to label matches that don't already carry a name (e.g. holdings).
+async function resolveInstrumentName(symbol, exchange = 'NSE') {
+  const sym = String(symbol).toUpperCase();
+  const cacheKey = `${exchange}:${sym}`;
+  const hit = instrumentInfoCache[cacheKey];
+  if (hit && Date.now() - hit.ts < INSTRUMENT_INFO_TTL) return hit.data?.name || null;
+  try {
+    const result = await callWithTimeout({ name: 'search_instruments', arguments: { query: cacheKey, filter_on: 'id', limit: 20 } }, 8000);
+    let info = { symbol: sym, exchange, name: null, isin: null, tradingsymbol: sym, instrument_token: null };
+    if (result?.content?.[0]?.text) {
+      const rows = (JSON.parse(result.content[0].text)?.data) || [];
+      const row = rows.find(r => r.id === cacheKey)
+        || rows.find(r => (r.tradingsymbol || '').toUpperCase() === sym && (r.exchange || '').toUpperCase() === exchange)
+        || rows[0];
+      if (row) info = { symbol: sym, exchange, name: row.name || null, isin: row.isin || null, tradingsymbol: row.tradingsymbol || sym, instrument_token: row.instrument_token || null };
+    }
+    instrumentInfoCache[cacheKey] = { data: info, ts: Date.now() };
+    return info.name;
+  } catch {
+    return null;
+  }
+}
 
 app.get('/api/instrument-info/:symbol', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
@@ -4497,6 +4544,7 @@ async function runScreenerJob(job, { scope, conditions }) {
 
   const matches = [];
   const notReady = [];
+  job.matches = matches; // live reference so the status endpoint can stream partials
   // Scan symbols with bounded concurrency. The actual Kite calls stay capped at
   // ~3/sec by reserveHistSlot(), so several symbols can be in flight at once
   // (keeping that budget saturated) without risking a rate-limit breach. Warm
@@ -4510,11 +4558,11 @@ async function runScreenerJob(job, { scope, conditions }) {
       try {
         if (!c.token) { notReady.push(c.symbol); continue; }
         const token = String(c.token);
-        const { data: candles } = await getOrFetchFullHistory(token);
+        const candles = await getScreenerHistory(token);
         if (!Array.isArray(candles) || candles.length < MIN_SCREENER_BARS) { notReady.push(c.symbol); continue; }
         const values = computeScreenerRow(candles);
         if (evaluateConditions(values, conditions)) {
-          matches.push({ symbol: c.symbol, token, values });
+          matches.push({ symbol: c.symbol, token, values, name: c.name || null });
         }
       } catch (e) {
         console.log(`  ⚠️ [screener] ${c.symbol}: ${e.message}`);
@@ -4532,8 +4580,17 @@ async function runScreenerJob(job, { scope, conditions }) {
   job.progress.symbol = 'resolving sectors…';
   for (let i = 0; i < matches.length; i += 25) {
     const chunk = matches.slice(i, i + 25);
-    const metas = await Promise.all(chunk.map(m => getSectorMeta(m.symbol).catch(() => null)));
-    chunk.forEach((m, j) => { m.sector = metas[j]?.sector || null; m.industry = metas[j]?.industry || null; });
+    const [metas, names] = await Promise.all([
+      Promise.all(chunk.map(m => getSectorMeta(m.symbol).catch(() => null))),
+      // Most universes (sector/theme) already carry a name; only fetch for the
+      // ones that don't (e.g. holdings).
+      Promise.all(chunk.map(m => m.name ? Promise.resolve(m.name) : resolveInstrumentName(m.symbol).catch(() => null))),
+    ]);
+    chunk.forEach((m, j) => {
+      m.sector = metas[j]?.sector || null;
+      m.industry = metas[j]?.industry || null;
+      m.name = names[j] || m.name || null;
+    });
   }
 
   return {
@@ -4580,6 +4637,9 @@ app.get('/api/screener/run/:jobId', (req, res) => {
   res.json({
     status: job.status,
     progress: job.progress,
+    // Stream matches found so far while still scanning (sector/name fill in once
+    // the job completes). Lets the UI show results live instead of blocking.
+    ...(job.status === 'running' && job.matches ? { partialMatches: job.matches } : {}),
     ...(job.status === 'done' ? { result: job.result } : {}),
     ...(job.status === 'error' ? { error: job.error } : {}),
   });
