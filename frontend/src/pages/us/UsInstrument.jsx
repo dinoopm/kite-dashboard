@@ -5,6 +5,7 @@ import {
   ResponsiveContainer, CartesianGrid, ReferenceLine, ReferenceDot,
 } from 'recharts';
 import { breakoutRank, breakoutLabel } from '../../lib/breakout';
+import { generateSignals } from '../../lib/signalEngine';
 import SignalChart from '../../components/SignalChart';
 
 // US ETF/equity detail: company name, snapshot, price chart with MA overlays,
@@ -460,6 +461,7 @@ export default function UsInstrument() {
   const [strictMomentum, setStrictMomentum] = useState(false);
   const [showBreakouts, setShowBreakouts] = useState(true);
   const [showSR, setShowSR] = useState(true);
+  const [showSignals, setShowSignals] = useState(false); // 10/50 MA-crossover Buy/Sell markers (off by default)
 
   const loadSnap = useCallback(async () => {
     try { const r = await fetch(`/api/us/snapshot/${sym}`); const j = await r.json(); if (r.ok) setSnap(j); } catch { /* */ }
@@ -492,6 +494,13 @@ export default function UsInstrument() {
     const lb = Math.min(45, Math.max(15, Math.round(bars.length / 18)));
     return detectBreakoutsAdvanced(bars, { volMult, confirmPeriods, strictMomentum, lookback: lb });
   }, [bars, intraday, volMult, confirmPeriods, strictMomentum]);
+
+  // 10/50 SMA crossover Buy/Sell signals. Needs ≥ slow-SMA worth of bars, so it's
+  // empty on intraday and very short ranges.
+  const maSignals = useMemo(
+    () => (intraday || bars.length <= 50 ? [] : generateSignals(bars, 10, 50).signals),
+    [bars, intraday]
+  );
   const nConfirmed = breakouts.filter(b => b.status === 'confirmed').length;
   const nFailed = breakouts.filter(b => b.status === 'failed').length;
   const nPending = breakouts.filter(b => b.status === 'pending').length;
@@ -679,6 +688,14 @@ export default function UsInstrument() {
             color: showSR ? 'var(--accent)' : GREY, border: `1px solid ${showSR ? 'var(--accent)' : 'var(--border)'}`,
             fontWeight: showSR ? 700 : 400,
           }}>S/R Levels</button>
+          <button onClick={() => setShowSignals(v => !v)}
+            title="Toggle 10/50 SMA crossover Buy/Sell signals (golden/death cross with RSI filter)"
+            style={{
+            padding: '0.35rem 0.8rem', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem',
+            background: showSignals ? 'rgba(34,197,94,0.14)' : 'transparent',
+            color: showSignals ? '#22c55e' : GREY, border: `1px solid ${showSignals ? '#22c55e' : 'var(--border)'}`,
+            fontWeight: showSignals ? 700 : 400,
+          }}>▲▼ Signals (10/50)</button>
         </div>
       </div>
 
@@ -766,6 +783,37 @@ export default function UsInstrument() {
                         />
                       );
                     })}
+                    {showSignals && maSignals.map((s) => {
+                      const buy = s.type === 'buy';
+                      if (buy && s.deadCat) return null; // dead-cat bounce: not an actionable buy
+                      const c = buy ? '#22c55e' : '#ef4444';
+                      const tip = `${buy ? 'BUY' : 'SELL'} · 10/50 ${buy ? 'golden' : 'death'} cross\n`
+                        + `Fast(10) ${buy ? 'crossed above' : 'crossed below'} Slow(50)\n`
+                        + `RSI ${s.rsi.toFixed(1)} · $${s.bar.close}`;
+                      return (
+                        <ReferenceDot key={`sig-${s.index}`} x={s.bar.date} y={s.bar.close} ifOverflow="extendDomain"
+                          shape={({ cx, cy }) => (
+                            <g style={{ cursor: 'pointer' }}>
+                              <title>{tip}</title>
+                              {/* "Long" below the bar for buys, "Short" above for sells. */}
+                              <text
+                                x={cx}
+                                y={buy ? cy + 20 : cy - 11}
+                                textAnchor="middle"
+                                fontSize={11}
+                                fontWeight={700}
+                                fill={c}
+                                stroke="#0f172a"
+                                strokeWidth={0.7}
+                                paintOrder="stroke"
+                              >
+                                {buy ? 'Long' : 'Short'}
+                              </text>
+                            </g>
+                          )}
+                        />
+                      );
+                    })}
                     <Area type="monotone" name="Price" dataKey="close" stroke={chartColor} strokeWidth={2} fill="url(#usFill)" isAnimationActive={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -775,8 +823,12 @@ export default function UsInstrument() {
       </div>
 
       {/* Chart marker legend */}
-      {!loading && !error && bars.length > 0 && !intraday && (showBreakouts || showSR) && (
+      {!loading && !error && bars.length > 0 && !intraday && (showBreakouts || showSR || showSignals) && (
         <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', alignItems: 'center', padding: '0.5rem 0.25rem 1.25rem', fontSize: '0.72rem', color: GREY }}>
+          {showSignals && (<>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><strong style={{ color: '#22c55e' }}>Long</strong> (10/50 golden cross, RSI &gt; 50)</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><strong style={{ color: '#ef4444' }}>Short</strong> (10/50 death cross, RSI &lt; 50)</span>
+          </>)}
           {showBreakouts && (<>
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><span style={{ color: '#22c55e' }}>▲</span> Confirmed breakout (held)</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><span style={{ color: '#ef4444' }}>▼</span> Failed breakout (trap)</span>

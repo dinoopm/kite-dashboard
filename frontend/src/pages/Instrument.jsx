@@ -5,6 +5,7 @@ import { format, parseISO } from 'date-fns'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 import AlertRow from '../components/alerts/AlertRow'
 import SignalChart from '../components/SignalChart'
+import { generateSignals } from '../lib/signalEngine'
 import ConvictionModal from '../components/alerts/ConvictionModal'
 import TradePlanModal from '../components/alerts/TradePlanModal'
 import ValuationPanel from '../components/ValuationPanel'
@@ -527,6 +528,7 @@ function Instrument() {
   const [timeframe, setTimeframe] = useState('1M')
   const [showSR, setShowSR] = useState(true) // support/resistance overlay
   const [showBreakouts, setShowBreakouts] = useState(true) // breakout markers
+  const [showSignals, setShowSignals] = useState(false) // 10/50 MA-crossover Buy/Sell markers (off by default)
   // Breakout-engine parameters (drive live re-evaluation of the markers).
   const [volMult, setVolMult] = useState(1.5)
   const [confirmPeriods, setConfirmPeriods] = useState(3)
@@ -990,6 +992,13 @@ function Instrument() {
     const lb = Math.min(45, Math.max(15, Math.round(data.length / 18)));
     return detectBreakoutsAdvanced(data, { volMult, confirmPeriods, strictMomentum, lookback: lb });
   }, [data, timeframe, volMult, confirmPeriods, strictMomentum]);
+
+  // 10/50 SMA crossover Buy/Sell signals on the charted series. Needs ≥ slow-SMA
+  // worth of bars, so it's empty on 1D and very short timeframes (1M ≈ 22 bars).
+  const maSignals = useMemo(
+    () => (timeframe === '1D' || data.length <= 50 ? [] : generateSignals(data, 10, 50).signals),
+    [data, timeframe]
+  );
 
   const todayChange = quote ? (quote.last_price - quote.ohlc.close) : null;
   const todayChangePct = quote && quote.ohlc.close ? ((todayChange / quote.ohlc.close) * 100).toFixed(2) : null;
@@ -1620,6 +1629,24 @@ function Instrument() {
                 S/R Levels
               </button>
             )}
+            {timeframe !== '1D' && (
+              <button
+                onClick={() => setShowSignals(v => !v)}
+                title="Toggle 10/50 SMA crossover Buy/Sell signals (golden/death cross with RSI filter)"
+                style={{
+                  background: showSignals ? 'rgba(34,197,94,0.14)' : 'var(--bg-panel)',
+                  color: showSignals ? '#22c55e' : 'var(--text-secondary)',
+                  border: `1px solid ${showSignals ? '#22c55e' : 'var(--border)'}`,
+                  borderRadius: '4px',
+                  padding: '0.4rem 0.8rem',
+                  cursor: 'pointer',
+                  fontWeight: showSignals ? 'bold' : 'normal',
+                  transition: 'all 0.2s',
+                }}
+              >
+                ▲▼ Signals (10/50)
+              </button>
+            )}
           </div>
 
           {/* Breakout engine control panel */}
@@ -1753,6 +1780,41 @@ function Instrument() {
                       />
                     );
                   })}
+                  {showSignals && maSignals.map((s) => {
+                    const buy = s.type === 'buy';
+                    if (buy && s.deadCat) return null; // dead-cat bounce: not an actionable buy
+                    const c = buy ? '#22c55e' : '#ef4444';
+                    const tip = `${buy ? 'BUY' : 'SELL'} · 10/50 ${buy ? 'golden' : 'death'} cross\n`
+                      + `Fast(10) ${buy ? 'crossed above' : 'crossed below'} Slow(50)\n`
+                      + `RSI ${s.rsi.toFixed(1)} · ₹${s.bar.close}`;
+                    return (
+                      <ReferenceDot
+                        key={`sig-${s.index}`}
+                        x={s.bar.date}
+                        y={s.bar.close}
+                        ifOverflow="extendDomain"
+                        shape={({ cx, cy }) => (
+                          <g style={{ cursor: 'pointer' }}>
+                            <title>{tip}</title>
+                            {/* "Long" below the bar for buys, "Short" above for sells. */}
+                            <text
+                              x={cx}
+                              y={buy ? cy + 20 : cy - 11}
+                              textAnchor="middle"
+                              fontSize={11}
+                              fontWeight={700}
+                              fill={c}
+                              stroke="#0f172a"
+                              strokeWidth={0.7}
+                              paintOrder="stroke"
+                            >
+                              {buy ? 'Long' : 'Short'}
+                            </text>
+                          </g>
+                        )}
+                      />
+                    );
+                  })}
                   <Line type="monotone" name="Price" dataKey="close" stroke="var(--accent)" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
@@ -1760,8 +1822,14 @@ function Instrument() {
           </section>
 
           {/* Chart marker legend */}
-          {!loading && !error && data.length > 0 && timeframe !== '1D' && (showBreakouts || showSR) && (
+          {!loading && !error && data.length > 0 && timeframe !== '1D' && (showBreakouts || showSR || showSignals) && (
             <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap', alignItems: 'center', padding: '0.5rem 0.25rem 0', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+              {showSignals && (
+                <>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><strong style={{ color: '#22c55e' }}>Long</strong> (10/50 golden cross, RSI &gt; 50)</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><strong style={{ color: '#ef4444' }}>Short</strong> (10/50 death cross, RSI &lt; 50)</span>
+                </>
+              )}
               {showBreakouts && (
                 <>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><span style={{ color: '#22c55e' }}>▲</span> Confirmed breakout (held)</span>
