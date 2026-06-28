@@ -65,7 +65,23 @@ function parseMcpText(result) {
   return null;
 }
 
+// Global rate limiter for Kite historical calls. Kite Connect allows ~3
+// requests/sec for historical candles; we pace starts ~2.9/sec. This is the
+// single choke point for EVERY history fetch, so callers can run in parallel
+// (e.g. the screener) and never collectively exceed Kite's limit — replacing
+// the scattered ad-hoc setTimeout delays that previously throttled serially.
+const KITE_HIST_MIN_MS = 345;
+let _histNextSlot = 0;
+function reserveHistSlot() {
+  const now = Date.now();
+  const start = Math.max(now, _histNextSlot);
+  _histNextSlot = start + KITE_HIST_MIN_MS;
+  const wait = start - now;
+  return wait > 0 ? new Promise(r => setTimeout(r, wait)) : Promise.resolve();
+}
+
 async function fetchHistorical(token, fromDate, toDate, interval = 'day') {
+  await reserveHistSlot();
   const result = await mcpClient.callTool({
     name: "get_historical_data",
     arguments: {
@@ -234,8 +250,7 @@ async function fetchHistoricalMultiYear(token, years = 5) {
     } else {
       console.log(`  ⚠️  Chunk ${y}Y-${y - 1}Y empty for token ${token} after retries`);
     }
-    // Respect rate limit
-    await new Promise(r => setTimeout(r, 400));
+    // Pacing is handled globally by reserveHistSlot() inside fetchHistorical.
   }
 
   let deduped = dedupeSort(allCandles);
@@ -4482,26 +4497,34 @@ async function runScreenerJob(job, { scope, conditions }) {
 
   const matches = [];
   const notReady = [];
-  for (const c of list) {
-    job.progress.symbol = c.symbol;
-    try {
-      if (!c.token) { notReady.push(c.symbol); continue; }
-      const token = String(c.token);
-      const warm = historicalFullCache[token] && (Date.now() - historicalFullCache[token].timestamp < HISTORICAL_FULL_TTL);
-      const { data: candles } = await getOrFetchFullHistory(token);
-      if (!warm) await new Promise(r => setTimeout(r, 800));
-      if (!Array.isArray(candles) || candles.length < MIN_SCREENER_BARS) { notReady.push(c.symbol); continue; }
-      const values = computeScreenerRow(candles);
-      if (evaluateConditions(values, conditions)) {
-        matches.push({ symbol: c.symbol, token, values });
+  // Scan symbols with bounded concurrency. The actual Kite calls stay capped at
+  // ~3/sec by reserveHistSlot(), so several symbols can be in flight at once
+  // (keeping that budget saturated) without risking a rate-limit breach. Warm
+  // (cached) symbols return instantly; cold ones queue at the limiter.
+  const SCAN_CONCURRENCY = 6;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < list.length) {
+      const c = list[cursor++];
+      job.progress.symbol = c.symbol;
+      try {
+        if (!c.token) { notReady.push(c.symbol); continue; }
+        const token = String(c.token);
+        const { data: candles } = await getOrFetchFullHistory(token);
+        if (!Array.isArray(candles) || candles.length < MIN_SCREENER_BARS) { notReady.push(c.symbol); continue; }
+        const values = computeScreenerRow(candles);
+        if (evaluateConditions(values, conditions)) {
+          matches.push({ symbol: c.symbol, token, values });
+        }
+      } catch (e) {
+        console.log(`  ⚠️ [screener] ${c.symbol}: ${e.message}`);
+        notReady.push(c.symbol);
+      } finally {
+        job.progress.loaded++;
       }
-    } catch (e) {
-      console.log(`  ⚠️ [screener] ${c.symbol}: ${e.message}`);
-      notReady.push(c.symbol);
-    } finally {
-      job.progress.loaded++;
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, list.length) }, worker));
 
   // Resolve sector/industry for the matched set only (cached process-wide; the
   // alert engine usually warms holdings already). Chunked so a large cold match
