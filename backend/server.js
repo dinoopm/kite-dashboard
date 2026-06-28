@@ -158,17 +158,21 @@ async function refreshTodayCandle_FullHistory(token) {
 // Sector lookup via Yahoo Finance, cached in-memory for the life of the process.
 // First /api/alerts call after boot pays one Yahoo round-trip per holding;
 // subsequent calls are instant. `null` is a valid cached value (lookup failed).
-const sectorCache = {};
-async function getSectorCached(symbol) {
+const sectorCache = {}; // symbol -> { sector, industry } (null fields on lookup failure)
+async function getSectorMeta(symbol) {
   if (sectorCache[symbol] !== undefined) return sectorCache[symbol];
   try {
     const yahooSym = toYahooSymbol(symbol);
     const q = await yahooFinance.quoteSummary(yahooSym, { modules: ['assetProfile'] });
-    sectorCache[symbol] = q?.assetProfile?.sector || null;
+    sectorCache[symbol] = { sector: q?.assetProfile?.sector || null, industry: q?.assetProfile?.industry || null };
   } catch {
-    sectorCache[symbol] = null;
+    sectorCache[symbol] = { sector: null, industry: null };
   }
   return sectorCache[symbol];
+}
+// Back-compat helper (the alert engine wants just the sector string).
+async function getSectorCached(symbol) {
+  return (await getSectorMeta(symbol)).sector;
 }
 
 // Surface sectors where ≥3 holdings are flagged AVOID/SELL — concentration risk.
@@ -4497,6 +4501,16 @@ async function runScreenerJob(job, { scope, conditions }) {
     } finally {
       job.progress.loaded++;
     }
+  }
+
+  // Resolve sector/industry for the matched set only (cached process-wide; the
+  // alert engine usually warms holdings already). Chunked so a large cold match
+  // set doesn't fan out hundreds of Yahoo calls at once.
+  job.progress.symbol = 'resolving sectors…';
+  for (let i = 0; i < matches.length; i += 25) {
+    const chunk = matches.slice(i, i + 25);
+    const metas = await Promise.all(chunk.map(m => getSectorMeta(m.symbol).catch(() => null)));
+    chunk.forEach((m, j) => { m.sector = metas[j]?.sector || null; m.industry = metas[j]?.industry || null; });
   }
 
   return {

@@ -65,8 +65,9 @@ function ResultsTable({ matches }) {
   const sorted = useMemo(() => {
     const arr = [...(matches || [])];
     arr.sort((a, b) => {
-      const av = sort.key === 'symbol' ? a.symbol : a.values[sort.key];
-      const bv = sort.key === 'symbol' ? b.symbol : b.values[sort.key];
+      const pick = (x) => sort.key === 'symbol' ? x.symbol : sort.key === 'sector' ? (x.sector || '') : x.values[sort.key];
+      const av = pick(a);
+      const bv = pick(b);
       if (av == null) return 1; if (bv == null) return -1;
       const cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv;
       return sort.dir === 'asc' ? cmp : -cmp;
@@ -82,13 +83,19 @@ function ResultsTable({ matches }) {
   return (
     <div className="glass-panel" style={{ padding: '0.5rem 0.5rem 1rem', overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead><tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>{header('symbol', 'Symbol', 'left')}{RESULT_COLUMNS.map(c => header(c.key, c.label))}</tr></thead>
+        <thead><tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>{header('symbol', 'Symbol', 'left')}{header('sector', 'Sector', 'left')}{RESULT_COLUMNS.map(c => header(c.key, c.label))}</tr></thead>
         <tbody>
           {sorted.map(m => (
             <tr key={m.symbol} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
               <td style={{ ...td, textAlign: 'left' }}>
                 <Link to={`/us/${encodeURIComponent(m.symbol)}`} style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>{m.symbol}</Link>
                 {m.name && m.name !== m.symbol && <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div>}
+              </td>
+              <td style={{ ...td, textAlign: 'left' }} title={m.industry || ''}>
+                {m.sector
+                  ? <span style={{ fontSize: '0.8rem' }}>{m.sector}</span>
+                  : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
+                {m.industry && <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.industry}</div>}
               </td>
               {RESULT_COLUMNS.map(c => {
                 const v = m.values[c.key];

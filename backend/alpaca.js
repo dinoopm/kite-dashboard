@@ -126,6 +126,27 @@ async function fetchAssetName(symbol) {
   }
 }
 
+// ─── Sector / industry lookup (Yahoo assetProfile, 7-day cache) ─────────────
+// Works across any US ticker (S&P, Nasdaq, baskets) — not just GICS members.
+const assetSectorCache = {}; // symbol -> { sector, industry, ts }
+const ASSET_SECTOR_TTL = 7 * 24 * 60 * 60 * 1000;
+async function fetchAssetSector(symbol) {
+  const sym = symbol.toUpperCase();
+  const hit = assetSectorCache[sym];
+  if (hit && Date.now() - hit.ts < ASSET_SECTOR_TTL) return hit;
+  try {
+    const r = await yf.quoteSummary(sym, { modules: ['assetProfile'] }, { validateResult: false });
+    const p = r?.assetProfile || {};
+    const out = { sector: p.sector || null, industry: p.industry || null, ts: Date.now() };
+    assetSectorCache[sym] = out;
+    return out;
+  } catch {
+    const out = { sector: null, industry: null, ts: Date.now() };
+    assetSectorCache[sym] = out; // negative-cache so a bad symbol isn't retried each scan
+    return out;
+  }
+}
+
 // Build a quote summary { last, prevClose, change, changePct, high, low, volume }
 // from an Alpaca snapshot object.
 function summariseSnapshot(snap) {
@@ -888,12 +909,20 @@ async function runUsScreenerJob(job, { scope, conditions }) {
     } catch { notReady.push(sym); }
     finally { job.progress.loaded++; }
   }
-  // Resolve company names for the matched set only (cached; chunked to be gentle).
+  // Resolve company name + sector/industry for the matched set only (cached;
+  // chunked to be gentle on the upstream APIs).
   job.progress.symbol = 'resolving names…';
   for (let i = 0; i < matches.length; i += 25) {
     const chunk = matches.slice(i, i + 25);
-    const names = await Promise.all(chunk.map(m => fetchAssetName(m.symbol).catch(() => null)));
-    chunk.forEach((m, j) => { m.name = names[j] || m.symbol; });
+    const [names, sectors] = await Promise.all([
+      Promise.all(chunk.map(m => fetchAssetName(m.symbol).catch(() => null))),
+      Promise.all(chunk.map(m => fetchAssetSector(m.symbol).catch(() => null))),
+    ]);
+    chunk.forEach((m, j) => {
+      m.name = names[j] || m.symbol;
+      m.sector = sectors[j]?.sector || null;
+      m.industry = sectors[j]?.industry || null;
+    });
   }
   return { label, scope, conditions, matches, scanned: symbols.length - notReady.length, total: symbols.length, notReady, generatedAt: new Date().toISOString() };
 }

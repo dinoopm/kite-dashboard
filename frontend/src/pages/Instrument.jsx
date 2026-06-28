@@ -529,6 +529,7 @@ function Instrument() {
   const [showSR, setShowSR] = useState(true) // support/resistance overlay
   const [showBreakouts, setShowBreakouts] = useState(true) // breakout markers
   const [showSignals, setShowSignals] = useState(false) // 10/50 MA-crossover Buy/Sell markers (off by default)
+  const [signalBars, setSignalBars] = useState([]) // deep daily history (5Y) so the 50-SMA is warm on short views
   // Breakout-engine parameters (drive live re-evaluation of the markers).
   const [volMult, setVolMult] = useState(1.5)
   const [confirmPeriods, setConfirmPeriods] = useState(3)
@@ -978,6 +979,32 @@ function Instrument() {
     return () => controller.abort();
   }, [token, timeframe])
 
+  // Deep daily history (5Y) used ONLY to compute the 10/50 signals, so the slow
+  // SMA is warm even on a 3M view (the chart's own `data` is just the timeframe
+  // slice). Dates are formatted identically to `data` so markers match exactly.
+  // Fetched lazily — only once the Signals overlay is switched on.
+  useEffect(() => {
+    if (!showSignals || !token || token === '0') return;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetchWithAbort(`/api/historical/${token}?tf=5Y`, { signal: controller.signal });
+        const json = await res.json();
+        const txt = json?.content?.[0]?.text;
+        if (!txt) return;
+        const parsed = JSON.parse(txt);
+        if (!Array.isArray(parsed)) return;
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const mapped = parsed.filter(c => c.close != null).map(c => {
+          const [yyyy, mm, dd] = c.date.substring(0, 10).split('-');
+          return { date: `${months[parseInt(mm, 10) - 1]} ${parseInt(dd, 10)}, ${yyyy}`, close: c.close };
+        });
+        setSignalBars(mapped);
+      } catch { /* leave signals empty on failure */ }
+    })();
+    return () => controller.abort();
+  }, [token, showSignals])
+
   const tfOptions = ['1D', '1W', '1M', '3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y'];
 
   // Support/resistance levels for the chart overlay (intraday 1D excluded —
@@ -993,12 +1020,17 @@ function Instrument() {
     return detectBreakoutsAdvanced(data, { volMult, confirmPeriods, strictMomentum, lookback: lb });
   }, [data, timeframe, volMult, confirmPeriods, strictMomentum]);
 
-  // 10/50 SMA crossover Buy/Sell signals on the charted series. Needs ≥ slow-SMA
-  // worth of bars, so it's empty on 1D and very short timeframes (1M ≈ 22 bars).
-  const maSignals = useMemo(
-    () => (timeframe === '1D' || data.length <= 50 ? [] : generateSignals(data, 10, 50).signals),
-    [data, timeframe]
-  );
+  // 10/50 SMA crossover Buy/Sell signals. Compute on the DEEP series (so the
+  // 50-SMA is warm), then keep only the signals whose bar is in the visible
+  // window — matched by date, which is identical across both series. Falls back
+  // to `data` itself when it's already the longer series (e.g. the 5Y view).
+  const maSignals = useMemo(() => {
+    if (timeframe === '1D' || data.length === 0) return [];
+    const src = signalBars.length > data.length ? signalBars : data;
+    if (src.length <= 50) return [];
+    const visible = new Set(data.map(d => d.date));
+    return generateSignals(src, 10, 50).signals.filter(s => visible.has(s.bar.date));
+  }, [signalBars, data, timeframe]);
 
   const todayChange = quote ? (quote.last_price - quote.ohlc.close) : null;
   const todayChangePct = quote && quote.ohlc.close ? ((todayChange / quote.ohlc.close) * 100).toFixed(2) : null;

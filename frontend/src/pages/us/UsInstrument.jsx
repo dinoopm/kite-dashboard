@@ -495,12 +495,18 @@ export default function UsInstrument() {
     return detectBreakoutsAdvanced(bars, { volMult, confirmPeriods, strictMomentum, lookback: lb });
   }, [bars, intraday, volMult, confirmPeriods, strictMomentum]);
 
-  // 10/50 SMA crossover Buy/Sell signals. Needs ≥ slow-SMA worth of bars, so it's
-  // empty on intraday and very short ranges.
-  const maSignals = useMemo(
-    () => (intraday || bars.length <= 50 ? [] : generateSignals(bars, 10, 50).signals),
-    [bars, intraday]
-  );
+  // 10/50 SMA crossover Buy/Sell signals. Compute on the DEEP series (the 2Y
+  // dailyBars already loaded for indicators) so the 50-SMA is warm even on a 3M
+  // view, then keep only signals whose bar is in the visible window — matched by
+  // date, which is identical across both daily series. Falls back to `bars` when
+  // it's the longer series (3Y/4Y views).
+  const maSignals = useMemo(() => {
+    if (intraday || bars.length === 0) return [];
+    const src = dailyBars.length > bars.length ? dailyBars : bars;
+    if (src.length <= 50) return [];
+    const visible = new Set(bars.map(b => b.date));
+    return generateSignals(src, 10, 50).signals.filter(s => visible.has(s.bar.date));
+  }, [dailyBars, bars, intraday]);
   const nConfirmed = breakouts.filter(b => b.status === 'confirmed').length;
   const nFailed = breakouts.filter(b => b.status === 'failed').length;
   const nPending = breakouts.filter(b => b.status === 'pending').length;

@@ -42,10 +42,10 @@ const csvEscape = (val) => {
 // Export the (already sorted) result rows to a CSV file download. Numeric values
 // are written raw — no +/% decoration — so they stay usable in spreadsheets.
 function exportMatchesCsv(rows, label) {
-  const headers = ['Symbol', ...RESULT_COLUMNS.map(c => c.label)]
+  const headers = ['Symbol', 'Sector', 'Industry', ...RESULT_COLUMNS.map(c => c.label)]
   const lines = [headers.map(csvEscape).join(',')]
   for (const m of rows) {
-    const cells = [m.symbol, ...RESULT_COLUMNS.map(c => m.values[c.key])]
+    const cells = [m.symbol, m.sector || '', m.industry || '', ...RESULT_COLUMNS.map(c => m.values[c.key])]
     lines.push(cells.map(csvEscape).join(','))
   }
   const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
@@ -122,8 +122,9 @@ function ResultsTable({ matches, label }) {
   const sorted = useMemo(() => {
     const arr = [...(matches || [])]
     arr.sort((a, b) => {
-      const av = sort.key === 'symbol' ? a.symbol : a.values[sort.key]
-      const bv = sort.key === 'symbol' ? b.symbol : b.values[sort.key]
+      const pick = (x) => sort.key === 'symbol' ? x.symbol : sort.key === 'sector' ? (x.sector || '') : x.values[sort.key]
+      const av = pick(a)
+      const bv = pick(b)
       if (av == null) return 1
       if (bv == null) return -1
       const cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv
@@ -163,6 +164,7 @@ function ResultsTable({ matches, label }) {
         <thead>
           <tr>
             {header('symbol', 'Symbol', 'left')}
+            {header('sector', 'Sector', 'left')}
             {RESULT_COLUMNS.map(c => header(c.key, c.label))}
           </tr>
         </thead>
@@ -173,6 +175,12 @@ function ResultsTable({ matches, label }) {
                 <Link to={`/instrument/${m.token}?symbol=${encodeURIComponent(m.symbol)}`} style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>
                   {m.symbol}
                 </Link>
+              </td>
+              <td style={{ ...td, textAlign: 'left' }} title={m.industry || ''}>
+                {m.sector
+                  ? <span style={{ fontSize: '0.8rem' }}>{m.sector}</span>
+                  : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
+                {m.industry && <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.industry}</div>}
               </td>
               {RESULT_COLUMNS.map(c => {
                 const v = m.values[c.key]
