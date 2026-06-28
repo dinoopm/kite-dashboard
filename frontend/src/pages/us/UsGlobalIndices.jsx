@@ -2,9 +2,10 @@ import { useState, useEffect, useMemo } from 'react';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 
 // Global markets performance — major world indices (Americas / Europe /
-// Asia-Pacific) via Yahoo Finance. Rendered as a tab inside US Indices.
+// Asia-Pacific / Middle East & Africa) via Yahoo Finance. Rendered as a tab
+// inside US Indices.
 
-const REGIONS = ['Americas', 'Europe', 'Asia-Pacific'];
+const REGIONS = ['Americas', 'Europe', 'Asia-Pacific', 'Middle East & Africa'];
 const RET_COLS = [
   { key: 'change1D', label: '1D' },
   { key: 'ret1W', label: '1W' },
@@ -13,6 +14,9 @@ const RET_COLS = [
   { key: 'ret6M', label: '6M' },
   { key: 'retYTD', label: 'YTD' },
   { key: 'ret1Y', label: '1Y' },
+  { key: 'ret3Y', label: '3Y' },
+  { key: 'ret4Y', label: '4Y' },
+  { key: 'ret5Y', label: '5Y' },
 ];
 const fmtPct = (v) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`);
 const pctColor = (v) => (v == null ? 'var(--text-secondary)' : v >= 0 ? 'var(--success)' : 'var(--danger)');

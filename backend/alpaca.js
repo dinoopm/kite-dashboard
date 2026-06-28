@@ -624,6 +624,7 @@ const GLOBAL_INDICES = [
   { symbol: 'FTSEMIB.MI', label: 'FTSE MIB', region: 'Europe', country: 'Italy' },
   { symbol: '^SSMI', label: 'SMI', region: 'Europe', country: 'Switzerland' },
   { symbol: '^AEX', label: 'AEX', region: 'Europe', country: 'Netherlands' },
+  { symbol: '^OMX', label: 'OMX Stockholm 30', region: 'Europe', country: 'Sweden' },
   // Asia-Pacific
   { symbol: '^N225', label: 'Nikkei 225', region: 'Asia-Pacific', country: 'Japan' },
   { symbol: '^HSI', label: 'Hang Seng', region: 'Asia-Pacific', country: 'Hong Kong' },
@@ -632,8 +633,16 @@ const GLOBAL_INDICES = [
   { symbol: '^KS11', label: 'KOSPI', region: 'Asia-Pacific', country: 'South Korea' },
   { symbol: '^TWII', label: 'Taiwan Weighted', region: 'Asia-Pacific', country: 'Taiwan' },
   { symbol: '^AXJO', label: 'S&P/ASX 200', region: 'Asia-Pacific', country: 'Australia' },
+  { symbol: '^JKSE', label: 'Jakarta Composite', region: 'Asia-Pacific', country: 'Indonesia' },
+  { symbol: '^SET.BK', label: 'SET Index', region: 'Asia-Pacific', country: 'Thailand' },
+  { symbol: '^NZ50', label: 'NZX 50', region: 'Asia-Pacific', country: 'New Zealand' },
   { symbol: '^BSESN', label: 'BSE Sensex', region: 'Asia-Pacific', country: 'India' },
   { symbol: '^NSEI', label: 'Nifty 50', region: 'Asia-Pacific', country: 'India' },
+  // Middle East & Africa
+  { symbol: '^TASI.SR', label: 'Tadawul All Share', region: 'Middle East & Africa', country: 'Saudi Arabia' },
+  { symbol: 'XU100.IS', label: 'BIST 100', region: 'Middle East & Africa', country: 'Turkey' },
+  { symbol: '^TA125.TA', label: 'TA-125', region: 'Middle East & Africa', country: 'Israel' },
+  { symbol: '^J203.JO', label: 'JSE All Share', region: 'Middle East & Africa', country: 'South Africa' },
 ];
 
 function computeIdxReturns(closes, dates) {
@@ -646,7 +655,11 @@ function computeIdxReturns(closes, dates) {
   for (let i = 0; i < dates.length; i++) {
     if (new Date(dates[i]).getUTCFullYear() === yr) { ytd = pct(closes[i]); break; }
   }
-  return { ret1W: pct(anchor(5)), ret1M: pct(anchor(22)), ret3M: pct(anchor(66)), ret6M: pct(anchor(132)), retYTD: ytd, ret1Y: pct(anchor(252)) };
+  return {
+    ret1W: pct(anchor(5)), ret1M: pct(anchor(22)), ret3M: pct(anchor(66)),
+    ret6M: pct(anchor(132)), retYTD: ytd, ret1Y: pct(anchor(252)),
+    ret3Y: pct(anchor(756)), ret4Y: pct(anchor(1008)), ret5Y: pct(anchor(1260)),
+  };
 }
 
 const globalCache = { data: null, ts: 0 };
@@ -662,7 +675,7 @@ router.get('/global-indices', async (req, res) => {
     } catch { /* fall back to chart-derived 1D below */ }
 
     const now = new Date();
-    const start = new Date(now); start.setDate(now.getDate() - 420);
+    const start = new Date(now); start.setFullYear(now.getFullYear() - 6); // covers up to the 5Y return column
     const retBySym = {};
     for (let i = 0; i < syms.length; i += 8) {
       const chunk = syms.slice(i, i + 8);
