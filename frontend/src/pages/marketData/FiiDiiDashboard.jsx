@@ -9,6 +9,10 @@ import { useFetchWithAbort } from '../../hooks/useFetchWithAbort'
 const TOOLTIP_PROPS = {
   contentStyle: { background: '#1e293b', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '0.8rem' },
   labelStyle: { color: 'var(--text-secondary)' },
+  // Force readable value text: the per-Cell colored bars expose no series
+  // color to the tooltip, so recharts would otherwise render dark item text
+  // on the dark tooltip background.
+  itemStyle: { color: 'var(--text-primary)' },
 }
 const GRID = <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" />
 const tick = { fill: 'var(--text-secondary)', fontSize: 11 }
