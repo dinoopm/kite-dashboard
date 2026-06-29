@@ -79,9 +79,13 @@ p {
 }
 
 .glass-panel {
+  /* Opaque panel background. Previously this used backdrop-filter: blur(12px)
+     for a frosted-glass look, but the combination of backdrop-filter + the
+     :hover transform below triggered a Chromium compositing bug that left
+     stale "ghost" rectangles painted over content while scrolling. The panel
+     background is near-solid over the dark page anyway, so dropping the blur
+     removes the artifact with no meaningful visual change. */
   background: var(--bg-panel);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 1.5rem;
