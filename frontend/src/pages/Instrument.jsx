@@ -9,6 +9,11 @@ import { generateSignals } from '../lib/signalEngine'
 import ConvictionModal from '../components/alerts/ConvictionModal'
 import TradePlanModal from '../components/alerts/TradePlanModal'
 import ValuationPanel from '../components/ValuationPanel'
+import AnalystsPanel from '../components/AnalystsPanel'
+
+// ₹ formatters for the shared AnalystsPanel: prices/EPS in rupees, revenue in Cr.
+const inrMoney = (v) => (v == null ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
+const inrCr = (v) => (v == null ? '—' : `₹${(v / 1e7).toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr`);
 
 // Two-panel shareholding view: left selects a quarter and shows horizontal
 // % bars per category; right selects a category and shows a vertical bar
@@ -1223,6 +1228,22 @@ function Instrument() {
           }}
         >
           Balance Sheet
+        </button>
+        <button
+          onClick={() => setActiveTab('analysts')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'analysts' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'analysts' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '0.5rem 1rem',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'analysts' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+            fontSize: '1rem'
+          }}
+        >
+          Analysts
         </button>
         <button
           onClick={() => setActiveTab('shareholding')}
@@ -2941,6 +2962,15 @@ function Instrument() {
           </>
         );
       })()}
+
+      {activeTab === 'analysts' && (
+        <AnalystsPanel
+          fetchUrl={`/api/analysts/${encodeURIComponent(symbol)}`}
+          money={inrMoney}
+          bigMoney={inrCr}
+          emptyNote="No analyst coverage available for this stock (common for small-caps and recently renamed tickers)."
+        />
+      )}
 
       {activeTab === 'balanceSheet' && (() => {
         // ── Annual balance sheet — screener.in-backed (consolidated) ────

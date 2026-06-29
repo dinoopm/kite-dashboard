@@ -2186,6 +2186,80 @@ app.get('/api/cashflow/:symbol', async (req, res) => {
   }
 });
 
+// ─── GET /api/analysts/:symbol — Wall Street analyst coverage (Yahoo, ₹) ─────
+// Indian counterpart of /api/us/analysts: same shape, NSE symbol resolved via
+// toYahooSymbol(). Coverage is good for liquid large/mid-caps and absent for
+// small-caps / recently-renamed tickers (handled by a graceful empty state).
+const analystCacheIN = {}; // sym -> { data, ts }
+const ANALYST_TTL_IN = 60 * 60 * 1000; // 1h
+app.get('/api/analysts/:symbol', async (req, res) => {
+  const sym = req.params.symbol;
+  const hit = analystCacheIN[sym];
+  if (hit && Date.now() - hit.ts < ANALYST_TTL_IN) return res.json({ ...hit.data, cached: true });
+  try {
+    const yahooSym = toYahooSymbol(sym);
+    const modules = ['price', 'financialData', 'recommendationTrend', 'upgradeDowngradeHistory', 'earningsTrend'];
+    let q;
+    try { q = await yahooFinance.quoteSummary(yahooSym, { modules }, { validateResult: false }); }
+    catch { q = await yahooFinance.quoteSummary(yahooSym, { modules: ['price', 'financialData', 'recommendationTrend'] }, { validateResult: false }); }
+    const price = q.price || {}, fd = q.financialData || {};
+    const rt = q.recommendationTrend || {}, ud = q.upgradeDowngradeHistory || {}, et = q.earningsTrend || {};
+
+    const trend = (rt.trend || []).map(t => ({
+      period: t.period,
+      strongBuy: t.strongBuy ?? 0, buy: t.buy ?? 0, hold: t.hold ?? 0,
+      sell: t.sell ?? 0, strongSell: t.strongSell ?? 0,
+      total: (t.strongBuy ?? 0) + (t.buy ?? 0) + (t.hold ?? 0) + (t.sell ?? 0) + (t.strongSell ?? 0),
+    })).filter(t => t.total > 0);
+
+    const estimates = (et.trend || []).map(t => ({
+      period: t.period, endDate: t.endDate || null,
+      growth: t.growth != null ? t.growth * 100 : null,
+      eps: t.earningsEstimate ? {
+        avg: t.earningsEstimate.avg ?? null, low: t.earningsEstimate.low ?? null,
+        high: t.earningsEstimate.high ?? null, yearAgo: t.earningsEstimate.yearAgoEps ?? null,
+        analysts: t.earningsEstimate.numberOfAnalysts ?? null,
+        growth: t.earningsEstimate.growth != null ? t.earningsEstimate.growth * 100 : null,
+      } : null,
+      revenue: t.revenueEstimate ? {
+        avg: t.revenueEstimate.avg ?? null, low: t.revenueEstimate.low ?? null,
+        high: t.revenueEstimate.high ?? null, yearAgo: t.revenueEstimate.yearAgoRevenue ?? null,
+        analysts: t.revenueEstimate.numberOfAnalysts ?? null,
+        growth: t.revenueEstimate.growth != null ? t.revenueEstimate.growth * 100 : null,
+      } : null,
+    })).filter(e => ['0q', '+1q', '0y', '+1y'].includes(e.period));
+
+    const ratings = (ud.history || [])
+      .map(h => ({
+        date: h.epochGradeDate ? new Date(h.epochGradeDate).toISOString().slice(0, 10) : null,
+        firm: h.firm || '—', toGrade: h.toGrade || '—', fromGrade: h.fromGrade || null,
+        action: h.action || null,
+      }))
+      .filter(h => h.date)
+      .sort((a, b) => (a.date < b.date ? 1 : -1))
+      .slice(0, 12);
+
+    const data = {
+      symbol: sym,
+      name: price.longName || price.shortName || sym,
+      currency: price.currency || 'INR',
+      currentPrice: fd.currentPrice ?? price.regularMarketPrice ?? null,
+      target: {
+        mean: fd.targetMeanPrice ?? null, median: fd.targetMedianPrice ?? null,
+        high: fd.targetHighPrice ?? null, low: fd.targetLowPrice ?? null,
+      },
+      recommendationMean: fd.recommendationMean ?? null,
+      recommendationKey: fd.recommendationKey ?? null,
+      analysts: fd.numberOfAnalystOpinions ?? null,
+      trend, estimates, ratings,
+    };
+    analystCacheIN[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Screener.in scrape for canonical quarterly results ──────────
 // Yahoo's fundamentalsTimeSeries has sparse Indian coverage (random missing
 // quarters, e.g. HINDZINC Sep 2025). Screener.in renders the same data
