@@ -655,6 +655,7 @@ const GLOBAL_INDICES = [
   { symbol: '^TWII', label: 'Taiwan Weighted', region: 'Asia-Pacific', country: 'Taiwan' },
   { symbol: '^AXJO', label: 'S&P/ASX 200', region: 'Asia-Pacific', country: 'Australia' },
   { symbol: '^JKSE', label: 'Jakarta Composite', region: 'Asia-Pacific', country: 'Indonesia' },
+  { symbol: '^KLSE', label: 'FTSE Bursa Malaysia KLCI', region: 'Asia-Pacific', country: 'Malaysia' },
   { symbol: '^SET.BK', label: 'SET Index', region: 'Asia-Pacific', country: 'Thailand' },
   { symbol: '^NZ50', label: 'NZX 50', region: 'Asia-Pacific', country: 'New Zealand' },
   { symbol: '^BSESN', label: 'BSE Sensex', region: 'Asia-Pacific', country: 'India' },
@@ -842,6 +843,174 @@ router.get('/pnl/:symbol', async (req, res) => {
   }
 });
 
+// ─── GET /api/us/cashflow/:symbol — annual cash-flow statement (Yahoo) ──────
+// CFO / CFI / CFF + derived Net and Free Cash Flow, oldest→newest, so the
+// US Instrument Cashflow tab mirrors the Indian one (which is screener-backed).
+const cashflowCache = {}; // sym -> { data, ts }
+const CASHFLOW_TTL = 6 * 60 * 60 * 1000; // 6h — statements rarely change intraday
+router.get('/cashflow/:symbol', async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const hit = cashflowCache[sym];
+  if (hit && Date.now() - hit.ts < CASHFLOW_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const now = new Date();
+    const period1 = new Date(now.getFullYear() - 6, 0, 1);
+    const rows = await yf.fundamentalsTimeSeries(sym, { period1, period2: now, type: 'annual', module: 'all' });
+    const years = (rows || []).map(r => {
+      const d = r.date ? new Date(r.date) : null;
+      const cfo = r.operatingCashFlow ?? null;
+      const cfi = r.investingCashFlow ?? null;
+      const cff = r.financingCashFlow ?? null;
+      // Yahoo sometimes omits freeCashFlow → derive from CFO − capex.
+      const capex = r.capitalExpenditure ?? null;
+      const fcf = r.freeCashFlow ?? (cfo != null && capex != null ? cfo + capex : null); // capex is negative
+      const net = r.changesInCash ?? ((cfo ?? 0) + (cfi ?? 0) + (cff ?? 0));
+      return {
+        fyLabel: d ? `FY ${d.getUTCFullYear()}` : '—',
+        sortKey: d ? d.getTime() : 0,
+        operatingCashFlow: cfo, investingCashFlow: cfi, financingCashFlow: cff,
+        netCashFlow: (cfo == null && cfi == null && cff == null) ? null : net,
+        freeCashFlow: fcf,
+      };
+    }).filter(y => y.operatingCashFlow != null || y.investingCashFlow != null || y.financingCashFlow != null)
+      .sort((a, b) => a.sortKey - b.sortKey);
+    const data = { symbol: sym, currency: 'USD', years };
+    cashflowCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/us/balance-sheet/:symbol — annual balance sheet (Yahoo) ───────
+// Curated asset / liability & equity line items + totals, oldest→newest, so the
+// US Instrument Balance Sheet tab mirrors the Indian one (which is screener-backed).
+const balanceSheetCache = {}; // sym -> { data, ts }
+const BS_TTL = 6 * 60 * 60 * 1000; // 6h
+router.get('/balance-sheet/:symbol', async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const hit = balanceSheetCache[sym];
+  if (hit && Date.now() - hit.ts < BS_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const now = new Date();
+    const period1 = new Date(now.getFullYear() - 6, 0, 1);
+    const rows = await yf.fundamentalsTimeSeries(sym, { period1, period2: now, type: 'annual', module: 'all' });
+    const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
+    const years = (rows || []).map(r => {
+      const d = r.date ? new Date(r.date) : null;
+      const equity = r.stockholdersEquity ?? r.totalEquityGrossMinorityInterest ?? r.commonStockEquity ?? null;
+      const intangibles = r.goodwillAndOtherIntangibleAssets
+        ?? ((r.goodwill ?? null) != null || (r.otherIntangibleAssets ?? null) != null
+            ? (r.goodwill ?? 0) + (r.otherIntangibleAssets ?? 0) : null);
+      return {
+        fyLabel: d ? `FY ${d.getUTCFullYear()}` : '—',
+        fy: d ? d.getUTCFullYear() : null,
+        sortKey: d ? d.getTime() : 0,
+        // Assets
+        cash: num(r.cashAndCashEquivalents ?? r.cashCashEquivalentsAndShortTermInvestments),
+        receivables: num(r.receivables ?? r.accountsReceivable),
+        inventory: num(r.inventory),
+        currentAssets: num(r.currentAssets ?? r.totalCurrentAssets),
+        netPPE: num(r.netPPE),
+        intangibles: num(intangibles),
+        longTermInvestments: num(r.investmentsAndAdvances ?? r.longTermInvestments),
+        totalAssets: num(r.totalAssets),
+        // Liabilities & equity
+        payables: num(r.payables ?? r.accountsPayable),
+        currentLiabilities: num(r.currentLiabilities ?? r.totalCurrentLiabilities),
+        longTermDebt: num(r.longTermDebt),
+        totalLiabilities: num(r.totalLiabilitiesNetMinorityInterest),
+        retainedEarnings: num(r.retainedEarnings),
+        equity: num(equity),
+        // Derived inputs for the snapshot
+        totalDebt: num(r.totalDebt),
+      };
+    }).filter(y => y.totalAssets != null || y.equity != null || y.totalLiabilities != null)
+      .sort((a, b) => a.sortKey - b.sortKey);
+    const data = { symbol: sym, currency: 'USD', years };
+    balanceSheetCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/us/analysts/:symbol — Wall Street analyst coverage (Yahoo) ─────
+// Recommendation distribution + trend over time, price targets, EPS/revenue
+// estimates, and recent rating changes — everything the Analysts tab graphs.
+const analystCache = {}; // sym -> { data, ts }
+const ANALYST_TTL = 60 * 60 * 1000; // 1h
+router.get('/analysts/:symbol', async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const hit = analystCache[sym];
+  if (hit && Date.now() - hit.ts < ANALYST_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const modules = ['price', 'financialData', 'recommendationTrend', 'upgradeDowngradeHistory', 'earningsTrend'];
+    let q;
+    try { q = await yf.quoteSummary(sym, { modules }); }
+    catch { q = await yf.quoteSummary(sym, { modules: ['price', 'financialData', 'recommendationTrend'] }); }
+    const price = q.price || {}, fd = q.financialData || {};
+    const rt = q.recommendationTrend || {}, ud = q.upgradeDowngradeHistory || {}, et = q.earningsTrend || {};
+
+    // Recommendation trend: newest period first ('0m' = current). Keep only the
+    // five rating buckets and a total so the client can normalise the bars.
+    const trend = (rt.trend || []).map(t => ({
+      period: t.period,
+      strongBuy: t.strongBuy ?? 0, buy: t.buy ?? 0, hold: t.hold ?? 0,
+      sell: t.sell ?? 0, strongSell: t.strongSell ?? 0,
+      total: (t.strongBuy ?? 0) + (t.buy ?? 0) + (t.hold ?? 0) + (t.sell ?? 0) + (t.strongSell ?? 0),
+    })).filter(t => t.total > 0);
+
+    // EPS / revenue consensus per forward period (0q, +1q, 0y, +1y).
+    const estimates = (et.trend || []).map(t => ({
+      period: t.period, endDate: t.endDate || null,
+      growth: t.growth != null ? t.growth * 100 : null,
+      eps: t.earningsEstimate ? {
+        avg: t.earningsEstimate.avg ?? null, low: t.earningsEstimate.low ?? null,
+        high: t.earningsEstimate.high ?? null, yearAgo: t.earningsEstimate.yearAgoEps ?? null,
+        analysts: t.earningsEstimate.numberOfAnalysts ?? null,
+        growth: t.earningsEstimate.growth != null ? t.earningsEstimate.growth * 100 : null,
+      } : null,
+      revenue: t.revenueEstimate ? {
+        avg: t.revenueEstimate.avg ?? null, low: t.revenueEstimate.low ?? null,
+        high: t.revenueEstimate.high ?? null, yearAgo: t.revenueEstimate.yearAgoRevenue ?? null,
+        analysts: t.revenueEstimate.numberOfAnalysts ?? null,
+        growth: t.revenueEstimate.growth != null ? t.revenueEstimate.growth * 100 : null,
+      } : null,
+    })).filter(e => ['0q', '+1q', '0y', '+1y'].includes(e.period));
+
+    // Recent upgrades / downgrades, newest first, capped to the latest 12.
+    const ratings = (ud.history || [])
+      .map(h => ({
+        date: h.epochGradeDate ? new Date(h.epochGradeDate).toISOString().slice(0, 10) : null,
+        firm: h.firm || '—', toGrade: h.toGrade || '—', fromGrade: h.fromGrade || null,
+        action: h.action || null,
+      }))
+      .filter(h => h.date)
+      .sort((a, b) => (a.date < b.date ? 1 : -1))
+      .slice(0, 12);
+
+    const data = {
+      symbol: sym,
+      name: price.longName || price.shortName || labelFor(sym),
+      currency: price.currency || 'USD',
+      currentPrice: fd.currentPrice ?? price.regularMarketPrice ?? null,
+      target: {
+        mean: fd.targetMeanPrice ?? null, median: fd.targetMedianPrice ?? null,
+        high: fd.targetHighPrice ?? null, low: fd.targetLowPrice ?? null,
+      },
+      recommendationMean: fd.recommendationMean ?? null,
+      recommendationKey: fd.recommendationKey ?? null,
+      analysts: fd.numberOfAnalystOpinions ?? null,
+      trend, estimates, ratings,
+    };
+    analystCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── US Screener ────────────────────────────────────────────────────────────
 // Fetch daily bars for many symbols using Alpaca's multi-symbol bars endpoint
 // (one request per ~100 symbols), then run the shared screener engine per stock.
@@ -887,16 +1056,107 @@ async function resolveUsUniverse(scope) {
   return { label: 'S&P 500', symbols: (await getSP500()).map(x => x.symbol) };
 }
 
+// ─── US-only analyst screener fields ────────────────────────────────────────
+// These come from Yahoo's financialData module (one request per symbol, unlike
+// the bulk-fetchable candles), so they're kept OUT of the shared screener engine
+// and merged into the row separately, after the cheap technical pass. Conditions
+// on these fields are validated/evaluated here, not by engine.js.
+const US_ANALYST_FIELDS = [
+  { key: 'consensusRating', label: 'Consensus Rating',       type: 'enum', enumValues: ['STRONG_BUY', 'BUY', 'HOLD', 'SELL', 'STRONG_SELL'], group: 'Analyst' },
+  { key: 'recScore',        label: 'Analyst score (1=Buy…5=Sell)', type: 'number', group: 'Analyst' },
+  { key: 'targetUpsidePct', label: '12-mo target upside %',  type: 'number', group: 'Analyst' },
+  { key: 'numAnalysts',     label: '# of analysts',          type: 'number', group: 'Analyst' },
+];
+const US_ANALYST_BY_KEY = Object.fromEntries(US_ANALYST_FIELDS.map(f => [f.key, f]));
+const US_NUMBER_OPS = ['gt', 'gte', 'lt', 'lte'];
+const US_ENUM_OPS = ['is', 'isnot'];
+
+// Validate analyst conditions (engine.validateConditions only knows technical
+// fields and throws on these). Mirrors its number/enum rules.
+function validateAnalystConditions(conds) {
+  for (const c of conds) {
+    const f = US_ANALYST_BY_KEY[c.field];
+    if (f.type === 'number') {
+      if (!US_NUMBER_OPS.includes(c.op)) throw new Error(`Invalid operator "${c.op}" for ${f.label}`);
+      if (!Number.isFinite(Number(c.value))) throw new Error(`${f.label}: value must be a number`);
+    } else {
+      if (!US_ENUM_OPS.includes(c.op)) throw new Error(`Invalid operator "${c.op}" for ${f.label}`);
+      if (!f.enumValues.includes(c.value)) throw new Error(`${f.label}: value must be one of ${f.enumValues.join(', ')}`);
+    }
+  }
+}
+function evaluateAnalystConditions(values, conds) {
+  for (const c of conds) {
+    const v = values[c.field];
+    if (v == null) return false; // missing coverage never matches
+    const target = US_ANALYST_BY_KEY[c.field].type === 'number' ? Number(c.value) : c.value;
+    switch (c.op) {
+      case 'gt': if (!(v > target)) return false; break;
+      case 'gte': if (!(v >= target)) return false; break;
+      case 'lt': if (!(v < target)) return false; break;
+      case 'lte': if (!(v <= target)) return false; break;
+      case 'is': if (v !== target) return false; break;
+      case 'isnot': if (v === target) return false; break;
+      default: return false;
+    }
+  }
+  return true;
+}
+
+// Split a condition list into technical (engine) vs. analyst (US-only) buckets.
+const splitConditions = (conditions = []) => ({
+  tech: conditions.filter(c => !US_ANALYST_BY_KEY[c.field]),
+  analyst: conditions.filter(c => US_ANALYST_BY_KEY[c.field]),
+});
+
+// Lightweight per-symbol analyst snapshot for the screener — just price +
+// financialData (far cheaper than the full Analysts-tab payload). Cached 6h.
+const analystScreenerCache = {}; // sym -> { v, ts }
+const ANALYST_SCR_TTL = 6 * 60 * 60 * 1000;
+const recBucket = (m) => m == null ? null
+  : m <= 1.5 ? 'STRONG_BUY' : m <= 2.5 ? 'BUY' : m <= 3.5 ? 'HOLD' : m <= 4.5 ? 'SELL' : 'STRONG_SELL';
+async function fetchAnalystScreenerData(sym) {
+  const hit = analystScreenerCache[sym];
+  if (hit && Date.now() - hit.ts < ANALYST_SCR_TTL) return hit.v;
+  let v = { consensusRating: null, recScore: null, targetUpsidePct: null, numAnalysts: null };
+  try {
+    const q = await yf.quoteSummary(sym, { modules: ['price', 'financialData'] });
+    const fd = q.financialData || {}, price = q.price || {};
+    const mean = fd.recommendationMean ?? null;
+    const cur = fd.currentPrice ?? price.regularMarketPrice ?? null;
+    const tgt = fd.targetMeanPrice ?? null;
+    v = {
+      consensusRating: recBucket(mean),
+      recScore: mean != null ? +mean.toFixed(2) : null,
+      targetUpsidePct: (tgt != null && cur) ? +(((tgt - cur) / cur) * 100).toFixed(2) : null,
+      numAnalysts: fd.numberOfAnalystOpinions ?? null,
+    };
+  } catch { /* leave nulls — no coverage */ }
+  analystScreenerCache[sym] = { v, ts: Date.now() };
+  return v;
+}
+
+// Run an async mapper over items with a bounded concurrency (keeps Yahoo happy).
+async function mapWithConcurrency(items, limit, fn) {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) { const idx = i++; await fn(items[idx], idx); }
+  });
+  await Promise.all(workers);
+}
+
 const usScreenerJobs = {};
 let usScreenerSeq = 0;
 
 async function runUsScreenerJob(job, { scope, conditions }) {
   const { label, symbols } = await resolveUsUniverse(scope);
+  const { tech, analyst } = splitConditions(conditions);
   job.progress.total = symbols.length;
   job.progress.symbol = 'fetching price history…';
   const start = new Date(); start.setFullYear(start.getFullYear() - 2); // ~500 sessions: enough for SMA200 / 52w / 1Y return
   const barsBySym = await fetchBarsMulti(symbols, start);
-  const matches = [], notReady = [];
+  let matches = [];
+  const notReady = [];
   for (const sym of symbols) {
     job.progress.symbol = sym;
     try {
@@ -904,10 +1164,26 @@ async function runUsScreenerJob(job, { scope, conditions }) {
       if (!Array.isArray(candles) || candles.length < MIN_SCREENER_BARS) { notReady.push(sym); }
       else {
         const values = computeScreenerRow(candles);
-        if (evaluateConditions(values, conditions)) matches.push({ symbol: sym, token: sym, values });
+        // Technical pass only here; analyst conditions are applied below after a
+        // per-symbol Yahoo fetch restricted to the technical survivors.
+        if (evaluateConditions(values, tech)) matches.push({ symbol: sym, token: sym, values });
       }
     } catch { notReady.push(sym); }
     finally { job.progress.loaded++; }
+  }
+
+  // Analyst pass — only when the scan uses an analyst field. Fetches ratings for
+  // the technical survivors (concurrency-limited, cached), merges them into the
+  // row, then filters. A pure analyst-only scan has tech=[] so every ready
+  // symbol survives the technical pass and gets fetched.
+  if (analyst.length > 0) {
+    let done = 0;
+    job.progress.symbol = `fetching analyst ratings… (0/${matches.length})`;
+    await mapWithConcurrency(matches, 8, async (m) => {
+      Object.assign(m.values, await fetchAnalystScreenerData(m.symbol));
+      job.progress.symbol = `fetching analyst ratings… (${++done}/${matches.length})`;
+    });
+    matches = matches.filter(m => evaluateAnalystConditions(m.values, analyst));
   }
   // Resolve company name + sector/industry for the matched set only (cached;
   // chunked to be gentle on the upstream APIs).
@@ -928,7 +1204,8 @@ async function runUsScreenerJob(job, { scope, conditions }) {
 }
 
 router.get('/screener/fields', (req, res) => {
-  res.json({ fields: SCREENER_FIELDS.map(f => (f.key === 'price' ? { ...f, label: 'Price ($)' } : f)) });
+  const technical = SCREENER_FIELDS.map(f => (f.key === 'price' ? { ...f, label: 'Price ($)' } : f));
+  res.json({ fields: [...technical, ...US_ANALYST_FIELDS] });
 });
 
 router.get('/screener/sectors', async (req, res) => {
@@ -944,7 +1221,15 @@ router.post('/screener/run', async (req, res) => {
   const { scope, conditions } = req.body || {};
   if (!scope?.type) return res.status(400).json({ error: 'scope.type is required' });
   if (scope.type === 'custom' && (!scope.symbols || scope.symbols.length === 0)) return res.status(400).json({ error: 'Basket is empty' });
-  try { validateConditions(conditions); } catch (e) { return res.status(400).json({ error: e.message }); }
+  // Validate technical conditions via the shared engine and analyst conditions
+  // via the US-only validator (the engine doesn't know analyst fields).
+  try {
+    if (!Array.isArray(conditions) || conditions.length === 0) throw new Error('At least one condition is required');
+    if (conditions.length > 12) throw new Error('Too many conditions (max 12)');
+    const { tech, analyst } = splitConditions(conditions);
+    if (tech.length) validateConditions(tech);
+    validateAnalystConditions(analyst);
+  } catch (e) { return res.status(400).json({ error: e.message }); }
 
   // Prune old finished jobs.
   for (const id of Object.keys(usScreenerJobs)) {

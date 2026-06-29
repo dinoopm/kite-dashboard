@@ -32,6 +32,17 @@ const RESULT_COLUMNS = [
   { key: 'dist52wHigh', label: '52wH %', pct: true },
 ];
 
+// Analyst columns are appended to the results table only when the scan actually
+// fetched analyst data (i.e. an analyst condition was used) — otherwise they'd
+// be all-empty for technical-only scans.
+const ANALYST_COLUMNS = [
+  { key: 'consensusRating', label: 'Rating' },
+  { key: 'recScore', label: 'Score' },
+  { key: 'targetUpsidePct', label: 'Target %', pct: true },
+  { key: 'numAnalysts', label: '# An.' },
+];
+const RATING_COLOR = { STRONG_BUY: '#15803d', BUY: '#22c55e', HOLD: '#eab308', SELL: '#f97316', STRONG_SELL: '#ef4444' };
+
 const inputStyle = { background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-primary)', padding: '0.4rem 0.6rem', fontSize: '0.85rem' };
 const pnlClass = (v) => (v == null ? '' : v > 0 ? 'positive' : v < 0 ? 'negative' : '');
 
@@ -62,6 +73,11 @@ function ConditionRow({ cond, fields, onChange, onRemove }) {
 
 function ResultsTable({ matches }) {
   const [sort, setSort] = useState({ key: 'change1D', dir: 'desc' });
+  // Append analyst columns only if at least one matched row carries analyst data.
+  const columns = useMemo(() => {
+    const extra = ANALYST_COLUMNS.filter(c => (matches || []).some(m => m.values[c.key] != null));
+    return [...RESULT_COLUMNS, ...extra];
+  }, [matches]);
   const sorted = useMemo(() => {
     const arr = [...(matches || [])];
     arr.sort((a, b) => {
@@ -83,7 +99,7 @@ function ResultsTable({ matches }) {
   return (
     <div className="glass-panel" style={{ padding: '0.5rem 0.5rem 1rem', overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead><tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>{header('symbol', 'Symbol', 'left')}{header('sector', 'Sector', 'left')}{RESULT_COLUMNS.map(c => header(c.key, c.label))}</tr></thead>
+        <thead><tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>{header('symbol', 'Symbol', 'left')}{header('sector', 'Sector', 'left')}{columns.map(c => header(c.key, c.label))}</tr></thead>
         <tbody>
           {sorted.map(m => (
             <tr key={m.symbol} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
@@ -97,12 +113,15 @@ function ResultsTable({ matches }) {
                   : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
                 {m.industry && <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.industry}</div>}
               </td>
-              {RESULT_COLUMNS.map(c => {
+              {columns.map(c => {
                 const v = m.values[c.key];
                 if (v == null) return <td key={c.key} style={td}>—</td>;
                 if (c.key === 'supertrend' || c.key === 'signal1050') {
                   const color = (v === 'BULL' || v === 'BUY') ? '#22c55e' : (v === 'BEAR' || v === 'SELL') ? '#ef4444' : 'var(--text-secondary)';
                   return <td key={c.key} style={{ ...td, color, fontWeight: 600 }}>{v}</td>;
+                }
+                if (c.key === 'consensusRating') {
+                  return <td key={c.key} style={{ ...td, color: RATING_COLOR[v] || 'var(--text-secondary)', fontWeight: 700, fontSize: '0.78rem' }}>{v.replace('_', ' ')}</td>;
                 }
                 return <td key={c.key} style={td} className={c.pct ? pnlClass(v) : ''}>{typeof v === 'number' ? `${c.pct && v > 0 ? '+' : ''}${v}${c.pct ? '%' : ''}` : v}</td>;
               })}
@@ -279,6 +298,11 @@ export default function UsScreener() {
             <div>
               <button onClick={() => { setConditions(cs => [...cs, { field: 'rsi14', op: 'lt', value: 30 }]); setActiveScreenId(null); }} disabled={conditions.length >= 12} style={{ background: 'transparent', border: '1px dashed var(--border)', color: 'var(--accent)', borderRadius: '8px', padding: '0.4rem 1rem', cursor: 'pointer', fontSize: '0.82rem' }}>+ Add condition</button>
             </div>
+            {conditions.some(c => ANALYST_COLUMNS.some(a => a.key === c.field)) && (
+              <div style={{ fontSize: '0.72rem', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                ⓘ Analyst fields fetch Wall-Street ratings per stock — the first scan of a large universe may take ~15s (cached after).
+              </div>
+            )}
           </>
         )}
       </div>

@@ -3,10 +3,12 @@ import { useParams, Link } from 'react-router-dom';
 import {
   ComposedChart, Area, XAxis, YAxis, Tooltip, Legend,
   ResponsiveContainer, CartesianGrid, ReferenceLine, ReferenceDot,
+  BarChart, Bar, Cell, LineChart, Line,
 } from 'recharts';
 import { breakoutRank, breakoutLabel } from '../../lib/breakout';
 import { generateSignals } from '../../lib/signalEngine';
 import SignalChart from '../../components/SignalChart';
+import AnalystsPanel from '../../components/AnalystsPanel';
 
 // US ETF/equity detail: company name, snapshot, price chart with MA overlays,
 // RSI panel, a technical-signal strip, period stats, and a full indicator grid —
@@ -445,6 +447,460 @@ function PnL({ sym }) {
   );
 }
 
+// ─── Balance Sheet tab ──────────────────────────────────────────────────────
+// Annual asset / liability & equity line items from Yahoo, presented in the same
+// snapshot-box + grouped-table format as the Indian Instrument page (USD, $).
+const BS_ROWS = [
+  { key: 'cash',                label: 'Cash & Investments',     group: 'asset' },
+  { key: 'receivables',         label: 'Receivables',            group: 'asset' },
+  { key: 'inventory',           label: 'Inventory',              group: 'asset' },
+  { key: 'currentAssets',       label: 'Total Current Assets',   group: 'asset', emphasis: true },
+  { key: 'netPPE',              label: 'Net PP&E',               group: 'asset' },
+  { key: 'intangibles',         label: 'Goodwill & Intangibles', group: 'asset' },
+  { key: 'longTermInvestments', label: 'Long-Term Investments',  group: 'asset' },
+  { key: 'totalAssets',         label: 'Total Assets',           group: 'asset', emphasis: true },
+  { key: 'payables',            label: 'Accounts Payable',       group: 'liab' },
+  { key: 'currentLiabilities',  label: 'Total Current Liabilities', group: 'liab', emphasis: true },
+  { key: 'longTermDebt',        label: 'Long-Term Debt',         group: 'liab' },
+  { key: 'totalLiabilities',    label: 'Total Liabilities',      group: 'liab', emphasis: true },
+  { key: 'retainedEarnings',    label: 'Retained Earnings',      group: 'liab' },
+  { key: 'equity',              label: "Shareholders' Equity",   group: 'liab', emphasis: true },
+];
+
+function BalanceSheet({ sym }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let on = true; setLoading(true); setErr(null);
+    fetch(`/api/us/balance-sheet/${sym}`).then(r => r.json())
+      .then(j => { if (!on) return; if (j.error) setErr(j.error); else setD(j); })
+      .catch(e => on && setErr(e.message)).finally(() => on && setLoading(false));
+    return () => { on = false; };
+  }, [sym]);
+
+  if (loading) return <div className="loader" />;
+  if (err) return <div className="glass-panel" style={{ padding: '1.5rem', color: RED }}>Failed to load balance sheet: {err}</div>;
+
+  const years = Array.isArray(d?.years) ? d.years : [];
+  const hasAny = (key) => years.some(y => y[key] != null);
+  const visibleRows = BS_ROWS.filter(r => hasAny(r.key));
+  const trendColor = (v, band = 0) => v == null ? GREY : Math.abs(v) <= band ? GREY : v > 0 ? '#10b981' : '#ef4444';
+  const arrow = (v, band = 0) => v == null ? '·' : Math.abs(v) <= band ? '→' : v > 0 ? '↑' : '↓';
+  const yoy = (curr, prev) => (curr == null || prev == null || prev === 0) ? null : ((curr - prev) / Math.abs(prev)) * 100;
+
+  // Balance-sheet snapshot — pure arithmetic over the multi-year series.
+  const snap = (() => {
+    if (years.length < 2) return null;
+    const latest = years[years.length - 1], prior = years[years.length - 2];
+    const debt = latest.totalDebt ?? latest.longTermDebt ?? null;
+    const debtPrior = prior.totalDebt ?? prior.longTermDebt ?? null;
+    const de = (debt != null && latest.equity != null && latest.equity !== 0) ? debt / latest.equity : null;
+    const debtYoY = (debt != null && debtPrior != null && debtPrior !== 0) ? ((debt - debtPrior) / Math.abs(debtPrior)) * 100 : null;
+    const currentRatio = (latest.currentAssets != null && latest.currentLiabilities) ? latest.currentAssets / latest.currentLiabilities : null;
+    const assetsYoY = yoy(latest.totalAssets, prior.totalAssets);
+    // Equity CAGR — both endpoints must be positive (CAGR undefined across zero).
+    const eqValid = years.filter(y => y.equity != null);
+    const e0 = eqValid[0], e1 = eqValid[eqValid.length - 1];
+    let eqCAGR = null, eqTurnedNeg = false;
+    if (e0 && e1 && e0.equity > 0 && e1.equity > 0 && e1.fy > e0.fy) {
+      eqCAGR = { val: (Math.pow(e1.equity / e0.equity, 1 / (e1.fy - e0.fy)) - 1) * 100, from: e0.fyLabel, to: e1.fyLabel };
+    } else if (e0 && e1 && e0.equity > 0 && e1.equity <= 0) eqTurnedNeg = true;
+    const flags = [];
+    if (latest.equity != null && latest.equity < 0) flags.push(`Negative shareholders' equity of ${fmtBig(Math.abs(latest.equity))} — solvency risk`);
+    if (de != null && de > 2) flags.push(`High leverage — D/E of ${de.toFixed(2)}× (debt ${fmtBig(debt)} vs equity ${fmtBig(latest.equity)})`);
+    if (debtYoY != null && debtYoY > 30) flags.push(`Total debt jumped +${debtYoY.toFixed(0)}% in ${latest.fyLabel}`);
+    if (currentRatio != null && currentRatio < 1) flags.push(`Current ratio ${currentRatio.toFixed(2)}× — current liabilities exceed current assets`);
+    return { latest, de, debt, debtYoY, currentRatio, assetsYoY, eqCAGR, eqTurnedNeg, flags };
+  })();
+
+  const th = { textAlign: 'right', padding: '0.6rem 0.8rem', color: GREY, whiteSpace: 'nowrap', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid var(--border)' };
+  const stickyBg = (emph) => ({ position: 'sticky', left: 0, background: emph ? 'rgba(56,189,248,0.06)' : 'var(--bg-panel, #0f172a)', zIndex: 1 });
+  const metricLabel = { fontSize: '0.7rem', color: GREY, textTransform: 'uppercase', letterSpacing: '0.5px' };
+
+  return (
+    <section className="glass-panel" style={{ padding: '1.5rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+        <div>
+          <h2 style={{ margin: 0 }}>Balance Sheet</h2>
+          <span style={{ fontSize: '0.75rem', color: GREY }}>Annual · Yahoo Finance (USD){d?.cached ? ' · cached' : ''}</span>
+        </div>
+        {years.length > 0 && (
+          <span style={{ fontSize: '0.7rem', color: GREY, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            {years[0].fyLabel} → {years[years.length - 1].fyLabel}
+          </span>
+        )}
+      </div>
+
+      {years.length === 0 ? (
+        <p style={{ textAlign: 'center', color: GREY }}>
+          {d == null ? 'Loading…' : 'Balance sheet data is not available for this instrument (ETFs report none).'}
+        </p>
+      ) : (
+        <>
+          {/* Snapshot */}
+          {snap && (
+            <div style={{ marginBottom: '1.25rem', padding: '1rem 1.1rem', borderRadius: '10px', background: 'rgba(56,189,248,0.04)', border: '1px solid rgba(56,189,248,0.18)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Balance Sheet Snapshot</span>
+                {snap.latest?.fyLabel && <span style={{ fontSize: '0.7rem', color: GREY }}>· latest {snap.latest.fyLabel}</span>}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
+                <div>
+                  <div style={metricLabel}>Debt-to-Equity</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 700, marginTop: '0.2rem', color: snap.de == null ? GREY : snap.de > 2 ? '#ef4444' : snap.de > 1 ? '#f59e0b' : '#10b981' }}>
+                    {snap.de == null ? '—' : `${snap.de.toFixed(2)}×`}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.15rem' }}>
+                    {snap.debt != null && snap.latest.equity != null ? `${fmtBig(snap.debt)} debt / ${fmtBig(snap.latest.equity)} equity` : 'Insufficient data'}
+                  </div>
+                </div>
+                <div>
+                  <div style={metricLabel}>Equity CAGR</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 700, marginTop: '0.2rem', color: snap.eqTurnedNeg ? '#ef4444' : trendColor(snap.eqCAGR?.val, 0.5) }}>
+                    {snap.eqTurnedNeg ? '↓ n/a' : snap.eqCAGR == null ? '—' : `${arrow(snap.eqCAGR.val, 0.5)} ${snap.eqCAGR.val >= 0 ? '+' : ''}${snap.eqCAGR.val.toFixed(1)}% /yr`}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.15rem' }}>
+                    {snap.eqTurnedNeg ? `Turned negative by ${snap.latest.fyLabel}` : snap.eqCAGR != null ? `${snap.eqCAGR.from} → ${snap.eqCAGR.to}` : 'Needs ≥ 2 years'}
+                  </div>
+                </div>
+                <div>
+                  <div style={metricLabel}>Current Ratio</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 700, marginTop: '0.2rem', color: snap.currentRatio == null ? GREY : snap.currentRatio < 1 ? '#ef4444' : snap.currentRatio < 1.5 ? '#f59e0b' : '#10b981' }}>
+                    {snap.currentRatio == null ? '—' : `${snap.currentRatio.toFixed(2)}×`}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.15rem' }}>
+                    {snap.currentRatio == null ? 'Insufficient data' : snap.currentRatio < 1 ? 'Liquidity watch' : 'Covers current liabilities'}
+                  </div>
+                </div>
+                <div>
+                  <div style={metricLabel}>Total Assets YoY</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 700, marginTop: '0.2rem', color: trendColor(snap.assetsYoY, 0.5) }}>
+                    {arrow(snap.assetsYoY, 0.5)} {snap.assetsYoY == null ? '—' : `${snap.assetsYoY >= 0 ? '+' : ''}${snap.assetsYoY.toFixed(1)}%`}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.15rem' }}>
+                    {snap.debtYoY == null ? 'Balance sheet trend' : `Total debt ${snap.debtYoY >= 0 ? '+' : ''}${snap.debtYoY.toFixed(0)}% YoY`}
+                  </div>
+                </div>
+              </div>
+              {snap.flags.length > 0 && (
+                <div style={{ marginTop: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                  {snap.flags.map((f, i) => (
+                    <div key={i} style={{ fontSize: '0.75rem', color: '#fca5a5', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.22)', padding: '0.3rem 0.55rem', borderRadius: '6px' }}>⚠ {f}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Data table */}
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.9rem' }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, textAlign: 'left', ...stickyBg(false) }}>Metric</th>
+                  {years.map(y => <th key={y.sortKey} style={th}>{y.fyLabel}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map(row => (
+                  <tr key={row.key} style={row.emphasis ? { background: 'rgba(56,189,248,0.04)' } : undefined}>
+                    <td style={{ textAlign: 'left', padding: '0.7rem 0.8rem', color: 'var(--text-primary)', fontWeight: row.emphasis ? 700 : 500, borderBottom: '1px solid rgba(255,255,255,0.04)', ...stickyBg(row.emphasis) }}>{row.label}</td>
+                    {years.map((y, i) => {
+                      const v = y[row.key];
+                      const prev = i > 0 ? years[i - 1][row.key] : null;
+                      const delta = row.emphasis ? yoy(v, prev) : null;
+                      return (
+                        <td key={y.sortKey} style={{ textAlign: 'right', padding: '0.7rem 0.8rem', whiteSpace: 'nowrap', fontWeight: row.emphasis ? 700 : 500, fontVariantNumeric: 'tabular-nums', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          <div style={{ color: v != null && v < 0 ? '#ef4444' : 'var(--text-primary)' }}>{v == null ? '—' : fmtBig(v)}</div>
+                          {delta != null && <div style={{ fontSize: '0.7rem', fontWeight: 500, color: delta >= 0 ? '#10b981' : '#ef4444' }}>{delta >= 0 ? '+' : ''}{delta.toFixed(1)}%</div>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.75rem', marginBottom: 0, fontStyle: 'italic' }}>
+              Source: Yahoo Finance (annual, USD). Total Liabilities + Shareholders' Equity = Total Assets (the accounting identity). YoY shown on totals. Empty cells (—) weren't disclosed for that year.
+            </p>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+// ─── Cashflow tab ───────────────────────────────────────────────────────────
+// Annual CFO/CFI/CFF + derived Net & Free Cash Flow from Yahoo, presented in
+// the same Chart/Table format as the Indian Instrument page (USD, $).
+const CF_SERIES = [
+  { key: 'operatingCashFlow', label: 'Operating (CFO)', color: 'var(--accent)',          chart: true,  help: 'Cash generated by core business operations — the engine of the business.' },
+  { key: 'investingCashFlow', label: 'Investing (CFI)', color: '#a29bfe',                chart: true,  help: 'Cash spent on / received from investments (capex, acquisitions, asset sales). Negative is normal for a growing company.' },
+  { key: 'financingCashFlow', label: 'Financing (CFF)', color: 'var(--danger)',          chart: true,  help: 'Cash from / returned to financiers (debt, equity, dividends, buybacks). Negative = returning cash to investors.' },
+  { key: 'netCashFlow',       label: 'Net Cash Flow',   color: 'var(--text-secondary)', chart: false, help: 'CFO + CFI + CFF — the net change in cash for the year.' },
+  { key: 'freeCashFlow',      label: 'Free Cash Flow',  color: 'var(--success)',         chart: true,  help: 'CFO minus capex — discretionary cash for dividends, buybacks, or debt paydown.' },
+];
+
+function Cashflow({ sym }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState('chart'); // 'chart' | 'table'
+  const [helpOpen, setHelpOpen] = useState(false);
+  useEffect(() => {
+    let on = true; setLoading(true); setErr(null);
+    fetch(`/api/us/cashflow/${sym}`).then(r => r.json())
+      .then(j => { if (!on) return; if (j.error) setErr(j.error); else setD(j); })
+      .catch(e => on && setErr(e.message)).finally(() => on && setLoading(false));
+    return () => { on = false; };
+  }, [sym]);
+  useEffect(() => {
+    if (!helpOpen) return;
+    const onKey = (e) => { if (e.key === 'Escape') setHelpOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [helpOpen]);
+
+  if (loading) return <div className="loader" />;
+  if (err) return <div className="glass-panel" style={{ padding: '1.5rem', color: RED }}>Failed to load cashflow: {err}</div>;
+
+  const years = Array.isArray(d?.years) ? d.years : [];
+  const visible = years.slice(-8); // older years get unreadable
+
+  const cfColor = (v) => v == null ? GREY : v > 0 ? '#10b981' : v < 0 ? '#ef4444' : 'var(--text-primary)';
+  const growthPill = (curr, prev) => {
+    if (curr == null || prev == null || prev === 0) return null;
+    const pct = ((curr - prev) / Math.abs(prev)) * 100;
+    const positive = pct >= 0;
+    const abs = Math.abs(pct);
+    let color;
+    if (abs < 5) color = positive ? '#34d399' : '#fca5a5';
+    else if (abs < 15) color = positive ? '#10b981' : '#ef4444';
+    else color = positive ? '#059669' : '#dc2626';
+    return { label: `${positive ? '↑' : '↓'}${abs.toFixed(1)}%`, color, weight: abs >= 15 ? 800 : 700 };
+  };
+  const trendColor = (v, band = 0) => v == null ? GREY : Math.abs(v) <= band ? GREY : v > 0 ? '#10b981' : '#ef4444';
+  const arrow = (v, band = 0) => v == null ? '·' : Math.abs(v) <= band ? '→' : v > 0 ? '↑' : '↓';
+  const Sparkline = ({ points }) => {
+    const valid = points.filter(p => p.v != null);
+    if (valid.length < 2) return <span style={{ color: GREY, fontSize: '0.7rem' }}>—</span>;
+    const rising = valid[valid.length - 1].v >= valid[0].v;
+    const color = rising ? '#10b981' : '#ef4444';
+    return (
+      <div style={{ width: '70px', height: '28px' }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={points}>
+            <Line type="monotone" dataKey="v" stroke={color} strokeWidth={1.6} dot={false} isAnimationActive={false} connectNulls />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  };
+
+  // Cashflow-quality snapshot — pure arithmetic over the full series.
+  const snap = (() => {
+    if (years.length < 2) return null;
+    const n = years.length;
+    const latest = years[n - 1], earliest = years[0];
+    const fcfPos = years.filter(y => (y.freeCashFlow ?? 0) > 0).length;
+    const capexCov = years.filter(y => y.operatingCashFlow != null && y.investingCashFlow != null && (y.operatingCashFlow + y.investingCashFlow) >= 0).length;
+    const cfoTrendPct = (earliest.operatingCashFlow != null && earliest.operatingCashFlow !== 0 && latest.operatingCashFlow != null)
+      ? ((latest.operatingCashFlow - earliest.operatingCashFlow) / Math.abs(earliest.operatingCashFlow)) * 100 : null;
+    let caution = null;
+    if ((latest.operatingCashFlow ?? 0) < 0) caution = `Operating cash flow was negative in ${latest.fyLabel}`;
+    else if ((latest.freeCashFlow ?? 0) < 0) caution = `Free cash flow was negative in ${latest.fyLabel}`;
+    return { n, fcfPos, capexCov, cfoTrendPct, range: `${earliest.fyLabel}–${latest.fyLabel}`, caution };
+  })();
+
+  const empty = visible.length === 0;
+  const cardStyle = { flex: '1 1 160px', padding: '0.85rem 1rem', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid var(--border)' };
+  const cardLabel = { fontSize: '0.65rem', color: GREY, textTransform: 'uppercase', letterSpacing: '0.5px' };
+
+  return (
+    <>
+      <section className="glass-panel" style={{ padding: '1.5rem' }}>
+        {/* Header + Chart/Table toggle */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Cashflow Analysis</h2>
+            <span style={{ fontSize: '0.75rem', color: GREY }}>Annual cashflow statement · Yahoo Finance (USD)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <button onClick={() => setHelpOpen(true)} title="What do these cash-flow terms mean?"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', background: 'transparent', border: '1px solid var(--border)', borderRadius: '8px', color: GREY, padding: '0.35rem 0.7rem', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 }}>
+              <span aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '15px', height: '15px', borderRadius: '50%', border: '1px solid currentColor', fontSize: '0.62rem', fontWeight: 800, lineHeight: 1 }}>?</span>
+              Legend
+            </button>
+            <div role="tablist" aria-label="Cashflow view" style={{ display: 'inline-flex', borderRadius: '8px', border: '1px solid var(--border)', overflow: 'hidden' }}>
+              {[['chart', 'Chart'], ['table', 'Table']].map(([key, label]) => {
+                const active = view === key;
+                return (
+                  <button key={key} role="tab" aria-selected={active} onClick={() => setView(key)}
+                    style={{ background: active ? 'var(--accent)' : 'transparent', color: active ? '#04141f' : GREY, border: 'none', padding: '0.35rem 0.9rem', cursor: 'pointer', fontSize: '0.78rem', fontWeight: active ? 700 : 500, transition: 'all 0.15s' }}>
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            {visible.length > 0 && (
+              <span style={{ fontSize: '0.7rem', color: GREY, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                {visible[0].fyLabel} → {visible[visible.length - 1].fyLabel}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {empty ? (
+          <p style={{ textAlign: 'center', color: GREY }}>
+            {d == null ? 'Loading…' : 'Cashflow data is not available for this instrument (ETFs report none).'}
+          </p>
+        ) : view === 'chart' ? (
+          <div style={{ height: '360px' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={visible} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="fyLabel" stroke="var(--text-secondary)" />
+                <YAxis stroke="var(--text-secondary)" tickFormatter={(val) => fmtBig(val)} width={70} />
+                <Tooltip contentStyle={{ backgroundColor: 'var(--bg-panel)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+                  formatter={(value, name) => [value == null ? '—' : fmtBig(value), name]}
+                  labelFormatter={(label) => `Fiscal Year ${String(label).replace('FY ', '')}`} />
+                <Legend />
+                {CF_SERIES.filter(s => s.chart).map(s => (
+                  <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[4, 4, 0, 0]} />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <>
+            {/* Quality snapshot */}
+            {snap && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
+                <div style={cardStyle}>
+                  <div style={cardLabel}>FCF Track Record</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snap.fcfPos * 2 - snap.n), marginTop: '0.2rem' }}>{snap.fcfPos} / {snap.n} yrs</div>
+                  <div style={{ fontSize: '0.7rem', color: GREY }}>Free cash flow positive</div>
+                </div>
+                <div style={cardStyle}>
+                  <div style={cardLabel}>CFO Trend</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snap.cfoTrendPct, 1), marginTop: '0.2rem' }}>
+                    {arrow(snap.cfoTrendPct, 1)} {snap.cfoTrendPct == null ? '—' : `${snap.cfoTrendPct >= 0 ? '+' : ''}${snap.cfoTrendPct.toFixed(0)}%`}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: GREY }}>Operating cash · {snap.range}</div>
+                </div>
+                <div style={cardStyle}>
+                  <div style={cardLabel}>Capex Coverage</div>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snap.capexCov * 2 - snap.n), marginTop: '0.2rem' }}>{snap.capexCov} / {snap.n} yrs</div>
+                  <div style={{ fontSize: '0.7rem', color: GREY }}>CFO covered investing</div>
+                </div>
+              </div>
+            )}
+            {snap?.caution && (
+              <div style={{ marginBottom: '1rem', padding: '0.6rem 0.9rem', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: '8px', fontSize: '0.78rem', color: '#fca5a5' }}>
+                ⚠ {snap.caution}
+              </div>
+            )}
+
+            {/* Data table */}
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '0.9rem' }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: 'left', padding: '0.65rem 0.75rem', color: GREY, fontWeight: 600, fontSize: '0.72rem', letterSpacing: '0.5px', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Cash Flow</th>
+                    {visible.map(col => (
+                      <th key={col.fyLabel} style={{ textAlign: 'right', padding: '0.65rem 0.75rem', color: GREY, fontWeight: 600, fontSize: '0.72rem', letterSpacing: '0.5px', borderBottom: '1px solid var(--border)' }}>{col.fyLabel}</th>
+                    ))}
+                    <th style={{ textAlign: 'right', padding: '0.65rem 0.75rem', color: GREY, fontWeight: 600, fontSize: '0.72rem', letterSpacing: '0.5px', textTransform: 'uppercase', borderBottom: '1px solid var(--border)' }}>Trend</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {CF_SERIES.map(s => {
+                    const sparkPoints = visible.map(y => ({ v: y[s.key] ?? null }));
+                    return (
+                      <tr key={s.key}>
+                        <td style={{ textAlign: 'left', padding: '0.85rem 0.75rem', color: 'var(--text-primary)', fontWeight: 600, borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          <span style={{ display: 'inline-block', width: '9px', height: '9px', borderRadius: '2px', background: s.color, marginRight: '0.5rem', border: s.key === 'netCashFlow' ? '1px solid var(--text-secondary)' : 'none' }} />
+                          {s.label}
+                        </td>
+                        {visible.map((col, idx) => {
+                          const value = col[s.key] ?? null;
+                          const prev = idx > 0 ? (visible[idx - 1][s.key] ?? null) : null;
+                          const pill = growthPill(value, prev);
+                          return (
+                            <td key={col.fyLabel} style={{ textAlign: 'right', padding: '0.85rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.04)', verticalAlign: 'top' }}>
+                              <div style={{ color: cfColor(value), fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{value == null ? '—' : fmtBig(value)}</div>
+                              <div style={{ marginTop: '0.2rem', fontSize: '0.7rem', textAlign: 'right' }}>
+                                {pill ? (
+                                  <span title="Year-on-Year" style={{ color: pill.color, fontWeight: pill.weight }}>
+                                    <span style={{ color: GREY, fontWeight: 500, marginRight: '3px' }}>YoY</span>{pill.label}
+                                  </span>
+                                ) : (
+                                  <span style={{ color: GREY }}>YoY —</span>
+                                )}
+                              </div>
+                            </td>
+                          );
+                        })}
+                        <td style={{ textAlign: 'right', padding: '0.85rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          <div style={{ display: 'inline-block' }}><Sparkline points={sparkPoints} /></div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div style={{ marginTop: '0.75rem', fontSize: '0.7rem', color: GREY, fontStyle: 'italic' }}>
+                Source: Yahoo Finance (annual, USD){d.cached ? ' · cached' : ''}. Net = CFO + CFI + CFF. Free Cash Flow = CFO − capex.
+              </div>
+            </div>
+          </>
+        )}
+      </section>
+
+      {/* Legend help modal — sibling of the glass-panel so the fixed overlay isn't trapped by its backdrop-filter. */}
+      {helpOpen && (
+        <div className="conv-modal-backdrop" onClick={() => setHelpOpen(false)}>
+          <div className="conv-modal" style={{ width: '560px', maxWidth: '100%' }} onClick={(e) => e.stopPropagation()}>
+            <div className="conv-modal-header">
+              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Cashflow legend</h2>
+              <button className="conv-modal-close" onClick={() => setHelpOpen(false)} aria-label="Close">✕</button>
+            </div>
+            <div className="conv-modal-body">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {CF_SERIES.map(s => (
+                  <div key={s.key} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.6rem' }}>
+                    <span style={{ width: '12px', height: '12px', borderRadius: '3px', background: s.color, marginTop: '3px', flexShrink: 0, border: s.key === 'netCashFlow' ? '1px solid var(--text-secondary)' : 'none' }} />
+                    <span style={{ fontSize: '0.82rem', color: GREY, lineHeight: 1.5 }}>
+                      <strong style={{ color: 'var(--text-primary)' }}>{s.label}</strong> — {s.help}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--border)', fontSize: '0.72rem', color: GREY, fontStyle: 'italic' }}>
+                Net = CFO + CFI + CFF · Free Cash Flow = CFO − capex · Annual (USD).
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── Analyst coverage tab — shared panel, USD formatting ────────────────────
+const usMoney = (v) => (v == null ? '—' : `$${fmtPrice(v)}`);
+function Analysts({ sym }) {
+  return (
+    <AnalystsPanel
+      fetchUrl={`/api/us/analysts/${sym}`}
+      money={usMoney}
+      bigMoney={fmtBig}
+      emptyNote="No analyst coverage available (typical for ETFs and small/foreign listings)."
+    />
+  );
+}
+
 export default function UsInstrument() {
   const { symbol } = useParams();
   const sym = (symbol || '').toUpperCase();
@@ -597,7 +1053,7 @@ export default function UsInstrument() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', marginBottom: '1.5rem' }}>
-        {[{ id: 'technicals', label: 'Technicals' }, { id: 'signals', label: 'Signals' }, { id: 'fundamentals', label: 'Fundamentals' }, { id: 'pnl', label: 'P&L' }].map(t => (
+        {[{ id: 'technicals', label: 'Technicals' }, { id: 'signals', label: 'Signals' }, { id: 'fundamentals', label: 'Fundamentals' }, { id: 'analysts', label: 'Analysts' }, { id: 'pnl', label: 'P&L' }, { id: 'balanceSheet', label: 'Balance Sheet' }, { id: 'cashflow', label: 'Cashflow' }].map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
             padding: '0.6rem 1.1rem', cursor: 'pointer', background: 'transparent', border: 'none',
             borderBottom: `2px solid ${activeTab === t.id ? 'var(--accent)' : 'transparent'}`,
@@ -609,7 +1065,13 @@ export default function UsInstrument() {
 
       {activeTab === 'fundamentals' && <Fundamentals sym={sym} />}
 
+      {activeTab === 'analysts' && <Analysts sym={sym} />}
+
       {activeTab === 'pnl' && <PnL sym={sym} />}
+
+      {activeTab === 'balanceSheet' && <BalanceSheet sym={sym} />}
+
+      {activeTab === 'cashflow' && <Cashflow sym={sym} />}
 
       {activeTab === 'signals' && (
         <div className="glass-panel" style={{ padding: '1rem' }}>
