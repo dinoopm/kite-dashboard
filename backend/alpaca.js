@@ -258,7 +258,7 @@ router.get('/bars/:symbol', async (req, res) => {
       pageToken = data?.next_page_token || null;
     } while (pageToken && allBars.length < 20000);
 
-    const bars = allBars.map(b => ({
+    let bars = allBars.map(b => ({
       date: b.t,
       open: b.o,
       high: b.h,
@@ -266,6 +266,14 @@ router.get('/bars/:symbol', async (req, res) => {
       close: b.c,
       volume: b.v,
     }));
+    // "1D" fetches a 4-day window of 15-min bars only to be sure the latest
+    // session is present (weekends/holidays). Trim to that latest session so the
+    // chart and the "(1D)" period stats reflect a single day — not 3–4. US
+    // trading days don't cross UTC midnight, so the UTC date keys one session.
+    if (range === '1D' && bars.length) {
+      const lastDay = bars[bars.length - 1].date.slice(0, 10);
+      bars = bars.filter(b => b.date.slice(0, 10) === lastDay);
+    }
     res.json({ symbol, range, timeframe, bars });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message, configured: !err.notConfigured });
@@ -902,12 +910,23 @@ router.get('/balance-sheet/:symbol', async (req, res) => {
       const intangibles = r.goodwillAndOtherIntangibleAssets
         ?? ((r.goodwill ?? null) != null || (r.otherIntangibleAssets ?? null) != null
             ? (r.goodwill ?? 0) + (r.otherIntangibleAssets ?? 0) : null);
+      // Yahoo's totalLiabilitiesNetMinorityInterest is (assets − permanent equity),
+      // which lumps in redeemable/convertible preferred stock carried OUTSIDE
+      // stockholders' equity (mezzanine / "temporary equity" — common pre-IPO).
+      // That isn't a real liability, so split it out: real liabilities exclude it
+      // and the preferred shows as its own line. Then the balance sheet reconciles
+      // as Liabilities + Redeemable Preferred + Equity = Total Assets.
+      const preferred = num(r.preferredSecuritiesOutsideStockEquity);
+      const rawLiab = num(r.totalLiabilitiesNetMinorityInterest);
+      const totalLiabilities = rawLiab == null ? null : rawLiab - (preferred ?? 0);
       return {
         fyLabel: d ? `FY ${d.getUTCFullYear()}` : '—',
         fy: d ? d.getUTCFullYear() : null,
         sortKey: d ? d.getTime() : 0,
-        // Assets
-        cash: num(r.cashAndCashEquivalents ?? r.cashCashEquivalentsAndShortTermInvestments),
+        // Assets — "Cash & Investments" prefers the cash + short-term-investments
+        // total so it matches its label (plain cash alone understates names that
+        // park most liquidity in marketable securities).
+        cash: num(r.cashCashEquivalentsAndShortTermInvestments ?? r.cashAndCashEquivalents),
         receivables: num(r.receivables ?? r.accountsReceivable),
         inventory: num(r.inventory),
         currentAssets: num(r.currentAssets ?? r.totalCurrentAssets),
@@ -915,11 +934,14 @@ router.get('/balance-sheet/:symbol', async (req, res) => {
         intangibles: num(intangibles),
         longTermInvestments: num(r.investmentsAndAdvances ?? r.longTermInvestments),
         totalAssets: num(r.totalAssets),
-        // Liabilities & equity
-        payables: num(r.payables ?? r.accountsPayable),
+        // Liabilities & equity — prefer the narrow "Accounts payable" line so it
+        // matches the 10-K (Yahoo's `payables` rolls in other current payables;
+        // e.g. AAPL FY25 payables $82.9B vs accountsPayable $69.9B).
+        payables: num(r.accountsPayable ?? r.payables),
         currentLiabilities: num(r.currentLiabilities ?? r.totalCurrentLiabilities),
         longTermDebt: num(r.longTermDebt),
-        totalLiabilities: num(r.totalLiabilitiesNetMinorityInterest),
+        totalLiabilities,
+        redeemablePreferred: preferred, // mezzanine equity; null/absent for most names
         retainedEarnings: num(r.retainedEarnings),
         equity: num(equity),
         // Derived inputs for the snapshot

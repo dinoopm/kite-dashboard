@@ -463,6 +463,9 @@ const BS_ROWS = [
   { key: 'currentLiabilities',  label: 'Total Current Liabilities', group: 'liab', emphasis: true },
   { key: 'longTermDebt',        label: 'Long-Term Debt',         group: 'liab' },
   { key: 'totalLiabilities',    label: 'Total Liabilities',      group: 'liab', emphasis: true },
+  // Redeemable/convertible preferred carried outside equity (mezzanine). Only
+  // shows for names that have it — typically pre-IPO years; auto-hidden otherwise.
+  { key: 'redeemablePreferred', label: 'Redeemable Preferred',   group: 'liab' },
   { key: 'retainedEarnings',    label: 'Retained Earnings',      group: 'liab' },
   { key: 'equity',              label: "Shareholders' Equity",   group: 'liab', emphasis: true },
 ];
@@ -509,9 +512,14 @@ function BalanceSheet({ sym }) {
     const flags = [];
     if (latest.equity != null && latest.equity < 0) flags.push(`Negative shareholders' equity of ${fmtBig(Math.abs(latest.equity))} — solvency risk`);
     if (de != null && de > 2) flags.push(`High leverage — D/E of ${de.toFixed(2)}× (debt ${fmtBig(debt)} vs equity ${fmtBig(latest.equity)})`);
-    if (debtYoY != null && debtYoY > 30) flags.push(`Total debt jumped +${debtYoY.toFixed(0)}% in ${latest.fyLabel}`);
+    // Only flag a debt spike when the debt is material (≥ 5% of assets) — a big
+    // % jump on a trivial balance (e.g. $1M → $4M of leases) isn't noteworthy.
+    if (debtYoY != null && debtYoY > 30 && debt != null && latest.totalAssets && debt / latest.totalAssets >= 0.05) {
+      flags.push(`Total debt jumped +${debtYoY.toFixed(0)}% in ${latest.fyLabel}`);
+    }
     if (currentRatio != null && currentRatio < 1) flags.push(`Current ratio ${currentRatio.toFixed(2)}× — current liabilities exceed current assets`);
-    return { latest, de, debt, debtYoY, currentRatio, assetsYoY, eqCAGR, eqTurnedNeg, flags };
+    const debtMaterial = debt != null && latest.totalAssets ? debt / latest.totalAssets >= 0.05 : false;
+    return { latest, de, debt, debtYoY, debtMaterial, currentRatio, assetsYoY, eqCAGR, eqTurnedNeg, flags };
   })();
 
   const th = { textAlign: 'right', padding: '0.6rem 0.8rem', color: GREY, whiteSpace: 'nowrap', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid var(--border)' };
@@ -579,7 +587,7 @@ function BalanceSheet({ sym }) {
                     {arrow(snap.assetsYoY, 0.5)} {snap.assetsYoY == null ? '—' : `${snap.assetsYoY >= 0 ? '+' : ''}${snap.assetsYoY.toFixed(1)}%`}
                   </div>
                   <div style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.15rem' }}>
-                    {snap.debtYoY == null ? 'Balance sheet trend' : `Total debt ${snap.debtYoY >= 0 ? '+' : ''}${snap.debtYoY.toFixed(0)}% YoY`}
+                    {snap.debtYoY == null || !snap.debtMaterial ? 'Balance sheet trend' : `Total debt ${snap.debtYoY >= 0 ? '+' : ''}${snap.debtYoY.toFixed(0)}% YoY`}
                   </div>
                 </div>
               </div>
@@ -622,7 +630,7 @@ function BalanceSheet({ sym }) {
               </tbody>
             </table>
             <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.75rem', marginBottom: 0, fontStyle: 'italic' }}>
-              Source: Yahoo Finance (annual, USD). Total Liabilities + Shareholders' Equity = Total Assets (the accounting identity). YoY shown on totals. Empty cells (—) weren't disclosed for that year.
+              Source: Yahoo Finance (annual, USD). Total Liabilities (+ Redeemable Preferred, when present) + Shareholders' Equity = Total Assets. Redeemable/convertible preferred is mezzanine equity, shown separately rather than counted as debt. Selected key line items are shown — "other" current/non-current items are omitted, so the listed rows need not sum to the bold subtotals (those come straight from the filing). YoY shown on totals. Empty cells (—) weren't disclosed for that year.
             </p>
           </div>
         </>
@@ -973,11 +981,14 @@ export default function UsInstrument() {
     if (bars.length === 0) return null;
     const high = Math.max(...bars.map(b => b.high));
     const low = Math.min(...bars.map(b => b.low));
-    const first = bars[0].close, last = bars[bars.length - 1].close;
-    const ret = first ? ((last - first) / first) * 100 : null;
-    const retAbs = last - first;
+    const last = bars[bars.length - 1].close;
+    // For the 1D (intraday) view, measure the return from the previous close so
+    // it matches the headline daily change; other ranges compare first→last bar.
+    const base = intraday && q.prevClose != null ? q.prevClose : bars[0].close;
+    const ret = base ? ((last - base) / base) * 100 : null;
+    const retAbs = last - base;
     return { high, low, ret, retAbs };
-  }, [bars]);
+  }, [bars, intraday, q.prevClose]);
 
   // Full indicator suite from the stable daily series.
   const ind = useMemo(() => {
