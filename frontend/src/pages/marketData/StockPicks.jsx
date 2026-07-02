@@ -23,16 +23,30 @@ const FACTORS = [
   { key: 'deals', raw: 'dealsRaw', label: 'Institutional', color: '#fbbf24', help: 'Net large-deal buy value + buyer breadth.' },
 ]
 const DEFAULT_WEIGHTS = { momentum: 30, volume: 25, fiftyTwo: 20, deals: 25 }
+const PRESETS = [
+  { label: 'Balanced', w: DEFAULT_WEIGHTS },
+  { label: 'Momentum', w: { momentum: 50, volume: 25, fiftyTwo: 15, deals: 10 } },
+  { label: 'Breakout', w: { momentum: 25, volume: 25, fiftyTwo: 40, deals: 10 } },
+  { label: 'Institutional', w: { momentum: 15, volume: 15, fiftyTwo: 10, deals: 60 } },
+]
 
-// Percentile rank (0–100) of each value within the array; ties share the rank.
+// Sliders/toggles survive reloads; the daily snapshot always uses DEFAULT_WEIGHTS.
+const PREFS_KEY = 'stockPicks.prefs.v1'
+const loadPrefs = () => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {} } catch { return {} } }
+
+// Mid-rank percentile (0–100) of each value within the array. Ties share the
+// MIDDLE of their block — most stocks sit at 0 on any given factor (e.g. no
+// large deals), and max-rank ties would reward having no data at all.
 function percentileRanks(values) {
   const sorted = [...values].sort((a, b) => a - b)
   const n = sorted.length
   return values.map(v => {
-    // fraction of values <= v
     let lo = 0, hi = n
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < v) lo = mid + 1; else hi = mid }
+    const first = lo // count of values < v
+    hi = n
     while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] <= v) lo = mid + 1; else hi = mid }
-    return n ? (lo / n) * 100 : 0
+    return n ? ((first + lo) / 2 / n) * 100 : 0 // lo = count of values <= v
   })
 }
 
@@ -51,19 +65,59 @@ function Bar({ pct, color }) {
 
 export default function StockPicks() {
   const navigate = useNavigate()
-  const [mode, setMode] = useState('lookback')        // 'lookback' | 'snapshot'
-  const [lookback, setLookback] = useState('30d')
+  const prefs = useRef(loadPrefs()).current
+  const [mode, setMode] = useState(prefs.mode === 'snapshot' ? 'snapshot' : 'lookback')
+  const [lookback, setLookback] = useState(LOOKBACKS.some(l => l.key === prefs.lookback) ? prefs.lookback : '30d')
   const [snapDate, setSnapDate] = useState(isoDay(1))
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [weights, setWeights] = useState(DEFAULT_WEIGHTS)
-  const [topN, setTopN] = useState(25)
-  const [excludeTraps, setExcludeTraps] = useState(true)
+  const [weights, setWeights] = useState({ ...DEFAULT_WEIGHTS, ...(prefs.weights || {}) })
+  const [topN, setTopN] = useState([10, 25, 50].includes(prefs.topN) ? prefs.topN : 25)
+  const [excludeTraps, setExcludeTraps] = useState(prefs.excludeTraps !== false)
+  useEffect(() => {
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, lookback, weights, topN, excludeTraps })) } catch { /* private mode */ }
+  }, [mode, lookback, weights, topN, excludeTraps])
   const [summary, setSummary] = useState(null)
   const [summarizing, setSummarizing] = useState(false)
   const [metaMap, setMetaMap] = useState({}) // symbol -> { sector, name } (Yahoo, resolved for visible rows)
   const metaReqRef = useRef(new Set())
+  const [held, setHeld] = useState(() => new Set()) // tradingsymbols in Kite holdings
+  const [history, setHistory] = useState(null)      // { available, dates: [{date, picks}] } newest-first
+
+  // Portfolio overlap: mark picks already held (MCP result → { content:[{text}] }).
+  useEffect(() => {
+    fetch('/api/holdings').then(r => r.json()).then(j => {
+      let arr = j
+      if (typeof j?.content?.[0]?.text === 'string') arr = JSON.parse(j.content[0].text)
+      arr = arr?.data || arr
+      if (Array.isArray(arr)) setHeld(new Set(arr.map(h => h.tradingsymbol).filter(Boolean)))
+    }).catch(() => { })
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/stock-picks/history?days=45').then(r => r.json()).then(setHistory).catch(() => { })
+  }, [])
+
+  // Diff of the two latest daily snapshots (default weights) + top-25 streaks.
+  const hist = useMemo(() => {
+    const dates = history?.dates || []
+    if (!dates.length) return null
+    const [latest, prev] = dates
+    const latestSet = new Set(latest.picks.map(p => p.symbol))
+    const prevSet = prev ? new Set(prev.picks.map(p => p.symbol)) : null
+    const entrants = prevSet ? latest.picks.filter(p => !prevSet.has(p.symbol)) : []
+    const dropouts = prevSet ? prev.picks.filter(p => !latestSet.has(p.symbol)) : []
+    const prevTop10 = new Set(prev ? prev.picks.filter(p => p.rank <= 10).map(p => p.symbol) : [])
+    const newTop10 = new Set(prev ? latest.picks.filter(p => p.rank <= 10 && !prevTop10.has(p.symbol)).map(p => p.symbol) : [])
+    const streaks = {}
+    for (const p of latest.picks) {
+      let n = 0
+      for (const d of dates) { if (d.picks.some(q => q.symbol === p.symbol)) n++; else break }
+      streaks[p.symbol] = n
+    }
+    return { latest, prev, entrants, dropouts, newTop10, streaks }
+  }, [history])
   const [sort, setSort] = useState({ key: 'composite', dir: 'desc' }) // table display sort
 
   // Resolve symbol → Kite instrument_token before opening the instrument page,
@@ -153,6 +207,38 @@ export default function StockPicks() {
       .then(r => r.json()).then(m => setMetaMap(prev => ({ ...prev, ...m }))).catch(() => { })
   }, [ranked, topN])
 
+  // Crowding check: warn when one sector dominates the visible top-N.
+  const sectorWarn = useMemo(() => {
+    if (top.length < 10) return null
+    const counts = {}
+    for (const r of top) {
+      const s = metaMap[r.symbol]?.sector || fmtSector(r.sector)
+      if (s && s !== '—') counts[s] = (counts[s] || 0) + 1
+    }
+    const [name, n] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || []
+    const share = n ? n / top.length : 0
+    return share >= 0.4 ? { name, share: Math.round(share * 100) } : null
+  }, [top, metaMap])
+
+  const exportCsv = () => {
+    const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
+    const head = ['rank', 'symbol', 'name', 'sector', 'composite', 'momentum_pct', 'volume_pct', 'fifty_two_pct', 'deals_pct', 'gainer_days', 'loser_days', 'made_new_high', 'vol_authenticity', 'deals_net_cr', 'trap_risk', 'held', 'last_ltp']
+    const lines = [head.join(',')]
+    for (const r of displayed) {
+      lines.push([
+        r.rank, r.symbol, metaMap[r.symbol]?.name || r.name, metaMap[r.symbol]?.sector || fmtSector(r.sector),
+        r.composite.toFixed(1), Math.round(r.pct.momentum), Math.round(r.pct.volume), Math.round(r.pct.fiftyTwo), Math.round(r.pct.deals),
+        r.factors.gainerDays, r.factors.loserDays, r.factors.madeNewHigh, r.factors.authenticity,
+        r.factors.dealsNetValueCr, r.factors.trapRisk, held.has(r.symbol), r.lastLtp,
+      ].map(esc).join(','))
+    }
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }))
+    a.download = `stock-picks_${period.from}_${period.to}.csv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
   const genSummary = async () => {
     setSummarizing(true); setSummary(null)
     try {
@@ -175,7 +261,7 @@ export default function StockPicks() {
   }
 
   const regime = data?.regime
-  const riskOff = regime && regime.totalNet < -5000
+  const riskOff = regime && (regime.score != null ? regime.score < 0 : regime.totalNet < -5000)
   const btn = (active) => ({ padding: '0.4rem 0.9rem', borderRadius: '8px', cursor: 'pointer', fontSize: '0.82rem', fontWeight: active ? 700 : 500, border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`, background: active ? 'var(--accent)' : 'transparent', color: active ? '#04141f' : 'var(--text-secondary)' })
 
   return (
@@ -217,7 +303,15 @@ export default function StockPicks() {
       </div>
 
       {/* Weight sliders */}
-      <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+      <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '0.75rem' }}>
+          <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)', marginRight: '0.5rem' }}>Presets</span>
+          {PRESETS.map(p => {
+            const active = FACTORS.every(f => weights[f.key] === p.w[f.key])
+            return <button key={p.label} onClick={() => setWeights({ ...p.w })} style={{ ...btn(active), padding: '0.25rem 0.7rem', fontSize: '0.75rem' }}>{p.label}</button>
+          })}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
         {FACTORS.map(f => (
           <label key={f.key} title={f.help} style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
             <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
@@ -228,6 +322,7 @@ export default function StockPicks() {
               onChange={e => setWeights(w => ({ ...w, [f.key]: +e.target.value }))} style={{ accentColor: f.color }} />
           </label>
         ))}
+        </div>
       </div>
 
       {/* Regime banner */}
@@ -236,8 +331,44 @@ export default function StockPicks() {
           <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: riskOff ? '#fca5a5' : '#6ee7b7' }}>Market Regime</span>
           <span style={{ fontWeight: 700 }}>{regime.label}</span>
           <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>FII {fmtNet(regime.fiiNet)} · DII {fmtNet(regime.diiNet)} · Net {fmtNet(regime.totalNet)}</span>
+          {regime.derivatives && (
+            <span title={`FII index-futures positioning as of ${regime.derivatives.date}: ${regime.derivatives.futLong?.toLocaleString('en-IN')} long / ${regime.derivatives.futShort?.toLocaleString('en-IN')} short contracts (Δ net ${regime.derivatives.deltaNet?.toLocaleString('en-IN')} over the period)`}
+              style={{ fontSize: '0.82rem', color: regime.derivatives.lean === 'net long' ? '#6ee7b7' : regime.derivatives.lean === 'net short' ? '#fca5a5' : 'var(--text-secondary)' }}>
+              FII idx-fut {regime.derivatives.lean} · L/S {regime.derivatives.ratio ?? '—'}
+            </span>
+          )}
           {data && <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{data.universeSize} stocks · {data.excludedCount} surveillance excluded</span>}
         </div>
+      )}
+
+      {/* Daily-snapshot diff (default weights) — what changed since the last snapshot */}
+      {hist?.prev && (
+        <div className="glass-panel" style={{ padding: '0.85rem 1.25rem', marginBottom: '1rem', fontSize: '0.8rem', display: 'flex', gap: '1.25rem', flexWrap: 'wrap', alignItems: 'baseline' }}>
+          <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}
+            title="Daily default-weight top-25 snapshots — independent of your slider settings">
+            Snapshot {hist.latest.date} vs {hist.prev.date}
+          </span>
+          <span>
+            New:{' '}
+            {hist.entrants.length ? hist.entrants.map((p, i) => (
+              <span key={p.symbol}>{i > 0 && ', '}<span onClick={() => openInstrument(p.symbol)} style={{ color: '#6ee7b7', fontWeight: 700, cursor: 'pointer' }}>{p.symbol}</span><span style={{ color: 'var(--text-secondary)' }}> #{p.rank}</span></span>
+            )) : <span style={{ color: 'var(--text-secondary)' }}>none</span>}
+          </span>
+          <span>
+            Dropped:{' '}
+            {hist.dropouts.length ? hist.dropouts.map((p, i) => (
+              <span key={p.symbol}>{i > 0 && ', '}<span onClick={() => openInstrument(p.symbol)} style={{ color: '#fca5a5', cursor: 'pointer' }}>{p.symbol}</span></span>
+            )) : <span style={{ color: 'var(--text-secondary)' }}>none</span>}
+          </span>
+          {hist.newTop10.size > 0 && (
+            <span style={{ color: '#fbbf24', fontWeight: 700 }}>⚡ New in top 10: {[...hist.newTop10].join(', ')}</span>
+          )}
+        </div>
+      )}
+      {history?.available === false && (
+        <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: '0 0 1rem', fontStyle: 'italic' }}>
+          Pick history is off — {history.hint}
+        </p>
       )}
 
       {loading ? <div className="loader" /> : error ? (
@@ -246,12 +377,19 @@ export default function StockPicks() {
         <div className="glass-panel" style={{ padding: '1.5rem', color: 'var(--text-secondary)' }}>No stocks for this period. Try a wider lookback or a different date.</div>
       ) : (
         <>
-          {/* AI brief */}
-          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '1rem' }}>
+          {/* AI brief + export + crowding warning */}
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap' }}>
             <button onClick={genSummary} disabled={summarizing} style={{ ...btn(false), background: summarizing ? 'rgba(56,189,248,0.2)' : 'var(--accent)', color: summarizing ? 'var(--text-secondary)' : '#04141f', fontWeight: 700 }}>
               {summarizing ? 'Generating…' : '✨ Generate AI brief'}
             </button>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Narrates the deterministic top {Math.min(topN, 25)} — does not change the ranking.</span>
+            <button onClick={exportCsv} style={{ ...btn(false), marginLeft: 'auto' }}>⬇ CSV</button>
+            {sectorWarn && (
+              <span title="Crowded momentum in one sector is a concentration risk — the composite doesn't penalize it"
+                style={{ fontSize: '0.78rem', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.35)', borderRadius: '6px', padding: '0.25rem 0.6rem' }}>
+                ⚠ {sectorWarn.share}% of top {top.length} is {sectorWarn.name}
+              </span>
+            )}
           </div>
           {summary && (
             <div className="glass-panel" style={{ padding: '1.1rem 1.4rem', marginBottom: '1.25rem', lineHeight: 1.6, fontSize: '0.9rem' }}>
@@ -280,6 +418,8 @@ export default function StockPicks() {
                     <td style={{ padding: '0.5rem 0.7rem', color: 'var(--text-secondary)', fontWeight: 700 }} title={`Composite rank #${r.rank}`}>{idx + 1}</td>
                     <td style={{ padding: '0.5rem 0.7rem' }}>
                       <span onClick={() => openInstrument(r.symbol)} style={{ color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}>{r.symbol}</span>
+                      {held.has(r.symbol) && <span title="In your Kite holdings" style={{ marginLeft: '0.4rem', fontSize: '0.65rem', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.4)', borderRadius: '4px', padding: '0 0.3rem' }}>held</span>}
+                      {hist?.newTop10.has(r.symbol) && <span title={`Entered the daily default-weight top 10 on ${hist.latest.date}`} style={{ marginLeft: '0.4rem', fontSize: '0.65rem', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.4)', borderRadius: '4px', padding: '0 0.3rem' }}>new↑10</span>}
                       {r.factors.trapRisk && <span title={r.factors.trapReason} style={{ marginLeft: '0.4rem', fontSize: '0.65rem', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.4)', borderRadius: '4px', padding: '0 0.3rem' }}>⚠ trap</span>}
                       {(() => { const nm = metaMap[r.symbol]?.name || (r.name !== r.symbol ? r.name : null); return nm ? <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nm}</div> : null })()}
                     </td>
@@ -298,6 +438,7 @@ export default function StockPicks() {
                       {r.factors.madeNewHigh && <span style={{ color: '#34d399' }}>52wH </span>}
                       {r.factors.authenticity != null && <span title="volume authenticity">vA{r.factors.authenticity} </span>}
                       {r.factors.dealsNetValueCr ? <span style={{ color: r.factors.dealsNetValueCr > 0 ? '#34d399' : '#ef4444' }}>{fmtCr(r.factors.dealsNetValueCr)}</span> : null}
+                      {(hist?.streaks[r.symbol] ?? 0) >= 2 && <span title={`${hist.streaks[r.symbol]} consecutive days in the daily top-25 snapshot`} style={{ color: '#fbbf24' }}> ★{hist.streaks[r.symbol]}d</span>}
                     </td>
                   </tr>
                 ))}

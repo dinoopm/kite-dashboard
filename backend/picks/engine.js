@@ -57,21 +57,23 @@ async function buildFactorUniverse({ from, to }) {
     .order('trade_date', { ascending: false }).limit(1);
   const snapDate = snapRow?.[0]?.trade_date || null;
 
-  const [gl, vg, ld, fii, surv, sectors, fw] = await Promise.all([
+  const [gl, vg, ld, fii, poi, surv, sectors, fw] = await Promise.all([
     fetchAll('top_gainers_losers', 'symbol,trade_date,category,pct_change,ltp', inPeriod),
     fetchAll('volume_gainers', 'symbol,trade_date,week1_vol_change,week2_vol_change,pct_change,ltp,turnover', inPeriod),
     fetchAll('large_deals', 'symbol,trade_date,deal_type,quantity,price,client_name', inPeriod),
     fetchAll('fii_dii_activity', 'trade_date,fii_net,dii_net', inPeriod),
+    fetchAll('participant_oi', 'trade_date,future_index_long,future_index_short', (q) => inPeriod(q).eq('client_type', 'FII')),
     fetchAll('surveillance_stocks', 'symbol,measure,stage'),
     fetchAll('sector_constituents', 'symbol,name,sector_key'),
-    snapDate ? fetchAll('nse_52_week_high_low', 'symbol,adjusted_52_week_high,high_date,adjusted_52_week_low,low_date', (q) => q.eq('trade_date', snapDate)) : Promise.resolve([]),
+    snapDate ? fetchAll('nse_52_week_high_low', 'symbol,series,company_name,adjusted_52_week_high,high_date,adjusted_52_week_low,low_date', (q) => q.eq('trade_date', snapDate)) : Promise.resolve([]),
   ]);
 
   // Lookup maps
   const survSet = new Map(surv.map(s => [s.symbol, s.measure || 'ASM']));
   const sectorMap = new Map();
   for (const s of sectors) if (!sectorMap.has(s.symbol)) sectorMap.set(s.symbol, { name: s.name, sector: s.sector_key });
-  const fwMap = new Map(fw.map(r => [r.symbol, r]));
+  const fwMap = new Map();
+  for (const r of fw) if (r.symbol && (!fwMap.has(r.symbol) || r.series === 'EQ')) fwMap.set(r.symbol, r);
 
   // Per-symbol accumulators (only for "active" symbols: gainers/losers, volume, deals)
   const A = new Map();
@@ -107,6 +109,15 @@ async function buildFactorUniverse({ from, to }) {
     const val = (r.quantity || 0) * (r.price || 0);
     if (r.deal_type === 'BUY') { a.buyVal += val; if (r.client_name) a.buyers.add(r.client_name); }
     else if (r.deal_type === 'SELL') a.sellVal += val;
+  }
+  // Universe seeding: the movers/deals feeds only surface "active" names, which
+  // misses stocks quietly printing fresh 52-week highs (or lows). Any EQ symbol
+  // whose 52-week high/low date falls inside the window joins the universe too.
+  for (const r of fw) {
+    if (!r.symbol || (r.series && r.series !== 'EQ')) continue;
+    const freshHigh = r.high_date && r.high_date >= from && r.high_date <= to;
+    const freshLow = r.low_date && r.low_date >= from && r.low_date <= to;
+    if (freshHigh || freshLow) get(r.symbol);
   }
 
   // ─── Build per-symbol factor rows ──────────────────────────────────────────
@@ -155,18 +166,23 @@ async function buildFactorUniverse({ from, to }) {
     const low = fwr?.adjusted_52_week_low ?? null;
     const madeNewHigh = !!(fwr?.high_date && fwr.high_date >= from && fwr.high_date <= to);
     const madeNewLow = !!(fwr?.low_date && fwr.low_date >= from && fwr.low_date <= to);
-    const nearHighPct = (a.lastLtp != null && high) ? clamp01(a.lastLtp / high) : null;   // 1.0 = at 52w high
+    // Proximity needs a price from near the window end — the movers-feed LTP can
+    // be weeks old in a long lookback (spike-then-fade names would look strong).
+    const ltpFresh = a.lastLtpDate && (new Date(to) - new Date(a.lastLtpDate)) <= 7 * 86400000;
+    const nearHighPct = (ltpFresh && a.lastLtp != null && high) ? clamp01(a.lastLtp / high) : null; // 1.0 = at 52w high
     const fiftyTwoRaw = (madeNewHigh ? 1 : 0) - (madeNewLow ? 1 : 0) + (nearHighPct != null ? (nearHighPct - 0.8) : 0);
 
-    // Institutional accumulation
+    // Institutional accumulation — net large-deal buy value with a breadth
+    // multiplier, so five buyers beat one whale writing the same cheque.
     const dealsNetValue = a.buyVal - a.sellVal;          // ₹ (qty × price)
     const dealBuyers = a.buyers.size;
-    const dealsRaw = dealsNetValue;                      // percentile-ranked client-side
+    const breadthBoost = 1 + 0.3 * Math.log1p(Math.max(0, dealBuyers - 1));
+    const dealsRaw = dealsNetValue > 0 ? dealsNetValue * breadthBoost : dealsNetValue; // percentile-ranked client-side
 
     const info = sectorMap.get(symbol) || {};
     stocks.push({
       symbol,
-      name: info.name || symbol,
+      name: info.name || fwr?.company_name || symbol,
       sector: info.sector || null,
       lastLtp: round(a.lastLtp),
       factors: {
@@ -183,18 +199,117 @@ async function buildFactorUniverse({ from, to }) {
   const fiiNet = round(fii.reduce((s, r) => s + (r.fii_net || 0), 0), 0);
   const diiNet = round(fii.reduce((s, r) => s + (r.dii_net || 0), 0), 0);
   const totalNet = round((fiiNet || 0) + (diiNet || 0), 0);
-  const regimeLabel = totalNet > 5000 ? 'Risk-on — net institutional buying'
-    : totalNet < -5000 ? 'Risk-off — net institutional selling'
-    : 'Neutral / mixed institutional flows';
+
+  // FII index-futures positioning (participant OI) sharpens the regime read:
+  // cash flows say what institutions DID, futures say how they're POSITIONED.
+  let derivatives = null;
+  if (poi.length) {
+    const rows = [...poi].sort((a, b) => (a.trade_date < b.trade_date ? -1 : 1));
+    const first = rows[0], last = rows[rows.length - 1];
+    const net = (last.future_index_long || 0) - (last.future_index_short || 0);
+    const ratio = last.future_index_short ? (last.future_index_long || 0) / last.future_index_short : null;
+    const lean = ratio == null ? 'balanced' : ratio >= 1.05 ? 'net long' : ratio <= 0.95 ? 'net short' : 'balanced';
+    derivatives = {
+      date: last.trade_date, futLong: last.future_index_long, futShort: last.future_index_short,
+      net, ratio: round(ratio, 2), lean,
+      deltaNet: net - ((first.future_index_long || 0) - (first.future_index_short || 0)),
+    };
+  }
+  const cashScore = totalNet > 5000 ? 1 : totalNet < -5000 ? -1 : 0;
+  const derivScore = !derivatives ? 0 : derivatives.lean === 'net long' ? 1 : derivatives.lean === 'net short' ? -1 : 0;
+  const score = cashScore + derivScore;
+  const regimeLabel = !derivatives
+    ? (cashScore > 0 ? 'Risk-on — net institutional buying'
+      : cashScore < 0 ? 'Risk-off — net institutional selling'
+      : 'Neutral / mixed institutional flows')
+    : score >= 2 ? 'Risk-on — cash buying + FII long index futures'
+    : score <= -2 ? 'Risk-off — cash selling + FII short index futures'
+    : score === 1 ? 'Tilted risk-on — cash flows and FII futures partly aligned'
+    : score === -1 ? 'Tilted risk-off — cash flows and FII futures partly aligned'
+    : (cashScore !== 0 ? 'Mixed — cash flows and FII futures positioning diverge'
+      : 'Neutral / mixed institutional positioning');
 
   return {
     period: { from, to, snapshot, tradingDays: periodDays, fiftyTwoSnapshotDate: snapDate },
-    regime: { fiiNet, diiNet, totalNet, label: regimeLabel },
+    regime: { fiiNet, diiNet, totalNet, score, derivatives, label: regimeLabel },
     excludedCount, excludedSample,
     universeSize: stocks.length,
     generatedAt: new Date().toISOString(),
     stocks,
   };
+}
+
+// ─── Server-side ranking + daily top-25 snapshots (track record) ─────────────
+// Snapshots always use DEFAULT_WEIGHTS and trap-exclusion so the stored history
+// is one deterministic series, regardless of what sliders a user plays with.
+const DEFAULT_WEIGHTS = { momentum: 30, volume: 25, fiftyTwo: 20, deals: 25 };
+const FACTOR_RAW = { momentum: 'momentumRaw', volume: 'volumeRaw', fiftyTwo: 'fiftyTwoRaw', deals: 'dealsRaw' };
+
+// Mid-rank percentiles — same math as the client so snapshots match the UI.
+function midRankPercentiles(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const n = sorted.length;
+  return values.map(v => {
+    let lo = 0, hi = n;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < v) lo = mid + 1; else hi = mid; }
+    const first = lo;
+    hi = n;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] <= v) lo = mid + 1; else hi = mid; }
+    return n ? ((first + lo) / 2 / n) * 100 : 0;
+  });
+}
+
+function rankUniverse(stocks, weights = DEFAULT_WEIGHTS, { excludeTraps = true } = {}) {
+  const pool = excludeTraps ? stocks.filter(s => !s.factors.trapRisk) : stocks;
+  const keys = Object.keys(FACTOR_RAW);
+  const cols = {};
+  for (const k of keys) cols[k] = midRankPercentiles(pool.map(s => s.factors[FACTOR_RAW[k]] ?? 0));
+  const sumW = keys.reduce((a, k) => a + (weights[k] || 0), 0) || 1;
+  return pool
+    .map((s, i) => {
+      const pct = {}; let composite = 0;
+      for (const k of keys) { pct[k] = cols[k][i]; composite += (weights[k] / sumW) * pct[k]; }
+      return { ...s, pct, composite };
+    })
+    .sort((a, b) => b.composite - a.composite)
+    .map((r, i) => ({ ...r, rank: i + 1 }));
+}
+
+// Persist the default-weight top 25 for one data-day. Table comes from
+// backend/migrate_pick_snapshots.js; a missing table surfaces as an error the
+// caller downgrades to a log line.
+async function saveDailySnapshot(universe) {
+  const snapDate = universe.period.fiftyTwoSnapshotDate || universe.period.to;
+  const top = rankUniverse(universe.stocks).slice(0, 25);
+  if (!top.length) return { snapDate, saved: 0 };
+  const rows = top.map(r => ({
+    snap_date: snapDate, symbol: r.symbol, rank: r.rank,
+    composite: +r.composite.toFixed(2),
+    momentum_pct: +r.pct.momentum.toFixed(1), volume_pct: +r.pct.volume.toFixed(1),
+    fifty_two_pct: +r.pct.fiftyTwo.toFixed(1), deals_pct: +r.pct.deals.toFixed(1),
+    trap_risk: !!r.factors.trapRisk, last_ltp: r.lastLtp,
+  }));
+  const { error } = await supabase.from('stock_pick_snapshots').upsert(rows, { onConflict: 'snap_date,symbol' });
+  if (error) throw new Error(`stock_pick_snapshots: ${error.message}`);
+  return { snapDate, saved: rows.length };
+}
+
+// Snapshot history grouped by date (newest first) for the diff/streak view.
+async function fetchSnapshotHistory(sinceDate) {
+  const { data, error } = await supabase
+    .from('stock_pick_snapshots')
+    .select('snap_date,symbol,rank,composite,trap_risk,last_ltp')
+    .gte('snap_date', sinceDate)
+    .order('snap_date', { ascending: false })
+    .order('rank', { ascending: true })
+    .limit(5000);
+  if (error) throw new Error(`stock_pick_snapshots: ${error.message}`);
+  const byDate = new Map();
+  for (const r of data || []) {
+    if (!byDate.has(r.snap_date)) byDate.set(r.snap_date, []);
+    byDate.get(r.snap_date).push({ symbol: r.symbol, rank: r.rank, composite: r.composite, trapRisk: r.trap_risk, lastLtp: r.last_ltp });
+  }
+  return [...byDate.entries()].map(([date, picks]) => ({ date, picks }));
 }
 
 // ─── AI brief — narrates the already-ranked deterministic output (Groq) ─────
@@ -213,7 +328,7 @@ Rules:
 async function generatePicksSummary({ period, regime, weights, picks }) {
   const user = [
     `Period: ${period.from} to ${period.to}${period.snapshot ? ' (single-day snapshot)' : ` (${period.tradingDays} trading days)`}.`,
-    `Market regime: FII net ₹${regime.fiiNet} cr, DII net ₹${regime.diiNet} cr, combined ₹${regime.totalNet} cr — ${regime.label}.`,
+    `Market regime: FII net ₹${regime.fiiNet} cr, DII net ₹${regime.diiNet} cr, combined ₹${regime.totalNet} cr${regime.derivatives ? `; FII index-futures ${regime.derivatives.lean} (long/short ratio ${regime.derivatives.ratio}, net ${regime.derivatives.net} contracts, Δ ${regime.derivatives.deltaNet} over the period)` : ''} — ${regime.label}.`,
     `Active factor weights: ${JSON.stringify(weights)}.`,
     `Top ranked stocks (composite + factor breakdown):`,
     JSON.stringify(picks, null, 2),
@@ -231,4 +346,7 @@ async function generatePicksSummary({ period, regime, weights, picks }) {
   return contentToString(resp.content).trim();
 }
 
-module.exports = { buildFactorUniverse, generatePicksSummary, PICKS_SYSTEM_PROMPT };
+module.exports = {
+  buildFactorUniverse, generatePicksSummary, PICKS_SYSTEM_PROMPT,
+  DEFAULT_WEIGHTS, rankUniverse, saveDailySnapshot, fetchSnapshotHistory,
+};

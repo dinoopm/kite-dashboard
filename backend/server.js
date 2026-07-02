@@ -5046,12 +5046,31 @@ app.post('/api/chat', async (req, res) => {
 });
 
 // ─── Quant Stock-Picks (deterministic factor ranking + AI brief) ──────────────
-const { buildFactorUniverse, generatePicksSummary } = require('./picks/engine');
+const { buildFactorUniverse, generatePicksSummary, saveDailySnapshot, fetchSnapshotHistory } = require('./picks/engine');
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const picksCache = {}; // `${from}|${to}` -> { data, ts }
 const PICKS_TTL = 10 * 60 * 1000; // 10 min
 
+// Daily default-weight top-25 snapshot → the model's out-of-sample track record
+// (stock_pick_snapshots, see migrate_pick_snapshots.js). Fired lazily on the
+// first picks request of each server-day; the table missing just logs a hint.
+const picksIsoDay = (off = 0) => { const d = new Date(); d.setDate(d.getDate() - off); return d.toISOString().slice(0, 10); };
+let lastPickSnapshotDay = null;
+async function runDailyPickSnapshot() {
+  const universe = await buildFactorUniverse({ from: picksIsoDay(30), to: picksIsoDay(1) });
+  return saveDailySnapshot(universe);
+}
+function ensureDailyPickSnapshot() {
+  const day = picksIsoDay(0);
+  if (lastPickSnapshotDay === day) return;
+  lastPickSnapshotDay = day; // one attempt per server-day, even on failure
+  runDailyPickSnapshot()
+    .then(r => console.log(`[stock-picks] daily snapshot ${r.snapDate}: ${r.saved} rows`))
+    .catch(err => console.error('[stock-picks] snapshot skipped:', err.message));
+}
+
 app.get('/api/stock-picks', async (req, res) => {
+  ensureDailyPickSnapshot();
   // ?date=YYYY-MM-DD for a single-day snapshot, or ?from=&to= for a lookback.
   const date = req.query.date;
   const from = date || req.query.from;
@@ -5095,6 +5114,33 @@ app.post('/api/stock-picks/meta', async (req, res) => {
     chunk.forEach((s, j) => { out[s] = metas[j] || { sector: null, name: null }; });
   }
   res.json(out);
+});
+
+// Snapshot history for the diff/streak panel. `available:false` (not an error)
+// when the table hasn't been created yet, so the UI can show a setup hint.
+app.get('/api/stock-picks/history', async (req, res) => {
+  const days = Math.min(120, Math.max(2, parseInt(req.query.days, 10) || 45));
+  try {
+    const since = picksIsoDay(days);
+    const dates = await fetchSnapshotHistory(since);
+    res.json({ available: true, dates });
+  } catch (err) {
+    if (/does not exist|schema cache/i.test(err.message)) {
+      return res.json({ available: false, hint: 'Run `node backend/migrate_pick_snapshots.js` and paste the SQL into the Supabase SQL editor to enable pick history.' });
+    }
+    console.error('[stock-picks/history]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Manual snapshot trigger (also usable from cron alongside the scrapers).
+app.post('/api/stock-picks/snapshot', async (req, res) => {
+  try {
+    res.json(await runDailyPickSnapshot());
+  } catch (err) {
+    console.error('[stock-picks/snapshot]', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/stock-picks/summary', async (req, res) => {
