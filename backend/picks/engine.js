@@ -19,6 +19,21 @@ const mean = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const round = (v, p = 2) => (v == null || !isFinite(v) ? null : +v.toFixed(p));
 
+// Set-returning RPCs are row-capped like selects; page them the same way.
+async function rpcAll(fn, args) {
+  const PAGE = 1000;
+  let offset = 0;
+  const out = [];
+  for (;;) {
+    const { data, error } = await supabase.rpc(fn, args).range(offset, offset + PAGE - 1);
+    if (error) throw new Error(`${fn}: ${error.message}`);
+    out.push(...(data || []));
+    if (!data || data.length < PAGE) break;
+    offset += PAGE;
+  }
+  return out;
+}
+
 // Supabase caps a select at 1000 rows; page through with .range() to get all.
 async function fetchAll(table, cols, applyFilters) {
   const PAGE = 1000;
@@ -57,7 +72,7 @@ async function buildFactorUniverse({ from, to }) {
     .order('trade_date', { ascending: false }).limit(1);
   const snapDate = snapRow?.[0]?.trade_date || null;
 
-  const [gl, vg, ld, fii, poi, surv, sectors, fw] = await Promise.all([
+  const [gl, vg, ld, fii, poi, surv, sectors, fw, dlv] = await Promise.all([
     fetchAll('top_gainers_losers', 'symbol,trade_date,category,pct_change,ltp', inPeriod),
     fetchAll('volume_gainers', 'symbol,trade_date,week1_vol_change,week2_vol_change,pct_change,ltp,turnover', inPeriod),
     fetchAll('large_deals', 'symbol,trade_date,deal_type,quantity,price,client_name', inPeriod),
@@ -66,6 +81,10 @@ async function buildFactorUniverse({ from, to }) {
     fetchAll('surveillance_stocks', 'symbol,measure,stage'),
     fetchAll('sector_constituents', 'symbol,name,sector_key'),
     snapDate ? fetchAll('nse_52_week_high_low', 'symbol,series,company_name,adjusted_52_week_high,high_date,adjusted_52_week_low,low_date', (q) => q.eq('trade_date', snapDate)) : Promise.resolve([]),
+    // Delivery-conviction stats (bhavcopy, via SQL fn — see migrate_picks_delivery_fn.js).
+    // Missing function/table degrades to null: delivery signals simply stay off.
+    rpcAll('picks_delivery_stats', { p_from: from, p_to: to })
+      .catch(err => { console.warn('[picks] delivery stats unavailable:', err.message); return null; }),
   ]);
 
   // Lookup maps
@@ -74,6 +93,7 @@ async function buildFactorUniverse({ from, to }) {
   for (const s of sectors) if (!sectorMap.has(s.symbol)) sectorMap.set(s.symbol, { name: s.name, sector: s.sector_key });
   const fwMap = new Map();
   for (const r of fw) if (r.symbol && (!fwMap.has(r.symbol) || r.series === 'EQ')) fwMap.set(r.symbol, r);
+  const dlvMap = dlv ? new Map(dlv.map(r => [r.symbol, r])) : null;
 
   // Per-symbol accumulators (only for "active" symbols: gainers/losers, volume, deals)
   const A = new Map();
@@ -146,20 +166,44 @@ async function buildFactorUniverse({ from, to }) {
     const persistence = snapshot ? 0.5 : clamp01(volSurgeDays / Math.min(periodDays, 5));
     // (c) churn penalty: flip-flopping gainer<->loser with heavy volume.
     const churnRatio = (gainerDays + loserDays) ? Math.min(gainerDays, loserDays) / (gainerDays + loserDays) : 0;
+    // (d) delivery corroboration: volume that nobody keeps is intraday churn.
+    //     ~40%+ delivered = fully convincing; ~10% = day-trading noise.
+    const d = dlvMap ? dlvMap.get(symbol) : null;
+    const avgDeliv = d?.avg_deliv ?? null;
+    const deliveryScore = avgDeliv != null ? clamp01(avgDeliv / 40) : null;
     // Authenticity is only meaningful when there's actually a volume surge to judge.
     const authenticity = volSurgeDays > 0
-      ? clamp01(0.5 * corroboration + 0.3 * persistence + 0.2 * (1 - churnRatio))
+      ? clamp01(deliveryScore != null
+        ? 0.4 * corroboration + 0.25 * persistence + 0.15 * (1 - churnRatio) + 0.2 * deliveryScore
+        : 0.5 * corroboration + 0.3 * persistence + 0.2 * (1 - churnRatio))
       : null;
     const volumeRaw = authenticity != null ? rawVolStrength * authenticity : 0; // faked volume can't pump the factor
     const bigSurge = avgW1 > 100;                        // volume more than doubled
     const trapRisk = volSurgeDays > 0 && bigSurge && authenticity < 0.45;
     let trapReason = null;
     if (trapRisk) {
-      if (corroboration < 0.4) trapReason = `vol +${Math.round(avgW1)}% but price ~flat (${round(avgAbsPctOnVol, 1)}% avg move)`;
+      if (avgDeliv != null && avgDeliv < 15) trapReason = `heavy volume but only ${avgDeliv}% delivered (intraday churn)`;
+      else if (corroboration < 0.4) trapReason = `vol +${Math.round(avgW1)}% but price ~flat (${round(avgAbsPctOnVol, 1)}% avg move)`;
       else if (churnRatio > 0.3) trapReason = `churn: ${gainerDays} up / ${loserDays} down days`;
       else if (!snapshot && persistence < 0.4) trapReason = `one-day blip (vol-gainer ${volSurgeDays}/${periodDays}d)`;
       else trapReason = `low-conviction volume surge`;
     }
+
+    // Delivery-conviction traps (bhavcopy, last ~20 sessions, EQ only):
+    // circuit ladder — repeatedly locked at the upper band on thin turnover
+    // (low-float FOMO ramp); distribution — price up while delivery % falls
+    // (buyers aren't keeping shares; operators offloading into the rally).
+    const circuitDays = d?.circuit_days ?? 0;
+    const circuitLadder = circuitDays >= 3 && d?.avg_turnover_lacs != null && d.avg_turnover_lacs < 1000;
+    const circuitReason = circuitLadder
+      ? `${circuitDays} of the last 15 sessions closed locked at the upper band on thin turnover (avg ₹${round(d.avg_turnover_lacs / 100, 1)} cr/day)`
+      : null;
+    const priceRun = (d?.price_ref > 0 && d?.price_last > 0) ? d.price_last / d.price_ref - 1 : null;
+    const distribution = !!(d && d.sessions >= 15 && priceRun != null && priceRun >= 0.15
+      && d.deliv_prior >= 10 && d.deliv_recent != null && d.deliv_recent < d.deliv_prior * 0.7);
+    const distributionReason = distribution
+      ? `price +${round(priceRun * 100, 0)}% over ~20 sessions while delivery fell ${d.deliv_prior}% → ${d.deliv_recent}% — buyers aren't keeping shares`
+      : null;
 
     // 52-week strength (from the latest snapshot in the window)
     const fwr = fwMap.get(symbol);
@@ -206,6 +250,7 @@ async function buildFactorUniverse({ from, to }) {
         momentumRaw: round(momentumRaw, 3), gainerDays, loserDays, avgGainPct: round(avgGainPct, 2),
         volumeRaw: round(volumeRaw, 3), rawVolStrength: round(rawVolStrength, 3), volSurgeDays,
         avgW1VolChange: round(avgW1, 1), authenticity: authenticity != null ? round(authenticity * 100, 0) : null, trapRisk, trapReason,
+        deliveryPct: avgDeliv, circuitLadder, circuitReason, distribution, distributionReason,
         fiftyTwoRaw: round(fiftyTwoRaw, 3), madeNewHigh, madeNewLow, nearHighPct: round(nearHighPct, 3),
         dealsRaw: round(dealsRaw, 0), dealsNetValueCr: round(dealsNetValue / 1e7, 2), dealBuyers,
         dealsGrossCr: round(dealsGross / 1e7, 1), dealConviction: round(dealConviction * 100, 0), dealChurn, dealChurnReason,
@@ -340,6 +385,7 @@ Rules:
 - For the top names, state which factor(s) drove the rank, citing the given numbers.
 - Explicitly call out any name flagged with trap_risk (low volume authenticity) as a caution.
 - Explicitly call out any name flagged with deal_churn (bulk deals round-tripped both ways, tiny net vs gross — the "institutional buying" is likely HFT churn, not accumulation).
+- Explicitly call out any name flagged with circuit_ladder (repeatedly locked at the upper price band on thin turnover — a low-float FOMO ramp) or distribution (price rising while delivery % falls — buyers aren't keeping shares).
 - Note risks/caveats (crowded momentum, thin breadth, reliance on a single deal, short period).
 - Be concise: a short regime paragraph, then a tight bulleted list. Markdown.
 - End with exactly: "Deterministic factor summary for research only — not investment advice."`;

@@ -18,7 +18,7 @@ const LOOKBACKS = [
 ]
 const FACTORS = [
   { key: 'momentum', raw: 'momentumRaw', label: 'Momentum', color: '#38bdf8', help: 'Net gainer days + average gain — sustained upside appearances.' },
-  { key: 'volume', raw: 'volumeRaw', label: 'Volume', color: '#a78bfa', help: 'Authenticity-adjusted volume surge (faked/churned volume down-weighted).' },
+  { key: 'volume', raw: 'volumeRaw', label: 'Volume', color: '#a78bfa', help: 'Authenticity-adjusted volume surge — price corroboration, persistence, churn and delivery % all down-weight fake/intraday-churned volume.' },
   { key: 'fiftyTwo', raw: 'fiftyTwoRaw', label: '52-Wk', color: '#34d399', help: 'New 52-week highs + proximity to the 52-week high.' },
   { key: 'deals', raw: 'dealsRaw', label: 'Institutional', color: '#fbbf24', help: 'Net large-deal buy value + buyer breadth; round-tripped/offsetting deals (HFT churn) down-weighted by net-vs-gross conviction.' },
 ]
@@ -310,6 +310,9 @@ export default function StockPicks() {
         madeNewHigh: r.factors.madeNewHigh, authenticity: r.factors.authenticity,
         dealsNetValueCr: r.factors.dealsNetValueCr, trapRisk: r.factors.trapRisk, trapReason: r.factors.trapReason,
         dealChurn: r.factors.dealChurn, dealChurnReason: r.factors.dealChurnReason,
+        circuitLadder: r.factors.circuitLadder, circuitReason: r.factors.circuitReason,
+        distribution: r.factors.distribution, distributionReason: r.factors.distributionReason,
+        deliveryPct: r.factors.deliveryPct,
       }))
       const r = await fetch('/api/stock-picks/summary', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -520,8 +523,18 @@ export default function StockPicks() {
                         {r.factors.madeNewLow && <Chip color="#ef4444" title="Set a fresh 52-week low during this period">fresh 52w low</Chip>}
                         {r.factors.authenticity != null && (
                           <Chip color={r.factors.authenticity >= 70 ? '#34d399' : r.factors.authenticity >= 45 ? '#fbbf24' : '#fca5a5'}
-                            title="Volume authenticity — how much of the volume surge is corroborated by price movement, persistent across days, and free of gainer/loser churn. Low = possibly fake/HFT-inflated volume.">
+                            title={`Volume authenticity — price corroboration, persistence across days, gainer/loser churn${r.factors.deliveryPct != null ? ` and delivery (avg ${r.factors.deliveryPct}% of traded shares actually delivered)` : ''}. Low = possibly fake/HFT-inflated volume.`}>
                             vol quality {r.factors.authenticity}%
+                          </Chip>
+                        )}
+                        {r.factors.circuitLadder && (
+                          <Chip color="#fca5a5" title={`Possible circuit-ladder ramp — ${r.factors.circuitReason}. Classic low-float FOMO setup: you can't buy until the operators sell to you.`}>
+                            circuit ladder
+                          </Chip>
+                        )}
+                        {r.factors.distribution && (
+                          <Chip color="#fbbf24" title={`Possible distribution — ${r.factors.distributionReason}.`}>
+                            delivery fading
                           </Chip>
                         )}
                         {r.factors.dealsNetValueCr ? (
