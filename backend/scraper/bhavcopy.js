@@ -48,6 +48,16 @@ const num = (s) => {
     return isFinite(n) ? n : null;
 };
 
+// '19-Jun-2026' → '2026-06-19'. The file's own DATE1 is authoritative: NSE
+// serves the previous session's file under weekend/holiday URLs, so stamping
+// rows with the REQUESTED date would store Friday prices as Sunday data.
+const MONTHS = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06', JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
+const parseFileDate = (s) => {
+    const m = (s || '').trim().match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+    if (!m || !MONTHS[m[2].toUpperCase()]) return null;
+    return `${m[3]}-${MONTHS[m[2].toUpperCase()]}-${m[1].padStart(2, '0')}`;
+};
+
 async function fetchAndSync(session, cookies, offsetDays) {
     const { dateStr, dbDate } = getISTDateString(offsetDays);
     const url = `https://archives.nseindia.com/products/content/sec_bhavdata_full_${dateStr}.csv`;
@@ -76,7 +86,7 @@ async function fetchAndSync(session, cookies, offsetDays) {
 
     const cols = lines[0].split(',').map(c => c.trim().toUpperCase());
     const idx = (name) => cols.indexOf(name);
-    const iSym = idx('SYMBOL'), iSer = idx('SERIES');
+    const iSym = idx('SYMBOL'), iSer = idx('SERIES'), iDate = idx('DATE1');
     const need = {
         prev_close: idx('PREV_CLOSE'), open: idx('OPEN_PRICE'), high: idx('HIGH_PRICE'),
         low: idx('LOW_PRICE'), last_price: idx('LAST_PRICE'), close: idx('CLOSE_PRICE'),
@@ -89,19 +99,25 @@ async function fetchAndSync(session, cookies, offsetDays) {
     }
 
     const records = [];
+    let fileDate = null;
     for (let i = 1; i < lines.length; i++) {
         const c = lines[i].split(',');
         const series = (c[iSer] || '').trim();
         if (!KEEP_SERIES.has(series)) continue;
         const symbol = (c[iSym] || '').trim();
         if (!symbol) continue;
-        const row = { trade_date: dbDate, symbol, series };
+        const rowDate = (iDate >= 0 ? parseFileDate(c[iDate]) : null) || dbDate;
+        if (!fileDate) fileDate = rowDate;
+        const row = { trade_date: rowDate, symbol, series };
         for (const [k, j] of Object.entries(need)) row[k] = j >= 0 ? num(c[j]) : null;
         records.push(row);
     }
     if (!records.length) {
         console.error(`[Bhavcopy] ${dbDate}: 0 EQ/BE rows parsed.`);
         return 'error';
+    }
+    if (fileDate !== dbDate) {
+        console.log(`[Bhavcopy] ${dbDate}: URL serves the ${fileDate} session (weekend/holiday alias) — syncing under ${fileDate}.`);
     }
 
     const BATCH = 500;
@@ -117,7 +133,7 @@ async function fetchAndSync(session, cookies, offsetDays) {
             return 'error';
         }
     }
-    console.log(`[Bhavcopy] ${dbDate}: synced ${records.length} EQ/BE rows.`);
+    console.log(`[Bhavcopy] ${fileDate}: synced ${records.length} EQ/BE rows.`);
     return 'ok';
 }
 
