@@ -81,7 +81,7 @@ async function buildFactorUniverse({ from, to }) {
     if (!A.has(sym)) A.set(sym, {
       gainerDates: new Map(), loserDates: new Set(),       // momentum
       volDates: new Set(), w1: [], volPcts: [],            // volume + authenticity
-      buyVal: 0, sellVal: 0, buyers: new Set(),            // deals
+      buyVal: 0, sellVal: 0, clientNet: new Map(),         // deals (per-client net catches round-trips)
       lastLtp: null, lastLtpDate: null,
     });
     return A.get(sym);
@@ -107,8 +107,9 @@ async function buildFactorUniverse({ from, to }) {
     if (!r.symbol) continue;
     const a = get(r.symbol);
     const val = (r.quantity || 0) * (r.price || 0);
-    if (r.deal_type === 'BUY') { a.buyVal += val; if (r.client_name) a.buyers.add(r.client_name); }
-    else if (r.deal_type === 'SELL') a.sellVal += val;
+    const name = r.client_name || '?';
+    if (r.deal_type === 'BUY') { a.buyVal += val; a.clientNet.set(name, (a.clientNet.get(name) || 0) + val); }
+    else if (r.deal_type === 'SELL') { a.sellVal += val; a.clientNet.set(name, (a.clientNet.get(name) || 0) - val); }
   }
   // Universe seeding: the movers/deals feeds only surface "active" names, which
   // misses stocks quietly printing fresh 52-week highs (or lows). Any EQ symbol
@@ -174,10 +175,26 @@ async function buildFactorUniverse({ from, to }) {
 
     // Institutional accumulation — net large-deal buy value with a breadth
     // multiplier, so five buyers beat one whale writing the same cheque.
+    // Deal-conviction guard: HFT/prop desks round-trip huge gross volumes
+    // through bulk deals (same names on both sides, net ≈ 0), which nets to a
+    // small positive that used to rank high. Conviction = |net| / gross scales
+    // that appearance of accumulation back down to its real size.
     const dealsNetValue = a.buyVal - a.sellVal;          // ₹ (qty × price)
-    const dealBuyers = a.buyers.size;
+    const dealsGross = a.buyVal + a.sellVal;
+    const netRatio = dealsGross ? Math.abs(dealsNetValue) / dealsGross : 0;
+    const dealConviction = clamp01(2 * netRatio);        // full conviction when net ≥ half of gross
+    // Breadth counts genuine accumulators: clients whose own buys−sells net ≥ ₹1 cr.
+    const dealBuyers = [...a.clientNet.values()].filter(v => v >= 1e7).length;
+    const roundTrippers = [...a.clientNet.values()].filter(v => Math.abs(v) < 1e6).length; // bought & sold ~flat
     const breadthBoost = 1 + 0.3 * Math.log1p(Math.max(0, dealBuyers - 1));
-    const dealsRaw = dealsNetValue > 0 ? dealsNetValue * breadthBoost : dealsNetValue; // percentile-ranked client-side
+    const dealChurn = dealsGross > 25e7 && netRatio < 0.15;
+    // Churned flow is noise, not a smaller signal: percentile ranking would
+    // still put any positive residue above the no-deals majority, so flagged
+    // names get zero (= neutral mid-rank), not a scaled-down positive.
+    const dealsRaw = dealChurn ? 0 : (dealsNetValue > 0 ? dealsNetValue * breadthBoost : dealsNetValue) * dealConviction;
+    const dealChurnReason = dealChurn
+      ? `₹${round(dealsGross / 1e7, 0)}cr gross traded both ways → net only ₹${round(dealsNetValue / 1e7, 1)}cr (${round(netRatio * 100, 1)}% conviction)${roundTrippers ? `; ${roundTrippers} name(s) bought & sold ~flat` : ''}`
+      : null;
 
     const info = sectorMap.get(symbol) || {};
     stocks.push({
@@ -191,6 +208,7 @@ async function buildFactorUniverse({ from, to }) {
         avgW1VolChange: round(avgW1, 1), authenticity: authenticity != null ? round(authenticity * 100, 0) : null, trapRisk, trapReason,
         fiftyTwoRaw: round(fiftyTwoRaw, 3), madeNewHigh, madeNewLow, nearHighPct: round(nearHighPct, 3),
         dealsRaw: round(dealsRaw, 0), dealsNetValueCr: round(dealsNetValue / 1e7, 2), dealBuyers,
+        dealsGrossCr: round(dealsGross / 1e7, 1), dealConviction: round(dealConviction * 100, 0), dealChurn, dealChurnReason,
       },
     });
   }
@@ -321,6 +339,7 @@ Rules:
 - Lead with a one-line market-regime read from the FII/DII flows provided.
 - For the top names, state which factor(s) drove the rank, citing the given numbers.
 - Explicitly call out any name flagged with trap_risk (low volume authenticity) as a caution.
+- Explicitly call out any name flagged with deal_churn (bulk deals round-tripped both ways, tiny net vs gross — the "institutional buying" is likely HFT churn, not accumulation).
 - Note risks/caveats (crowded momentum, thin breadth, reliance on a single deal, short period).
 - Be concise: a short regime paragraph, then a tight bulleted list. Markdown.
 - End with exactly: "Deterministic factor summary for research only — not investment advice."`;

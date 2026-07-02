@@ -20,7 +20,7 @@ const FACTORS = [
   { key: 'momentum', raw: 'momentumRaw', label: 'Momentum', color: '#38bdf8', help: 'Net gainer days + average gain — sustained upside appearances.' },
   { key: 'volume', raw: 'volumeRaw', label: 'Volume', color: '#a78bfa', help: 'Authenticity-adjusted volume surge (faked/churned volume down-weighted).' },
   { key: 'fiftyTwo', raw: 'fiftyTwoRaw', label: '52-Wk', color: '#34d399', help: 'New 52-week highs + proximity to the 52-week high.' },
-  { key: 'deals', raw: 'dealsRaw', label: 'Institutional', color: '#fbbf24', help: 'Net large-deal buy value + buyer breadth.' },
+  { key: 'deals', raw: 'dealsRaw', label: 'Institutional', color: '#fbbf24', help: 'Net large-deal buy value + buyer breadth; round-tripped/offsetting deals (HFT churn) down-weighted by net-vs-gross conviction.' },
 ]
 const DEFAULT_WEIGHTS = { momentum: 30, volume: 25, fiftyTwo: 20, deals: 25 }
 const PRESETS = [
@@ -309,6 +309,7 @@ export default function StockPicks() {
         gainerDays: r.factors.gainerDays, loserDays: r.factors.loserDays,
         madeNewHigh: r.factors.madeNewHigh, authenticity: r.factors.authenticity,
         dealsNetValueCr: r.factors.dealsNetValueCr, trapRisk: r.factors.trapRisk, trapReason: r.factors.trapReason,
+        dealChurn: r.factors.dealChurn, dealChurnReason: r.factors.dealChurnReason,
       }))
       const r = await fetch('/api/stock-picks/summary', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -525,10 +526,15 @@ export default function StockPicks() {
                         )}
                         {r.factors.dealsNetValueCr ? (
                           <Chip color={r.factors.dealsNetValueCr > 0 ? '#34d399' : '#ef4444'}
-                            title={`Net bulk/block-deal value over the period (buys − sells)${r.factors.dealBuyers ? ` · ${r.factors.dealBuyers} distinct institutional buyer(s)` : ''}`}>
+                            title={`Net bulk/block-deal value over the period (buys − sells)${r.factors.dealsGrossCr ? ` · gross ${fmtCr(r.factors.dealsGrossCr)} both ways · conviction ${r.factors.dealConviction}%` : ''}${r.factors.dealBuyers ? ` · ${r.factors.dealBuyers} client(s) with ≥₹1 cr net accumulation` : ''}`}>
                             deals {r.factors.dealsNetValueCr > 0 ? '+' : ''}{fmtCr(r.factors.dealsNetValueCr)}
                           </Chip>
                         ) : null}
+                        {r.factors.dealChurn && (
+                          <Chip color="#fca5a5" title={`Likely wash/HFT deal churn — ${r.factors.dealChurnReason}. The Institutional factor is scaled down accordingly.`}>
+                            deal churn
+                          </Chip>
+                        )}
                         {(hist?.streaks[r.symbol] ?? 0) >= 2 && (
                           <Chip color="#fbbf24" title={`In the daily default-weight top-25 snapshot for ${hist.streaks[r.symbol]} consecutive days`}>
                             top-25 ×{hist.streaks[r.symbol]}d
