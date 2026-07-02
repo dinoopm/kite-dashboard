@@ -28,6 +28,7 @@ import Week52HighLow from './pages/marketData/Week52HighLow'
 import TopGainersLosers from './pages/marketData/TopGainersLosers'
 import VolumeGainers from './pages/marketData/VolumeGainers'
 import SurveillanceStocks from './pages/marketData/SurveillanceStocks'
+import StockPicks from './pages/marketData/StockPicks'
 import MacroEconomics from './pages/marketData/MacroEconomics'
 import Navbar from './components/Navbar'
 
@@ -155,6 +156,7 @@ function App() {
           <Route path="/indices" element={<SectorIndices />} />
           <Route path="/vix" element={<VixIndex />} />
           <Route path="/chat" element={<Chat />} />
+          <Route path="/market-data/stock-picks" element={<StockPicks />} />
           <Route path="/market-data/fii-dii" element={<FiiDii />} />
           <Route path="/market-data/large-deals" element={<LargeDeals />} />
           <Route path="/market-data/52wk-high-low" element={<Week52HighLow />} />

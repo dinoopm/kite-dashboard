@@ -5045,6 +5045,72 @@ app.post('/api/chat', async (req, res) => {
   res.json(result);
 });
 
+// ─── Quant Stock-Picks (deterministic factor ranking + AI brief) ──────────────
+const { buildFactorUniverse, generatePicksSummary } = require('./picks/engine');
+const ISO = /^\d{4}-\d{2}-\d{2}$/;
+const picksCache = {}; // `${from}|${to}` -> { data, ts }
+const PICKS_TTL = 10 * 60 * 1000; // 10 min
+
+app.get('/api/stock-picks', async (req, res) => {
+  // ?date=YYYY-MM-DD for a single-day snapshot, or ?from=&to= for a lookback.
+  const date = req.query.date;
+  const from = date || req.query.from;
+  const to = date || req.query.to;
+  if (!ISO.test(from || '') || !ISO.test(to || '')) {
+    return res.status(400).json({ error: 'Provide ?date=YYYY-MM-DD or ?from=YYYY-MM-DD&to=YYYY-MM-DD' });
+  }
+  if (from > to) return res.status(400).json({ error: 'from must be on or before to' });
+  const key = `${from}|${to}`;
+  const hit = picksCache[key];
+  if (hit && Date.now() - hit.ts < PICKS_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const data = await buildFactorUniverse({ from, to });
+    picksCache[key] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[stock-picks]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Resolve real sector + company name (one Yahoo call each, cached) for the
+// displayed rows only — the full picks universe is too large to enrich, but the
+// visible top-N is cheap. Mirrors how the screener attaches sector to matches.
+const pickMetaCache = {}; // symbol -> { sector, name }
+async function getPickMeta(symbol) {
+  if (pickMetaCache[symbol] !== undefined) return pickMetaCache[symbol];
+  try {
+    const q = await yahooFinance.quoteSummary(toYahooSymbol(symbol), { modules: ['price', 'assetProfile'] });
+    pickMetaCache[symbol] = { sector: q?.assetProfile?.sector || null, name: q?.price?.longName || q?.price?.shortName || null };
+  } catch { pickMetaCache[symbol] = { sector: null, name: null }; }
+  return pickMetaCache[symbol];
+}
+app.post('/api/stock-picks/meta', async (req, res) => {
+  const symbols = [...new Set((req.body?.symbols || []).map(s => String(s).toUpperCase()))].slice(0, 60);
+  const out = {};
+  const CHUNK = 8;
+  for (let i = 0; i < symbols.length; i += CHUNK) {
+    const chunk = symbols.slice(i, i + CHUNK);
+    const metas = await Promise.all(chunk.map(s => getPickMeta(s).catch(() => null)));
+    chunk.forEach((s, j) => { out[s] = metas[j] || { sector: null, name: null }; });
+  }
+  res.json(out);
+});
+
+app.post('/api/stock-picks/summary', async (req, res) => {
+  const { period, regime, weights, picks } = req.body || {};
+  if (!period || !regime || !Array.isArray(picks) || picks.length === 0) {
+    return res.status(400).json({ error: 'period, regime and a non-empty picks array are required' });
+  }
+  try {
+    const summary = await generatePicksSummary({ period, regime, weights: weights || {}, picks: picks.slice(0, 25) });
+    res.json({ summary });
+  } catch (err) {
+    console.error('[stock-picks/summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── US market data (Alpaca) ───────────────────────────────────
 app.use('/api/us', alpacaRouter);
 

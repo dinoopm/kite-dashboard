@@ -274,4 +274,6 @@ async function runSqlAgent(question) {
   }
 }
 
-module.exports = { runSqlAgent };
+// `llm`, `withTimeout`, `contentToString` are reused by the stock-picks AI brief
+// (backend/picks/engine.js) so the whole app shares one Groq client + config.
+module.exports = { runSqlAgent, llm, withTimeout, contentToString };

@@ -5,6 +5,7 @@ import Logo from './Logo';
 
 // Sublinks under the "Market Data" dropdown. Adding more is a one-liner.
 const MARKET_DATA_LINKS = [
+  { to: '/market-data/stock-picks',         label: '★ Quant Stock Picks',       hint: 'Deterministic factor ranking across all feeds for a chosen period.' },
   { to: '/market-data/fii-dii',             label: 'FII / DII Activities',      hint: 'Daily institutional cash-market flows.' },
   { to: '/market-data/large-deals',         label: 'Large Deals',               hint: 'NSE bulk and block deal disclosures by named entities.' },
   { to: '/market-data/52wk-high-low',       label: '52-Week High / Low',        hint: 'Daily snapshot of stocks at or near their yearly extremes.' },
