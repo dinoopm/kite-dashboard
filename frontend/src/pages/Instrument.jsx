@@ -1127,25 +1127,6 @@ function Instrument() {
         </div>
       </header>
 
-      {/* Today's Change */}
-      {quote && (
-        <section className="grid" style={{ marginBottom: '1rem' }}>
-          <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-            <span className="label" style={{ fontSize: '0.85rem' }}>Current Price</span>
-            <span className="value" style={{ fontSize: '1.25rem' }}>₹{quote.last_price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
-          </div>
-          <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-            <span className="label" style={{ fontSize: '0.85rem' }}>Prev. Close</span>
-            <span className="value" style={{ fontSize: '1.25rem' }}>₹{quote.ohlc.close.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
-          </div>
-          <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
-            <span className="label" style={{ fontSize: '0.85rem' }}>Today's Change</span>
-            <span className={`value ${todayChange >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.25rem' }}>
-              {todayChange >= 0 ? '+' : ''}₹{todayChange.toFixed(2)} ({todayChangePct}%)
-            </span>
-          </div>
-        </section>
-      )}
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '1rem', borderBottom: '1px solid var(--border)', marginBottom: '1.5rem', paddingBottom: '0.25rem' }}>
@@ -1579,6 +1560,26 @@ function Instrument() {
               />
             )}
           </section>
+
+          {/* Price snapshot — moved below Technical Alerts */}
+          {quote && (
+            <section className="grid" style={{ marginBottom: '1rem' }}>
+              <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                <span className="label" style={{ fontSize: '0.85rem' }}>Current Price</span>
+                <span className="value" style={{ fontSize: '1.25rem' }}>₹{quote.last_price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+              </div>
+              <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                <span className="label" style={{ fontSize: '0.85rem' }}>Prev. Close</span>
+                <span className="value" style={{ fontSize: '1.25rem' }}>₹{quote.ohlc.close.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+              </div>
+              <div className="glass-panel stat-card" style={{ padding: '1rem' }}>
+                <span className="label" style={{ fontSize: '0.85rem' }}>Today's Change</span>
+                <span className={`value ${todayChange >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.25rem' }}>
+                  {todayChange >= 0 ? '+' : ''}₹{todayChange.toFixed(2)} ({todayChangePct}%)
+                </span>
+              </div>
+            </section>
+          )}
 
           {/* Period stats */}
           {!loading && !error && data.length > 0 && timeframe !== '1D' && (
