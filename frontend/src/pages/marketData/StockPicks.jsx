@@ -75,7 +75,7 @@ const fmtMcap = (cr) => (cr == null ? '—' : `₹${Number(cr).toLocaleString('e
 function qualityChip(m) {
   if (!m) return null
   const f = (v, mul = 1, suf = '') => (v == null ? '—' : `${(v * mul).toFixed(1)}${suf}`)
-  const tip = `ROE ${f(m.roe, 100, '%')} · D/E ${m.debtToEquity != null ? (m.debtToEquity / 100).toFixed(2) : '—'} · net margin ${f(m.profitMargins, 100, '%')} · P/E ${f(m.trailingPE)} — Yahoo fundamentals, shown for context only (not part of the score)`
+  const tip = `ROE ${f(m.roe, 100, '%')} · D/E ${m.debtToEquity != null ? (m.debtToEquity / 100).toFixed(2) : '—'} · net margin ${f(m.profitMargins, 100, '%')} · P/E ~${f(m.trailingPE)} (Yahoo TTM, can lag a quarter) — context only, not part of the score`
   // Leverage rules don't apply to banks/NBFCs — borrowing IS their business.
   const financial = /financial/i.test(m.sector || '')
   if (m.profitMargins != null && m.profitMargins < 0) return { color: '#fca5a5', tip, text: 'loss-making' }
