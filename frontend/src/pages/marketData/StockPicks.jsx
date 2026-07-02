@@ -285,6 +285,20 @@ export default function StockPicks() {
     URL.revokeObjectURL(a.href)
   }
 
+  // Forward-return validation (backend reconstructs past picks vs what happened).
+  const [bt, setBt] = useState(null)
+  const [btLoading, setBtLoading] = useState(false)
+  const [btError, setBtError] = useState(null)
+  const runValidation = async () => {
+    setBtLoading(true); setBtError(null)
+    try {
+      const r = await fetch('/api/stock-picks/backtest')
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
+      setBt(j)
+    } catch (e) { setBtError(e.message) } finally { setBtLoading(false) }
+  }
+
   const genSummary = async () => {
     setSummarizing(true); setSummary(null)
     try {
@@ -534,6 +548,74 @@ export default function StockPicks() {
           </p>
         </>
       )}
+
+      {/* Model validation — did past picks actually outperform? */}
+      <div className="glass-panel" style={{ marginTop: '1.5rem', padding: '1rem 1.25rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Model Validation</span>
+          <button onClick={runValidation} disabled={btLoading} style={btn(false)}>
+            {btLoading ? 'Running…' : bt ? '↻ Re-run' : 'Run forward-return backtest'}
+          </button>
+          {bt && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              {bt.period.evalDates} eval dates · {bt.period.firstEval} → {bt.period.lastEval} · default weights, traps excluded{bt.cached ? ' · cached' : ''}
+            </span>
+          )}
+          {btError && <span style={{ color: '#ef4444', fontSize: '0.8rem' }}>{btError}</span>}
+          {!bt && !btLoading && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              Reconstructs past top-25s and measures 5/10/20-day forward returns vs the universe median, plus per-factor predictive power.
+            </span>
+          )}
+        </div>
+        {bt && (() => {
+          const fLabel = { momentum: 'Momentum', volume: 'Volume', fiftyTwo: '52-Wk', deals: 'Institutional', composite: 'Composite' }
+          const sign = (v, suffix = '%') => (v == null ? '—' : <span style={{ color: v > 0 ? '#34d399' : v < 0 ? '#fca5a5' : 'var(--text-secondary)' }}>{v > 0 ? '+' : ''}{v}{suffix}</span>)
+          const cell = { padding: '0.35rem 0.6rem', fontSize: '0.8rem' }
+          const th = { ...cell, color: 'var(--text-secondary)', textAlign: 'left', fontWeight: 600 }
+          return (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem', marginTop: '1rem' }}>
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>Top-25 forward returns vs universe median</div>
+                  <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                    <thead><tr><th style={th}>Horizon</th><th style={th} title="mean top-25 return minus universe median return, averaged across eval dates">Excess</th><th style={th} title="share of picks beating the universe median">Hit rate</th><th style={th}>Picks</th><th style={th} title="mean return per composite quintile, Q1 = top-ranked fifth">Q1…Q5</th></tr></thead>
+                    <tbody>
+                      {bt.summary.map(s => (
+                        <tr key={s.horizon} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                          <td style={cell}>{s.horizon}d</td>
+                          <td style={cell}>{sign(s.meanExcessPct)}</td>
+                          <td style={cell}>{s.hitRatePct == null ? '—' : `${s.hitRatePct}%`}</td>
+                          <td style={{ ...cell, color: 'var(--text-secondary)' }}>{s.pickObs}</td>
+                          <td style={{ ...cell, fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{s.quintileMeansPct.map(q => (q == null ? '—' : q)).join(' / ')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>Factor predictive power (10-day Spearman IC)</div>
+                  <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                    <thead><tr><th style={th}>Factor</th><th style={th} title="mean rank correlation between factor percentile and forward return; >0.05 is meaningful, sign matters">Mean IC</th><th style={th} title="|t| > 2 ≈ statistically distinguishable from zero">t-stat</th></tr></thead>
+                    <tbody>
+                      {bt.ics.map(r => (
+                        <tr key={r.factor} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', fontWeight: r.factor === 'composite' ? 700 : 400 }}>
+                          <td style={cell}>{fLabel[r.factor] || r.factor}</td>
+                          <td style={cell}>{sign(r.meanIC, '')}</td>
+                          <td style={{ ...cell, color: Math.abs(r.tStat) >= 2 ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{r.tStat ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <ul style={{ margin: '0.85rem 0 0', paddingLeft: '1.1rem', fontSize: '0.7rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                {bt.caveats.map((c, i) => <li key={i}>{c}</li>)}
+              </ul>
+            </>
+          )
+        })()}
+      </div>
     </div>
   )
 }

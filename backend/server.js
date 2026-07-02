@@ -5125,6 +5125,29 @@ app.post('/api/stock-picks/meta', async (req, res) => {
   res.json(out);
 });
 
+// Forward-return validation: reconstruct past picks, measure vs universe
+// median, per-factor ICs. Expensive (~1 min) → cached; ?force=1 recomputes.
+const { runBacktest: runPicksBacktest } = require('./picks/backtest');
+let backtestCache = null; // { data, ts }
+const BACKTEST_TTL = 6 * 60 * 60 * 1000;
+let backtestRunning = null;
+app.get('/api/stock-picks/backtest', async (req, res) => {
+  try {
+    if (!req.query.force && backtestCache && Date.now() - backtestCache.ts < BACKTEST_TTL) {
+      return res.json({ ...backtestCache.data, cached: true });
+    }
+    if (!backtestRunning) {
+      backtestRunning = runPicksBacktest().finally(() => { backtestRunning = null; });
+    }
+    const data = await backtestRunning; // concurrent requests share one run
+    backtestCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[stock-picks/backtest]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Snapshot history for the diff/streak panel. `available:false` (not an error)
 // when the table hasn't been created yet, so the UI can show a setup hint.
 app.get('/api/stock-picks/history', async (req, res) => {
