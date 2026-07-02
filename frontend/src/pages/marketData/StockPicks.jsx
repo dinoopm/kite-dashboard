@@ -52,8 +52,22 @@ function percentileRanks(values) {
 
 // 'NSE:NIFTY ENERGY' -> 'Energy'; 'NSE:NIFTY FIN SERVICE' -> 'Fin Service'.
 const fmtSector = (s) => (!s ? '—' : s.replace(/^NSE:NIFTY\s*/i, '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) || '—')
-const fmtCr = (v) => (v == null ? '—' : `₹${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 })} cr`)
+const fmtCr = (v) => {
+  if (v == null) return '—'
+  const n = Number(v)
+  // small deals shouldn't round to "₹0 cr" — keep 2 significant digits under 10
+  const opts = Math.abs(n) >= 10 ? { maximumFractionDigits: 0 } : { maximumSignificantDigits: 2 }
+  return `₹${n.toLocaleString('en-IN', opts)} cr`
+}
 const fmtNet = (v) => (v == null ? '—' : `${v >= 0 ? '+' : ''}₹${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 })} cr`)
+
+function Chip({ color = 'var(--text-secondary)', title, children }) {
+  return (
+    <span title={title} style={{ fontSize: '0.67rem', color, border: '1px solid rgba(255,255,255,0.14)', borderRadius: '4px', padding: '0.05rem 0.35rem', whiteSpace: 'nowrap' }}>
+      {children}
+    </span>
+  )
+}
 
 function Bar({ pct, color }) {
   return (
@@ -433,12 +447,33 @@ export default function StockPicks() {
                         </div>
                       </td>
                     ))}
-                    <td style={{ padding: '0.5rem 0.7rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                      {r.factors.gainerDays > 0 && <span title="gainer/loser days">{r.factors.gainerDays}↑/{r.factors.loserDays}↓ </span>}
-                      {r.factors.madeNewHigh && <span style={{ color: '#34d399' }}>52wH </span>}
-                      {r.factors.authenticity != null && <span title="volume authenticity">vA{r.factors.authenticity} </span>}
-                      {r.factors.dealsNetValueCr ? <span style={{ color: r.factors.dealsNetValueCr > 0 ? '#34d399' : '#ef4444' }}>{fmtCr(r.factors.dealsNetValueCr)}</span> : null}
-                      {(hist?.streaks[r.symbol] ?? 0) >= 2 && <span title={`${hist.streaks[r.symbol]} consecutive days in the daily top-25 snapshot`} style={{ color: '#fbbf24' }}> ★{hist.streaks[r.symbol]}d</span>}
+                    <td style={{ padding: '0.5rem 0.7rem' }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                        {(r.factors.gainerDays > 0 || r.factors.loserDays > 0) && (
+                          <Chip title={`Appeared among NSE top gainers on ${r.factors.gainerDays} day(s) and top losers on ${r.factors.loserDays} day(s) in this period${r.factors.avgGainPct ? ` · avg gain ${r.factors.avgGainPct}%` : ''}`}>
+                            {r.factors.gainerDays} up / {r.factors.loserDays} down days
+                          </Chip>
+                        )}
+                        {r.factors.madeNewHigh && <Chip color="#34d399" title="Set a fresh 52-week high during this period">fresh 52w high</Chip>}
+                        {r.factors.madeNewLow && <Chip color="#ef4444" title="Set a fresh 52-week low during this period">fresh 52w low</Chip>}
+                        {r.factors.authenticity != null && (
+                          <Chip color={r.factors.authenticity >= 70 ? '#34d399' : r.factors.authenticity >= 45 ? '#fbbf24' : '#fca5a5'}
+                            title="Volume authenticity — how much of the volume surge is corroborated by price movement, persistent across days, and free of gainer/loser churn. Low = possibly fake/HFT-inflated volume.">
+                            vol quality {r.factors.authenticity}%
+                          </Chip>
+                        )}
+                        {r.factors.dealsNetValueCr ? (
+                          <Chip color={r.factors.dealsNetValueCr > 0 ? '#34d399' : '#ef4444'}
+                            title={`Net bulk/block-deal value over the period (buys − sells)${r.factors.dealBuyers ? ` · ${r.factors.dealBuyers} distinct institutional buyer(s)` : ''}`}>
+                            deals {r.factors.dealsNetValueCr > 0 ? '+' : ''}{fmtCr(r.factors.dealsNetValueCr)}
+                          </Chip>
+                        ) : null}
+                        {(hist?.streaks[r.symbol] ?? 0) >= 2 && (
+                          <Chip color="#fbbf24" title={`In the daily default-weight top-25 snapshot for ${hist.streaks[r.symbol]} consecutive days`}>
+                            top-25 ×{hist.streaks[r.symbol]}d
+                          </Chip>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -447,7 +482,7 @@ export default function StockPicks() {
           </div>
           <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.75rem', fontStyle: 'italic' }}>
             Factors percentile-ranked across {ranked.length} active stocks for {period.from === period.to ? period.from : `${period.from} → ${period.to}`}; composite = your weighted blend.
-            "vA" = volume authenticity (lower = more likely fake/churned). Deterministic signal summary — not investment advice.
+            Hover any signal chip for its full explanation. Deterministic signal summary — not investment advice.
           </p>
         </>
       )}
