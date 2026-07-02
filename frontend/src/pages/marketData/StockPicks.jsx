@@ -61,6 +61,27 @@ const fmtCr = (v) => {
 }
 const fmtNet = (v) => (v == null ? '—' : `${v >= 0 ? '+' : ''}₹${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 })} cr`)
 
+// Value-based size buckets (₹ crore) — context for liquidity/manipulation risk.
+const MCAP_TAGS = [
+  { max: 500, label: 'micro', color: '#fca5a5' },
+  { max: 5000, label: 'small', color: '#fbbf24' },
+  { max: 20000, label: 'mid', color: '#38bdf8' },
+  { max: Infinity, label: 'large', color: '#34d399' },
+]
+const mcapTag = (cr) => (cr == null ? null : MCAP_TAGS.find(t => cr < t.max))
+const fmtMcap = (cr) => (cr == null ? '—' : `₹${Number(cr).toLocaleString('en-IN', { maximumFractionDigits: 0 })} cr`)
+
+// Quality guardrail from Yahoo fundamentals — display only, never in the composite.
+function qualityChip(m) {
+  if (!m) return null
+  const f = (v, mul = 1, suf = '') => (v == null ? '—' : `${(v * mul).toFixed(1)}${suf}`)
+  const tip = `ROE ${f(m.roe, 100, '%')} · D/E ${m.debtToEquity != null ? (m.debtToEquity / 100).toFixed(2) : '—'} · net margin ${f(m.profitMargins, 100, '%')} · P/E ${f(m.trailingPE)} — Yahoo fundamentals, shown for context only (not part of the score)`
+  if (m.profitMargins != null && m.profitMargins < 0) return { color: '#fca5a5', tip, text: 'loss-making' }
+  if (m.debtToEquity != null && m.debtToEquity > 150) return { color: '#fbbf24', tip, text: `debt-heavy · D/E ${(m.debtToEquity / 100).toFixed(1)}` }
+  if (m.roe != null && m.roe >= 0.15 && (m.debtToEquity == null || m.debtToEquity < 100)) return { color: '#34d399', tip, text: `quality · ROE ${Math.round(m.roe * 100)}%` }
+  return null
+}
+
 function Chip({ color = 'var(--text-secondary)', title, children }) {
   return (
     <span title={title} style={{ fontSize: '0.67rem', color, border: '1px solid rgba(255,255,255,0.14)', borderRadius: '4px', padding: '0.05rem 0.35rem', whiteSpace: 'nowrap' }}>
@@ -89,9 +110,10 @@ export default function StockPicks() {
   const [weights, setWeights] = useState({ ...DEFAULT_WEIGHTS, ...(prefs.weights || {}) })
   const [topN, setTopN] = useState([10, 25, 50].includes(prefs.topN) ? prefs.topN : 25)
   const [excludeTraps, setExcludeTraps] = useState(prefs.excludeTraps !== false)
+  const [hideMicro, setHideMicro] = useState(prefs.hideMicro === true)
   useEffect(() => {
-    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, lookback, weights, topN, excludeTraps })) } catch { /* private mode */ }
-  }, [mode, lookback, weights, topN, excludeTraps])
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, lookback, weights, topN, excludeTraps, hideMicro })) } catch { /* private mode */ }
+  }, [mode, lookback, weights, topN, excludeTraps, hideMicro])
   const [summary, setSummary] = useState(null)
   const [summarizing, setSummarizing] = useState(false)
   const [metaMap, setMetaMap] = useState({}) // symbol -> { sector, name } (Yahoo, resolved for visible rows)
@@ -193,10 +215,14 @@ export default function StockPicks() {
     if (key === 'symbol') return r.symbol
     if (key === 'sector') return (metaMap[r.symbol]?.sector || fmtSector(r.sector) || '')
     if (key === 'composite') return r.composite
+    if (key === 'mcap') return metaMap[r.symbol]?.marketCapCr ?? -1
     return r.pct[key] ?? 0
   }
   const displayed = useMemo(() => {
-    const arr = [...top]
+    // hide-micro is a display filter on the ranked set (unknown mcap stays visible)
+    const arr = hideMicro
+      ? top.filter(r => { const cr = metaMap[r.symbol]?.marketCapCr; return cr == null || cr >= 500 })
+      : [...top]
     arr.sort((a, b) => {
       const av = sortVal(a, sort.key), bv = sortVal(b, sort.key)
       const cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv
@@ -204,7 +230,7 @@ export default function StockPicks() {
     })
     return arr
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [top, sort, metaMap])
+  }, [top, sort, metaMap, hideMicro])
   const toggleSort = (key) => setSort(s => s.key === key
     ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
     : { key, dir: (key === 'symbol' || key === 'sector') ? 'asc' : 'desc' })
@@ -236,14 +262,18 @@ export default function StockPicks() {
 
   const exportCsv = () => {
     const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s }
-    const head = ['rank', 'symbol', 'name', 'sector', 'composite', 'momentum_pct', 'volume_pct', 'fifty_two_pct', 'deals_pct', 'gainer_days', 'loser_days', 'made_new_high', 'vol_authenticity', 'deals_net_cr', 'trap_risk', 'held', 'last_ltp']
+    const head = ['rank', 'symbol', 'name', 'sector', 'market_cap_cr', 'composite', 'momentum_pct', 'volume_pct', 'fifty_two_pct', 'deals_pct', 'gainer_days', 'loser_days', 'made_new_high', 'vol_authenticity', 'deals_net_cr', 'trap_risk', 'held', 'roe', 'debt_to_equity', 'net_margin', 'pe', 'last_ltp']
     const lines = [head.join(',')]
     for (const r of displayed) {
+      const m = metaMap[r.symbol] || {}
       lines.push([
-        r.rank, r.symbol, metaMap[r.symbol]?.name || r.name, metaMap[r.symbol]?.sector || fmtSector(r.sector),
+        r.rank, r.symbol, m.name || r.name, m.sector || fmtSector(r.sector), m.marketCapCr,
         r.composite.toFixed(1), Math.round(r.pct.momentum), Math.round(r.pct.volume), Math.round(r.pct.fiftyTwo), Math.round(r.pct.deals),
         r.factors.gainerDays, r.factors.loserDays, r.factors.madeNewHigh, r.factors.authenticity,
-        r.factors.dealsNetValueCr, r.factors.trapRisk, held.has(r.symbol), r.lastLtp,
+        r.factors.dealsNetValueCr, r.factors.trapRisk, held.has(r.symbol),
+        m.roe != null ? (m.roe * 100).toFixed(1) : null, m.debtToEquity != null ? (m.debtToEquity / 100).toFixed(2) : null,
+        m.profitMargins != null ? (m.profitMargins * 100).toFixed(1) : null, m.trailingPE != null ? m.trailingPE.toFixed(1) : null,
+        r.lastLtp,
       ].map(esc).join(','))
     }
     const a = document.createElement('a')
@@ -307,6 +337,10 @@ export default function StockPicks() {
         <label style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
           <input type="checkbox" checked={excludeTraps} onChange={e => setExcludeTraps(e.target.checked)} style={{ accentColor: '#ef4444' }} />
           Exclude volume-trap names
+        </label>
+        <label title="Display filter on the visible rows — names with unknown market cap stay visible" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={hideMicro} onChange={e => setHideMicro(e.target.checked)} style={{ accentColor: '#fca5a5' }} />
+          Hide micro-caps (&lt;₹500 cr)
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           Top
@@ -420,6 +454,7 @@ export default function StockPicks() {
                   <th style={{ padding: '0.55rem 0.7rem' }}>#</th>
                   <th style={sTh} onClick={() => toggleSort('symbol')}>Symbol{arrow('symbol')}</th>
                   <th style={sTh} onClick={() => toggleSort('sector')}>Sector{arrow('sector')}</th>
+                  <th style={sTh} title="Yahoo market cap — context only, not part of the score" onClick={() => toggleSort('mcap')}>Mkt Cap{arrow('mcap')}</th>
                   <th style={sTh} onClick={() => toggleSort('composite')}>Score{arrow('composite')}</th>
                   {FACTORS.map(f => <th key={f.key} style={sTh} title={f.help} onClick={() => toggleSort(f.key)}>{f.label}{arrow(f.key)}</th>)}
                   <th style={{ padding: '0.55rem 0.7rem' }}>Signals</th>
@@ -438,6 +473,16 @@ export default function StockPicks() {
                       {(() => { const nm = metaMap[r.symbol]?.name || (r.name !== r.symbol ? r.name : null); return nm ? <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nm}</div> : null })()}
                     </td>
                     <td style={{ padding: '0.5rem 0.7rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{metaMap[r.symbol]?.sector || fmtSector(r.sector)}</td>
+                    <td style={{ padding: '0.5rem 0.7rem', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>
+                      {(() => {
+                        const cr = metaMap[r.symbol]?.marketCapCr
+                        const tag = mcapTag(cr)
+                        return (<>
+                          <span style={{ color: 'var(--text-secondary)' }}>{fmtMcap(cr)}</span>
+                          {tag && <span style={{ marginLeft: '0.35rem', fontSize: '0.62rem', color: tag.color, border: `1px solid ${tag.color}44`, borderRadius: '4px', padding: '0 0.25rem' }}>{tag.label}</span>}
+                        </>)
+                      })()}
+                    </td>
                     <td style={{ padding: '0.5rem 0.7rem', fontWeight: 800, color: 'var(--accent)' }}>{r.composite.toFixed(1)}</td>
                     {FACTORS.map(f => (
                       <td key={f.key} style={{ padding: '0.5rem 0.7rem' }}>
@@ -473,6 +518,7 @@ export default function StockPicks() {
                             top-25 ×{hist.streaks[r.symbol]}d
                           </Chip>
                         )}
+                        {(() => { const q = qualityChip(metaMap[r.symbol]); return q ? <Chip color={q.color} title={q.tip}>{q.text}</Chip> : null })()}
                       </div>
                     </td>
                   </tr>

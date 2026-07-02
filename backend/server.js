@@ -5092,16 +5092,25 @@ app.get('/api/stock-picks', async (req, res) => {
   }
 });
 
-// Resolve real sector + company name (one Yahoo call each, cached) for the
-// displayed rows only — the full picks universe is too large to enrich, but the
-// visible top-N is cheap. Mirrors how the screener attaches sector to matches.
-const pickMetaCache = {}; // symbol -> { sector, name }
+// Resolve sector, company name, market cap and quality stats (one Yahoo call
+// each, cached) for the displayed rows only — the full picks universe is too
+// large to enrich, but the visible top-N is cheap. Display/guardrail layer
+// only: none of this enters the deterministic composite.
+const pickMetaCache = {}; // symbol -> { sector, name, marketCapCr, roe, debtToEquity, profitMargins, trailingPE }
 async function getPickMeta(symbol) {
   if (pickMetaCache[symbol] !== undefined) return pickMetaCache[symbol];
   try {
-    const q = await yahooFinance.quoteSummary(toYahooSymbol(symbol), { modules: ['price', 'assetProfile'] });
-    pickMetaCache[symbol] = { sector: q?.assetProfile?.sector || null, name: q?.price?.longName || q?.price?.shortName || null };
-  } catch { pickMetaCache[symbol] = { sector: null, name: null }; }
+    const q = await yahooFinance.quoteSummary(toYahooSymbol(symbol), { modules: ['price', 'assetProfile', 'financialData', 'summaryDetail'] });
+    pickMetaCache[symbol] = {
+      sector: q?.assetProfile?.sector || null,
+      name: q?.price?.longName || q?.price?.shortName || null,
+      marketCapCr: q?.price?.marketCap != null ? +(q.price.marketCap / 1e7).toFixed(0) : null, // ₹ crore
+      roe: q?.financialData?.returnOnEquity ?? null,               // fraction, e.g. 0.18
+      debtToEquity: q?.financialData?.debtToEquity ?? null,        // percent, e.g. 45.3
+      profitMargins: q?.financialData?.profitMargins ?? null,      // fraction
+      trailingPE: q?.summaryDetail?.trailingPE ?? null,
+    };
+  } catch { pickMetaCache[symbol] = { sector: null, name: null, marketCapCr: null, roe: null, debtToEquity: null, profitMargins: null, trailingPE: null }; }
   return pickMetaCache[symbol];
 }
 app.post('/api/stock-picks/meta', async (req, res) => {
