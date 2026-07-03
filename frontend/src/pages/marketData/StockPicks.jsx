@@ -17,8 +17,8 @@ const LOOKBACKS = [
   { key: '90d', label: 'Last 90 days', from: () => isoDay(90), to: () => isoDay(1) },
 ]
 const FACTORS = [
-  { key: 'momentum', raw: 'momentumRaw', label: 'Momentum', color: '#38bdf8', help: 'Net gainer days + average gain — sustained upside appearances.' },
-  { key: 'volume', raw: 'volumeRaw', label: 'Volume', color: '#a78bfa', help: 'Authenticity-adjusted volume surge — price corroboration, persistence, churn and delivery % all down-weight fake/intraday-churned volume.' },
+  { key: 'momentum', raw: 'momentumRaw', label: 'Momentum', color: '#38bdf8', help: 'True 20-session return, skipping the latest week (short-term reversal adjusted). From the daily bhavcopy, ranked across the whole market.' },
+  { key: 'volume', raw: 'volumeRaw', label: 'Volume', color: '#a78bfa', help: 'Last-week volume vs the stock\'s own 20-session baseline, authenticity-adjusted — price corroboration, persistence, churn and delivery % down-weight fake/intraday-churned volume.' },
   { key: 'fiftyTwo', raw: 'fiftyTwoRaw', label: '52-Wk', color: '#34d399', help: 'New 52-week highs + proximity to the 52-week high.' },
   { key: 'deals', raw: 'dealsRaw', label: 'Institutional', color: '#fbbf24', help: 'Net large-deal buy value + buyer breadth; round-tripped/offsetting deals (HFT churn) down-weighted by net-vs-gross conviction.' },
 ]
@@ -307,6 +307,7 @@ export default function StockPicks() {
         momentumPct: Math.round(r.pct.momentum), volumePct: Math.round(r.pct.volume),
         fiftyTwoPct: Math.round(r.pct.fiftyTwo), dealsPct: Math.round(r.pct.deals),
         gainerDays: r.factors.gainerDays, loserDays: r.factors.loserDays,
+        mom20_5Pct: r.factors.mom205Pct, volSurgePct: r.factors.volSurgePct,
         madeNewHigh: r.factors.madeNewHigh, authenticity: r.factors.authenticity,
         dealsNetValueCr: r.factors.dealsNetValueCr, trapRisk: r.factors.trapRisk, trapReason: r.factors.trapReason,
         dealChurn: r.factors.dealChurn, dealChurnReason: r.factors.dealChurnReason,
@@ -514,6 +515,12 @@ export default function StockPicks() {
                     ))}
                     <td style={{ padding: '0.5rem 0.7rem' }}>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem' }}>
+                        {r.factors.mom205Pct != null && (
+                          <Chip color={r.factors.mom205Pct > 0 ? '#34d399' : r.factors.mom205Pct < 0 ? '#fca5a5' : undefined}
+                            title="The momentum factor's raw input: 20-session price return excluding the most recent week (short-term reversal adjusted)">
+                            {r.factors.mom205Pct > 0 ? '+' : ''}{r.factors.mom205Pct}% mom
+                          </Chip>
+                        )}
                         {(r.factors.gainerDays > 0 || r.factors.loserDays > 0) && (
                           <Chip title={`Appeared among NSE top gainers on ${r.factors.gainerDays} day(s) and top losers on ${r.factors.loserDays} day(s) in this period${r.factors.avgGainPct ? ` · avg gain ${r.factors.avgGainPct}%` : ''}`}>
                             {r.factors.gainerDays} up / {r.factors.loserDays} down days

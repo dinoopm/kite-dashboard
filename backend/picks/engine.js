@@ -1,9 +1,12 @@
 // ─── Quant Stock-Picks engine ───────────────────────────────────────────────
-// Deterministic, transparent per-symbol factor aggregation over a chosen period,
-// built from the existing market-data feeds (top gainers/losers, volume gainers,
-// 52-week high/low, large deals), with ASM/GSM surveillance names HARD-EXCLUDED
-// and a Volume-Authenticity / HFT-trap heuristic so faked volume can't pump the
-// score. FII/DII is market-wide → used only for a regime read, never per stock.
+// Deterministic, transparent per-symbol factor aggregation over a chosen period.
+// Primary price/volume source is the daily bhavcopy (true 20-session skip-week
+// momentum, volume vs the stock's own baseline, delivery %) over the FULL EQ
+// universe; the movers feeds (top gainers/losers, volume gainers), 52-week
+// high/low and large deals layer on top, with ASM/GSM surveillance names
+// HARD-EXCLUDED and authenticity/conviction guards (volume, deals, delivery) so
+// faked activity can't pump the score. FII/DII + participant OI are
+// market-wide → used only for a regime read, never per stock.
 //
 // The engine returns RAW factor values per stock; normalization (percentile
 // rank), weighting and ranking happen client-side so weight sliders re-rank
@@ -81,10 +84,11 @@ async function buildFactorUniverse({ from, to }) {
     fetchAll('surveillance_stocks', 'symbol,measure,stage'),
     fetchAll('sector_constituents', 'symbol,name,sector_key'),
     snapDate ? fetchAll('nse_52_week_high_low', 'symbol,series,company_name,adjusted_52_week_high,high_date,adjusted_52_week_low,low_date', (q) => q.eq('trade_date', snapDate)) : Promise.resolve([]),
-    // Delivery-conviction stats (bhavcopy, via SQL fn — see migrate_picks_delivery_fn.js).
-    // Missing function/table degrades to null: delivery signals simply stay off.
-    rpcAll('picks_delivery_stats', { p_from: from, p_to: to })
-      .catch(err => { console.warn('[picks] delivery stats unavailable:', err.message); return null; }),
+    // Bhavcopy factor inputs, trailing 60 sessions as-of `to` (SQL fn — see
+    // migrate_bhav_factors_fn.js): true momentum, volume baseline, delivery.
+    // Missing function degrades to null → movers-feed fallback formulas.
+    rpcAll('picks_bhav_factors', { p_to: to })
+      .catch(err => { console.warn('[picks] bhavcopy factors unavailable:', err.message); return null; }),
   ]);
 
   // Lookup maps
@@ -140,6 +144,10 @@ async function buildFactorUniverse({ from, to }) {
     const freshLow = r.low_date && r.low_date >= from && r.low_date <= to;
     if (freshHigh || freshLow) get(r.symbol);
   }
+  // Full-market universe: with bhavcopy factors available, every EQ symbol
+  // with price history joins — momentum/volume percentiles are then ranked
+  // against the whole market, not just names that already made a movers list.
+  if (dlvMap) for (const sym of dlvMap.keys()) get(sym);
 
   // ─── Build per-symbol factor rows ──────────────────────────────────────────
   const stocks = [];
@@ -149,43 +157,60 @@ async function buildFactorUniverse({ from, to }) {
   for (const [symbol, a] of A) {
     if (survSet.has(symbol)) { excludedCount++; if (excludedSample.length < 8) excludedSample.push(`${symbol} (${survSet.get(symbol)})`); continue; }
 
-    // Momentum
+    // Momentum — true 20-session return SKIPPING the latest 5 sessions
+    // (bhavcopy): the backtest showed movers-list names mean-revert over the
+    // following week, so the freshest week is excluded from the signal.
+    // Gainer/loser-day counts stay as display signals and churn inputs.
+    // Fallback (bhavcopy fn missing): the old movers-appearance formula.
+    const d = dlvMap ? dlvMap.get(symbol) : null;
     const gainerDays = a.gainerDates.size;
     const loserDays = a.loserDates.size;
     const avgGainPct = gainerDays ? mean([...a.gainerDates.values()]) : 0;
-    const momentumRaw = (gainerDays - loserDays) + avgGainPct / 100;
+    const mom205 = d?.ret_20_5 != null ? +d.ret_20_5 : null;
+    const momentumRaw = dlvMap
+      ? (mom205 ?? 0) // no history (new listing / BE series) = neutral
+      : (gainerDays - loserDays) + avgGainPct / 100;
 
-    // Volume conviction + authenticity (HFT-trap heuristic)
+    // Volume conviction + authenticity — surge measured against the stock's
+    // OWN trailing 20-session baseline (bhavcopy: last-5 avg vs sessions 6-20),
+    // instead of trusting NSE's pre-filtered volume-gainers list. Movers-feed
+    // fields still feed persistence/churn and the display, and remain the
+    // fallback formula when the bhavcopy fn is missing.
     const volSurgeDays = a.volDates.size;
-    const avgW1 = a.w1.length ? mean(a.w1) : 0;          // % vs 1-week avg
+    const avgW1 = a.w1.length ? mean(a.w1) : 0;          // % vs 1-week avg (movers feed)
     const avgAbsPctOnVol = a.volPcts.length ? mean(a.volPcts) : 0;
-    const rawVolStrength = volSurgeDays + avgW1 / 100;
+    const surge = (d?.vol_prior > 0 && d?.vol_recent5 != null) ? d.vol_recent5 / d.vol_prior - 1 : null;
+    const surgePct = surge != null ? surge * 100 : avgW1;
+    const ret5Abs = (d?.close_skip > 0 && d?.close_last > 0) ? Math.abs(d.close_last / d.close_skip - 1) * 100 : avgAbsPctOnVol;
+    const rawVolStrength = dlvMap
+      ? (surge != null ? Math.max(0, surge) : 0)
+      : volSurgeDays + avgW1 / 100;
     // (a) price corroboration: a real volume surge moves price.
-    const corroboration = clamp01(avgAbsPctOnVol / (0.5 + avgW1 / 200));
+    const corroboration = clamp01(ret5Abs / (0.5 + surgePct / 200));
     // (b) persistence: sustained over several days, not a one-day blip (n/a for snapshot).
-    const persistence = snapshot ? 0.5 : clamp01(volSurgeDays / Math.min(periodDays, 5));
+    const persistence = snapshot || !volSurgeDays ? 0.5 : clamp01(volSurgeDays / Math.min(periodDays, 5));
     // (c) churn penalty: flip-flopping gainer<->loser with heavy volume.
     const churnRatio = (gainerDays + loserDays) ? Math.min(gainerDays, loserDays) / (gainerDays + loserDays) : 0;
     // (d) delivery corroboration: volume that nobody keeps is intraday churn.
     //     ~40%+ delivered = fully convincing; ~10% = day-trading noise.
-    const d = dlvMap ? dlvMap.get(symbol) : null;
     const avgDeliv = d?.avg_deliv ?? null;
     const deliveryScore = avgDeliv != null ? clamp01(avgDeliv / 40) : null;
     // Authenticity is only meaningful when there's actually a volume surge to judge.
-    const authenticity = volSurgeDays > 0
+    const surgeSignal = surge != null ? surge > 0.25 : volSurgeDays > 0;
+    const authenticity = surgeSignal
       ? clamp01(deliveryScore != null
         ? 0.4 * corroboration + 0.25 * persistence + 0.15 * (1 - churnRatio) + 0.2 * deliveryScore
         : 0.5 * corroboration + 0.3 * persistence + 0.2 * (1 - churnRatio))
       : null;
     const volumeRaw = authenticity != null ? rawVolStrength * authenticity : 0; // faked volume can't pump the factor
-    const bigSurge = avgW1 > 100;                        // volume more than doubled
-    const trapRisk = volSurgeDays > 0 && bigSurge && authenticity < 0.45;
+    const bigSurge = surgePct > 100;                     // volume more than doubled
+    const trapRisk = surgeSignal && bigSurge && authenticity < 0.45;
     let trapReason = null;
     if (trapRisk) {
       if (avgDeliv != null && avgDeliv < 15) trapReason = `heavy volume but only ${avgDeliv}% delivered (intraday churn)`;
-      else if (corroboration < 0.4) trapReason = `vol +${Math.round(avgW1)}% but price ~flat (${round(avgAbsPctOnVol, 1)}% avg move)`;
+      else if (corroboration < 0.4) trapReason = `vol +${Math.round(surgePct)}% but price ~flat (${round(ret5Abs, 1)}% move)`;
       else if (churnRatio > 0.3) trapReason = `churn: ${gainerDays} up / ${loserDays} down days`;
-      else if (!snapshot && persistence < 0.4) trapReason = `one-day blip (vol-gainer ${volSurgeDays}/${periodDays}d)`;
+      else if (!snapshot && volSurgeDays > 0 && persistence < 0.4) trapReason = `one-day blip (vol-gainer ${volSurgeDays}/${periodDays}d)`;
       else trapReason = `low-conviction volume surge`;
     }
 
@@ -198,7 +223,7 @@ async function buildFactorUniverse({ from, to }) {
     const circuitReason = circuitLadder
       ? `${circuitDays} of the last 15 sessions closed locked at the upper band on thin turnover (avg ₹${round(d.avg_turnover_lacs / 100, 1)} cr/day)`
       : null;
-    const priceRun = (d?.price_ref > 0 && d?.price_last > 0) ? d.price_last / d.price_ref - 1 : null;
+    const priceRun = (d?.close_m20 > 0 && d?.close_last > 0) ? d.close_last / d.close_m20 - 1 : null;
     const distribution = !!(d && d.sessions >= 15 && priceRun != null && priceRun >= 0.15
       && d.deliv_prior >= 10 && d.deliv_recent != null && d.deliv_recent < d.deliv_prior * 0.7);
     const distributionReason = distribution
@@ -211,10 +236,12 @@ async function buildFactorUniverse({ from, to }) {
     const low = fwr?.adjusted_52_week_low ?? null;
     const madeNewHigh = !!(fwr?.high_date && fwr.high_date >= from && fwr.high_date <= to);
     const madeNewLow = !!(fwr?.low_date && fwr.low_date >= from && fwr.low_date <= to);
-    // Proximity needs a price from near the window end — the movers-feed LTP can
-    // be weeks old in a long lookback (spike-then-fade names would look strong).
+    // Proximity needs a price from near the window end. The bhavcopy close is
+    // as-of the last session ≤ `to` (always fresh); the movers-feed LTP is the
+    // fallback and can be weeks old in a long lookback, hence the gate.
     const ltpFresh = a.lastLtpDate && (new Date(to) - new Date(a.lastLtpDate)) <= 7 * 86400000;
-    const nearHighPct = (ltpFresh && a.lastLtp != null && high) ? clamp01(a.lastLtp / high) : null; // 1.0 = at 52w high
+    const bestLtp = d?.close_last ?? (ltpFresh ? a.lastLtp : null);
+    const nearHighPct = (bestLtp != null && high) ? clamp01(bestLtp / high) : null; // 1.0 = at 52w high
     const fiftyTwoRaw = (madeNewHigh ? 1 : 0) - (madeNewLow ? 1 : 0) + (nearHighPct != null ? (nearHighPct - 0.8) : 0);
 
     // Institutional accumulation — net large-deal buy value with a breadth
@@ -248,9 +275,10 @@ async function buildFactorUniverse({ from, to }) {
       symbol,
       name: info.name || fwr?.company_name || symbol,
       sector: info.sector || null,
-      lastLtp: round(a.lastLtp),
+      lastLtp: round(d?.close_last ?? a.lastLtp),
       factors: {
         momentumRaw: round(momentumRaw, 3), gainerDays, loserDays, avgGainPct: round(avgGainPct, 2),
+        mom205Pct: mom205 != null ? round(mom205 * 100, 1) : null, volSurgePct: surge != null ? round(surge * 100, 0) : null,
         volumeRaw: round(volumeRaw, 3), rawVolStrength: round(rawVolStrength, 3), volSurgeDays,
         avgW1VolChange: round(avgW1, 1), authenticity: authenticity != null ? round(authenticity * 100, 0) : null, trapRisk, trapReason,
         deliveryPct: avgDeliv, circuitLadder, circuitReason, distribution, distributionReason,
@@ -379,7 +407,7 @@ async function fetchSnapshotHistory(sinceDate) {
 }
 
 // ─── AI brief — narrates the already-ranked deterministic output (Groq) ─────
-const PICKS_SYSTEM_PROMPT = `You are a quantitative equity analyst writing a brief on an ALREADY-COMPUTED, deterministic stock ranking for the Indian market (NSE). You did NOT choose these stocks — a transparent factor model did (momentum, volume conviction, 52-week strength, institutional accumulation; surveillance/ASM/GSM names are already excluded, and likely fake/HFT-inflated volume is down-weighted via a Volume Authenticity score). Your job is ONLY to explain the output, not to change it.
+const PICKS_SYSTEM_PROMPT = `You are a quantitative equity analyst writing a brief on an ALREADY-COMPUTED, deterministic stock ranking for the Indian market (NSE). You did NOT choose these stocks — a transparent factor model did (momentum = 20-session return skipping the latest week, volume conviction vs the stock's own baseline, 52-week strength, institutional accumulation; surveillance/ASM/GSM names are already excluded, and likely fake/HFT-inflated volume is down-weighted via a Volume Authenticity score). Your job is ONLY to explain the output, not to change it.
 
 Rules:
 - Do NOT invent tickers, re-rank, or add/remove names. Use ONLY the provided rows.
