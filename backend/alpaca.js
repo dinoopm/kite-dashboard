@@ -7,8 +7,13 @@
 //
 // Alpaca's stock data API serves equities/ETFs, not raw index symbols, so we
 // track liquid ETF proxies: SPY≈S&P 500, QQQ≈Nasdaq 100, DIA≈Dow 30, etc., plus
-// the SPDR sector ETFs. The free "iex" feed is used by default (15-min delayed);
-// set ALPACA_DATA_FEED=sip if the account has a paid SIP subscription.
+// the SPDR sector ETFs. Data feeds differ by endpoint because the free tier
+// permits different feeds on each (and "iex" is a partial-volume feed that
+// excludes the closing auction, so its daily close — and thus today's-change
+// sign — can be wrong): historical BARS use "sip" (free tier serves full
+// consolidated history older than 15 min), while live SNAPSHOTS use
+// "delayed_sip" (full-volume, 15-min-delayed; plain "sip" is blocked for recent
+// data on the free tier). Paid SIP accounts can override both via env.
 const express = require('express');
 const YahooFinance = require('yahoo-finance2').default;
 const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
@@ -31,7 +36,8 @@ const DATA_BASE = 'https://data.alpaca.markets/v2';
 // Trading API base — used only for read-only asset metadata (company names).
 // Paper keys work against the paper host; override if using a live account.
 const TRADING_BASE = process.env.ALPACA_TRADING_BASE || 'https://paper-api.alpaca.markets';
-const FEED = process.env.ALPACA_DATA_FEED || 'iex';
+const FEED = process.env.ALPACA_DATA_FEED || 'sip';                 // historical bars
+const SNAPSHOT_FEED = process.env.ALPACA_SNAPSHOT_FEED || 'delayed_sip'; // live snapshots
 
 const API_KEY = process.env.ALPACA_API_KEY || process.env.APCA_API_KEY_ID;
 const API_SECRET = process.env.ALPACA_API_SECRET || process.env.APCA_API_SECRET_KEY;
@@ -153,7 +159,8 @@ function summariseSnapshot(snap) {
   if (!snap) return null;
   const daily = snap.dailyBar || {};
   const prev = snap.prevDailyBar || {};
-  const last = snap.latestTrade?.p ?? daily.c ?? null;
+  // Regular-session close first (see /quotes) — after-hours latestTrade only as fallback.
+  const last = daily.c ?? snap.latestTrade?.p ?? null;
   const prevClose = prev.c ?? null;
   const change = last != null && prevClose != null ? last - prevClose : null;
   const changePct = change != null && prevClose ? (change / prevClose) * 100 : null;
@@ -206,13 +213,13 @@ router.get('/config', (req, res) => {
 router.get('/overview', async (req, res) => {
   try {
     const symbols = [...BROAD_INDICES, ...SECTOR_ETFS].map(m => m.symbol);
-    const data = await alpacaGet('/stocks/snapshots', { symbols: symbols.join(',') }, 60_000);
+    const data = await alpacaGet('/stocks/snapshots', { symbols: symbols.join(','), feed: SNAPSHOT_FEED }, 60_000);
     const snaps = data || {};
     const decorate = (m) => ({ ...m, quote: summariseSnapshot(snaps[m.symbol]) });
     res.json({
       indices: BROAD_INDICES.map(decorate),
       sectors: SECTOR_ETFS.map(decorate),
-      feed: FEED,
+      feed: SNAPSHOT_FEED,
       asOf: new Date().toISOString(),
     });
   } catch (err) {
@@ -225,7 +232,7 @@ router.get('/snapshot/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
     const [data, name] = await Promise.all([
-      alpacaGet(`/stocks/${encodeURIComponent(symbol)}/snapshot`, {}, 30_000),
+      alpacaGet(`/stocks/${encodeURIComponent(symbol)}/snapshot`, { feed: SNAPSHOT_FEED }, 30_000),
       fetchAssetName(symbol),
     ]);
     res.json({
@@ -517,13 +524,18 @@ router.post('/quotes', async (req, res) => {
     const instruments = Array.isArray(req.body?.instruments) ? req.body.instruments : [];
     const symbols = instruments.map(s => String(s).toUpperCase());
     if (symbols.length === 0) return res.json({ content: [{ type: 'text', text: '{}' }] });
-    const data = await alpacaGet('/stocks/snapshots', { symbols: symbols.join(',') }, 60_000);
+    const data = await alpacaGet('/stocks/snapshots', { symbols: symbols.join(','), feed: SNAPSHOT_FEED }, 60_000);
     const out = {};
     for (const sym of symbols) {
       const snap = data?.[sym];
       const daily = snap?.dailyBar || {};
       const prev = snap?.prevDailyBar || {};
-      const last = snap?.latestTrade?.p ?? daily.c ?? null;
+      // Prefer the regular-session close (dailyBar.c) — during the session it
+      // tracks the live price, and once closed it's the official close that
+      // Google/Yahoo headline. latestTrade.p is only a fallback: it includes
+      // pre/after-hours prints, which distort (and on thin sessions can flip)
+      // today's change vs the standard regular-session number.
+      const last = daily.c ?? snap?.latestTrade?.p ?? null;
       const prevClose = prev.c ?? null;
       out[sym] = {
         instrument_token: sym,
