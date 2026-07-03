@@ -2,8 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 
-// Live instrument search backed by Kite's search_instruments MCP tool.
-// Debounced 200ms; navigates to /instrument/:token on selection.
+// Unified instrument search: India (Kite search_instruments) + US (Yahoo, via
+// /api/us/search) queried in parallel. Debounced 200ms. India rows navigate to
+// /instrument/:token, US rows to /us/:symbol. One source failing doesn't hide
+// the other (Promise.allSettled). The standalone US-only <UsSearch> is used
+// elsewhere (UsIndices) and is left untouched.
 function InstrumentSearch() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
@@ -28,18 +31,25 @@ function InstrumentSearch() {
       if (abortRef.current) abortRef.current.abort();
       const controller = new AbortController();
       abortRef.current = controller;
+      const q = encodeURIComponent(query.trim());
       setLoading(true);
-      try {
-        const res = await fetchWithAbort(`/api/search-instruments?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal });
+      // Query India + US in parallel; tag each row's market so selection can
+      // route to the right page. allSettled → one source down still shows the other.
+      const grab = async (url, market) => {
+        const res = await fetchWithAbort(url, { signal: controller.signal });
         const data = await res.json();
-        if (!controller.signal.aborted) {
-          setResults(data.results || []);
-          setActiveIdx(0);
-          setLoading(false);
-        }
-      } catch (e) {
-        if (e.name !== 'AbortError') setLoading(false);
-      }
+        return (data.results || []).map(r => ({ ...r, market }));
+      };
+      const settled = await Promise.allSettled([
+        grab(`/api/search-instruments?q=${q}`, 'IN'),
+        grab(`/api/us/search?q=${q}`, 'US'),
+      ]);
+      if (controller.signal.aborted) return;
+      // India first (primary market), then US.
+      const merged = settled.flatMap(s => (s.status === 'fulfilled' ? s.value : []));
+      setResults(merged);
+      setActiveIdx(0);
+      setLoading(false);
     }, 200);
     return () => clearTimeout(timer);
   }, [query]);
@@ -54,11 +64,15 @@ function InstrumentSearch() {
   }, []);
 
   const select = useCallback((row) => {
-    if (!row?.token) return;
+    if (!row) return;
+    if (row.market === 'US') {
+      if (!row.symbol) return;
+    } else if (!row.token) return;
     setOpen(false);
     setQuery('');
     setResults([]);
-    navigate(`/instrument/${row.token}?symbol=${encodeURIComponent(row.symbol)}`);
+    if (row.market === 'US') navigate(`/us/${encodeURIComponent(row.symbol)}`);
+    else navigate(`/instrument/${row.token}?symbol=${encodeURIComponent(row.symbol)}`);
   }, [navigate]);
 
   const onKeyDown = (e) => {
@@ -74,7 +88,7 @@ function InstrumentSearch() {
       <input
         type="text"
         value={query}
-        placeholder="Search stocks…"
+        placeholder="Search stocks (India + US)…"
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
         onKeyDown={onKeyDown}
@@ -114,7 +128,7 @@ function InstrumentSearch() {
           )}
           {results.map((row, idx) => (
             <div
-              key={`${row.exchange}:${row.symbol}`}
+              key={`${row.market}:${row.exchange}:${row.symbol}`}
               onMouseDown={(e) => { e.preventDefault(); select(row); }}
               onMouseEnter={() => setActiveIdx(idx)}
               style={{
@@ -127,9 +141,20 @@ function InstrumentSearch() {
                 gap: '0.15rem',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-primary)' }}>{row.symbol}</span>
-                <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{row.exchange}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.4rem' }}>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {row.symbol}
+                  {row.type === 'ETF' && <span style={{ marginLeft: '0.4rem', fontSize: '0.6rem', fontWeight: 700, color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: '3px', padding: '0 0.25rem' }}>ETF</span>}
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{row.exchange}</span>
+                  <span style={{
+                    fontSize: '0.58rem', fontWeight: 700, letterSpacing: '0.5px',
+                    color: row.market === 'US' ? '#fbbf24' : '#34d399',
+                    border: `1px solid ${row.market === 'US' ? 'rgba(251,191,36,0.5)' : 'rgba(52,211,153,0.5)'}`,
+                    borderRadius: '3px', padding: '0 0.25rem',
+                  }}>{row.market === 'US' ? 'US' : 'IN'}</span>
+                </span>
               </div>
               <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
             </div>
