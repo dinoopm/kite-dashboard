@@ -10,6 +10,7 @@ import ConvictionModal from '../components/alerts/ConvictionModal'
 import TradePlanModal from '../components/alerts/TradePlanModal'
 import ValuationPanel from '../components/ValuationPanel'
 import AnalystsPanel from '../components/AnalystsPanel'
+import RedFlagsPanel from '../components/RedFlagsPanel'
 
 // ₹ formatters for the shared AnalystsPanel: prices/EPS in rupees, revenue in Cr.
 const inrMoney = (v) => (v == null ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
@@ -1127,6 +1128,8 @@ function Instrument() {
         </div>
       </header>
 
+      {/* Manipulation red flags (NSE feeds + bhavcopy — see backend/picks/redFlags.js) */}
+      {symbol && <RedFlagsPanel url={`/api/red-flags/${encodeURIComponent(symbol)}`} />}
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '1rem', borderBottom: '1px solid var(--border)', marginBottom: '1.5rem', paddingBottom: '0.25rem' }}>

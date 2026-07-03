@@ -231,7 +231,10 @@ async function buildFactorUniverse({ from, to }) {
     const dealBuyers = [...a.clientNet.values()].filter(v => v >= 1e7).length;
     const roundTrippers = [...a.clientNet.values()].filter(v => Math.abs(v) < 1e6).length; // bought & sold ~flat
     const breadthBoost = 1 + 0.3 * Math.log1p(Math.max(0, dealBuyers - 1));
-    const dealChurn = dealsGross > 25e7 && netRatio < 0.15;
+    // Relative-size guard: routine two-way block flow on liquid large caps
+    // isn't churn — only flag when deal gross ≥ ~3 days of normal turnover.
+    const grossVsDaily = d?.avg_turnover_lacs ? dealsGross / (d.avg_turnover_lacs * 1e5) : null;
+    const dealChurn = dealsGross > 25e7 && netRatio < 0.15 && (grossVsDaily == null || grossVsDaily > 3);
     // Churned flow is noise, not a smaller signal: percentile ranking would
     // still put any positive residue above the no-deals majority, so flagged
     // names get zero (= neutral mid-rank), not a scaled-down positive.

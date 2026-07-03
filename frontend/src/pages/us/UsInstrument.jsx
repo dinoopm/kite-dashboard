@@ -8,6 +8,7 @@ import {
 import { breakoutRank, breakoutLabel } from '../../lib/breakout';
 import { generateSignals } from '../../lib/signalEngine';
 import SignalChart from '../../components/SignalChart';
+import RedFlagsPanel from '../../components/RedFlagsPanel';
 import AnalystsPanel from '../../components/AnalystsPanel';
 
 // US ETF/equity detail: company name, snapshot, price chart with MA overlays,
@@ -1061,6 +1062,9 @@ export default function UsInstrument() {
           <span>Vol {q.volume != null ? q.volume.toLocaleString('en-US') : '—'}</span>
         </div>
       </div>
+
+      {/* Manipulation red flags (Alpaca daily bars — see /api/us/red-flags in backend/alpaca.js) */}
+      <RedFlagsPanel url={`/api/us/red-flags/${encodeURIComponent(sym)}`} />
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', marginBottom: '1.5rem' }}>

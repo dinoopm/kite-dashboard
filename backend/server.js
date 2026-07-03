@@ -5148,6 +5148,26 @@ app.get('/api/stock-picks/backtest', async (req, res) => {
   }
 });
 
+// Symbol-scoped manipulation red flags for the India instrument page (the US
+// page has its own /api/us/red-flags in alpaca.js — different data source,
+// same response shape). Cached per symbol; degrades per-check inside.
+const { indiaRedFlags } = require('./picks/redFlags');
+const redFlagCache = {}; // symbol -> { data, ts }
+const RED_FLAG_TTL = 10 * 60 * 1000;
+app.get('/api/red-flags/:symbol', async (req, res) => {
+  const sym = String(req.params.symbol || '').toUpperCase();
+  const hit = redFlagCache[sym];
+  if (hit && Date.now() - hit.ts < RED_FLAG_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const data = await indiaRedFlags(sym);
+    redFlagCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[red-flags]', sym, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Snapshot history for the diff/streak panel. `available:false` (not an error)
 // when the table hasn't been created yet, so the UI can show a setup hint.
 app.get('/api/stock-picks/history', async (req, res) => {
