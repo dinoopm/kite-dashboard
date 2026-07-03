@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Cell as RechartsCell, ResponsiveContainer } from 'recharts';
 import RRGChart from '../../components/RRGChart';
-import UsSearch from '../../components/UsSearch';
 import UsGlobalIndices from './UsGlobalIndices';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 
@@ -1070,12 +1069,9 @@ function UsIndices() {
 
   return (
     <div className="dashboard-layout">
-      <header className="header" style={{ marginBottom: '1.5rem', borderBottom: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1>US Indices Performance</h1>
-          <p>Real-time & Historical performance of market sectors</p>
-        </div>
-        <UsSearch />
+      <header className="header" style={{ marginBottom: '1.5rem', borderBottom: 'none' }}>
+        <h1>US Indices Performance</h1>
+        <p>Real-time & Historical performance of market sectors</p>
       </header>
 
       {/* Major Indices — headline cards (always visible, click to drill in) */}

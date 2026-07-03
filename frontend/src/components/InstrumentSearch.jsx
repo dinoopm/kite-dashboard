@@ -5,8 +5,8 @@ import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 // Unified instrument search: India (Kite search_instruments) + US (Yahoo, via
 // /api/us/search) queried in parallel. Debounced 200ms. India rows navigate to
 // /instrument/:token, US rows to /us/:symbol. One source failing doesn't hide
-// the other (Promise.allSettled). The standalone US-only <UsSearch> is used
-// elsewhere (UsIndices) and is left untouched.
+// the other (Promise.allSettled). This is the app's single search box — the
+// former US-only <UsSearch> was retired once this covered both markets.
 function InstrumentSearch() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
