@@ -597,12 +597,15 @@ function Instrument() {
         const res = await fetchWithAbort(`/api/instrument-info/${encodeURIComponent(symbol)}`, { signal: controller.signal });
         const info = await res.json();
         if (info?.name) setKiteName(info.name);
+        if ((!token || token === '0') && info?.instrument_token) {
+          navigate(`/instrument/${info.instrument_token}?symbol=${encodeURIComponent(symbol)}`, { replace: true });
+        }
       } catch (e) {
         if (e.name === 'AbortError') return;
       }
     })();
     return () => controller.abort();
-  }, [symbol])
+  }, [symbol, token, navigate])
 
   // Fetch quarterly results from screener.in scrape (cached 12h server-side)
   useEffect(() => {
