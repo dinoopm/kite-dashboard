@@ -13,6 +13,7 @@ const MARKET_DATA_LINKS = [
   { to: '/market-data/volume-gainers',      label: 'Volume Gainers',            hint: 'Stocks with unusual volume vs 1W/2W averages.' },
   { to: '/market-data/surveillance',        label: 'Surveillance (ASM / GSM)',  hint: 'NSE ASM and GSM surveillance list — handle with extra care.' },
   { to: '/market-data/macro',               label: 'Macro Economics',           hint: 'GDP, inflation, RBI policy, fiscal & external balances.' },
+  { to: '/market-data/events',              label: 'Corporate Events',          hint: 'Upcoming results/dividend dates + your own events; holdings highlighted.' },
 ];
 
 // Sublinks under the "US" dropdown (Alpaca-powered US market data).
@@ -69,6 +70,7 @@ function Navbar({ onDisconnect }) {
       </Link>
       <Link to="/" style={linkStyle(location.pathname === '/')}>Dashboard</Link>
       <Link to="/portfolio" style={linkStyle(location.pathname === '/portfolio')}>Portfolio</Link>
+      <Link to="/journal" style={linkStyle(location.pathname === '/journal')}>Journal</Link>
       <Link to="/virtual" style={linkStyle(location.pathname.startsWith('/virtual'))}>Virtual</Link>
       <Link to="/basket" style={linkStyle(location.pathname.startsWith('/basket'))}>Basket</Link>
       <Link to="/screener" style={linkStyle(location.pathname === '/screener')}>Screener</Link>

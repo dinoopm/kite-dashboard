@@ -7,6 +7,7 @@ const { SMA, EMA, RSI, MACD, BollingerBands, ATR, VWAP, ADX } = require('technic
 const YahooFinance = require('yahoo-finance2').default;
 const yahooFinance = new YahooFinance();
 const cheerio = require('cheerio');
+const axios = require('axios');
 
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const { createClient } = require('@supabase/supabase-js');
@@ -5164,6 +5165,396 @@ app.get('/api/red-flags/:symbol', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('[red-flags]', sym, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Per-stock institutional activity for the India instrument page: quarterly
+// shareholding trend + 90d bulk/block deals + delivery trend, read into one
+// deterministic verdict (see backend/picks/institutional.js; the US page has
+// its own /api/us/holders in alpaca.js from Yahoo 13F data). The screener
+// fetch/parse is injected so the module shares the 12h shareholding cache
+// used by /api/screener-shareholding instead of scraping twice.
+const { indiaInstitutional } = require('./picks/institutional');
+const getShareholdingQuarters = async (symbol) => {
+  const cacheKey = `${symbol}::consolidated`;
+  const cached = screenerShareholdingCache[cacheKey];
+  if (cached && Date.now() - cached.ts < SCREENER_TTL) return cached.data.quarters;
+  let html;
+  try {
+    ({ html } = await fetchScreenerHTML(symbol, { consolidated: true }));
+  } catch (err) {
+    if (err.status === 404) ({ html } = await fetchScreenerHTML(symbol, { consolidated: false }));
+    else throw err;
+  }
+  const quarters = parseScreenerShareholding(html);
+  screenerShareholdingCache[cacheKey] = { data: { source: 'screener.in', symbol, period: 'quarterly', quarters }, ts: Date.now() };
+  return quarters;
+};
+const institutionalCache = {}; // symbol -> { data, ts }
+const INSTITUTIONAL_TTL = 10 * 60 * 1000;
+app.get('/api/institutional/:symbol', async (req, res) => {
+  const sym = String(req.params.symbol || '').toUpperCase();
+  const hit = institutionalCache[sym];
+  if (hit && Date.now() - hit.ts < INSTITUTIONAL_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const data = await indiaInstitutional(sym, { getQuarters: getShareholdingQuarters });
+    institutionalCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[institutional]', sym, err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Portfolio X-Ray: every per-stock analytic (red flags, vol percentile,
+// institutional verdict, technical signal) across actual Kite holdings,
+// ranked by a deterministic attention score — see backend/picks/xray.js.
+// Reuses the same cached functions behind the individual endpoints.
+const { portfolioXray } = require('./picks/xray');
+let xrayCache = { data: null, ts: 0 };
+const XRAY_TTL = 10 * 60 * 1000;
+app.get('/api/portfolio/xray', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: 'MCP not connected' });
+  if (xrayCache.data && Date.now() - xrayCache.ts < XRAY_TTL) {
+    return res.json({ ...xrayCache.data, cached: true });
+  }
+  try {
+    const holdingsResult = await fetchWithCache('get_holdings', 'holdings', {});
+    let holdings = [];
+    if (holdingsResult?.content?.[0]?.text) {
+      const parsed = JSON.parse(holdingsResult.content[0].text);
+      holdings = parsed.data || parsed;
+    }
+    if (!Array.isArray(holdings) || holdings.length === 0) {
+      return res.json({ holdings: [], summary: { total: 0, flagged: 0, clean: 0, worstThree: [] } });
+    }
+
+    const redFlagsFor = async (sym) => {
+      const hit = redFlagCache[sym];
+      if (hit && Date.now() - hit.ts < RED_FLAG_TTL) return hit.data;
+      const data = await indiaRedFlags(sym);
+      redFlagCache[sym] = { data, ts: Date.now() };
+      return data;
+    };
+    const institutionalFor = async (sym) => {
+      const hit = institutionalCache[sym];
+      if (hit && Date.now() - hit.ts < INSTITUTIONAL_TTL) return hit.data;
+      const data = await indiaInstitutional(sym, { getQuarters: getShareholdingQuarters });
+      institutionalCache[sym] = { data, ts: Date.now() };
+      return data;
+    };
+    // Signal from already-warm candles only — no refreshTodayCandle here, so
+    // the xray never triggers a Kite fetch storm; /api/alerts keeps that job.
+    const signalFor = async (h) => {
+      const candles = historyCache[h.instrument_token];
+      if (!candles || candles.length < 15) return null;
+      const alert = await computeStockAlert({
+        symbol: h.tradingsymbol, token: h.instrument_token,
+        lastPrice: h.last_price, previousClose: h.close_price, candles, holding: h,
+      });
+      return alert?.tradePlan?.action || null;
+    };
+
+    const data = await portfolioXray(holdings, { redFlagsFor, institutionalFor, signalFor });
+    xrayCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[xray]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Corporate events (India) ────────────────────────────────────────────────
+// NSE's event-calendar API returns the ENTIRE upcoming board-meeting calendar
+// (~150 rows: results dates, dividends, fund raising) in one payload, so a
+// 12h in-memory cache of the full list beats a Supabase table + scheduled
+// scraper — always fresh after a restart, no migration. Direct call with the
+// listing-page Referer works where the cookie handshake gets 403'd.
+let eventsCalCache = { rows: null, ts: 0 };
+const EVENTS_TTL = 12 * 60 * 60 * 1000;
+async function getEventCalendar() {
+  if (eventsCalCache.rows && Date.now() - eventsCalCache.ts < EVENTS_TTL) return eventsCalCache.rows;
+  const r = await axios.get('https://www.nseindia.com/api/event-calendar', {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      'Accept': 'application/json',
+      'Referer': 'https://www.nseindia.com/companies-listing/corporate-filings-event-calendar',
+    },
+    timeout: 15000,
+  });
+  const months = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' };
+  const rows = (Array.isArray(r.data) ? r.data : []).map(e => {
+    const [dd, mon, yyyy] = String(e.date || '').split('-');
+    return {
+      symbol: e.symbol,
+      company: e.company || null,
+      purpose: e.purpose,
+      detail: e.bm_desc,
+      date: yyyy && months[mon] ? `${yyyy}-${months[mon]}-${dd.padStart(2, '0')}` : null,
+    };
+  }).filter(e => e.symbol && e.date);
+  if (rows.length) eventsCalCache = { rows, ts: Date.now() };
+  return rows;
+}
+
+// NSE calendar + user-added events (user_events table), one shape:
+// { symbol, purpose, detail, date, custom, id? }. User events survive an NSE
+// outage — each source degrades independently.
+async function getAllEvents() {
+  const [nseR, userR] = await Promise.allSettled([
+    getEventCalendar(),
+    supabase.from('user_events').select('id,symbol,event_date,title,notes').order('event_date', { ascending: true }),
+  ]);
+  const nse = nseR.status === 'fulfilled' ? nseR.value : [];
+  const user = (userR.status === 'fulfilled' && !userR.value.error ? userR.value.data : [])
+    .map(e => ({ id: e.id, symbol: e.symbol, purpose: e.title, detail: e.notes || null, date: e.event_date, custom: true }));
+  return [...nse.map(e => ({ ...e, custom: false })), ...user];
+}
+
+// Held symbols from the cached holdings call — empty set when Kite is down
+// so the events page still renders, just without highlights.
+async function getHeldSymbols() {
+  try {
+    const holdingsResult = await fetchWithCache('get_holdings', 'holdings', {});
+    const txt = holdingsResult?.content?.[0]?.text;
+    if (!txt) return new Set();
+    const parsed = JSON.parse(txt);
+    return new Set((parsed.data || parsed).map(h => h.tradingsymbol));
+  } catch { return new Set(); }
+}
+
+// Full upcoming calendar for the Events page.
+app.get('/api/events', async (req, res) => {
+  try {
+    const [rows, held] = await Promise.all([getAllEvents(), getHeldSymbols()]);
+    const today = new Date().toISOString().slice(0, 10);
+    const events = rows.filter(e => e.date >= today)
+      .map(e => ({ ...e, held: held.has(e.symbol) }))
+      .sort((a, b) => a.date.localeCompare(b.date) || (b.held - a.held));
+    res.json({ events, holdings: [...held], source: 'NSE event calendar + your events' });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+app.post('/api/user-events', async (req, res) => {
+  const { symbol, date, title, notes } = req.body || {};
+  const sym = String(symbol || '').toUpperCase().trim();
+  if (!sym || !/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !String(title || '').trim()) {
+    return res.status(400).json({ error: 'symbol, date (YYYY-MM-DD) and title are required' });
+  }
+  try {
+    const { data, error } = await supabase.from('user_events')
+      .insert({ symbol: sym, event_date: date, title: String(title).trim(), notes: notes ? String(notes).trim() : null })
+      .select().single();
+    if (error) throw new Error(error.message);
+    res.json({ id: data.id, symbol: data.symbol, date: data.event_date, purpose: data.title, detail: data.notes, custom: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/user-events/:id', async (req, res) => {
+  try {
+    const { error } = await supabase.from('user_events').delete().eq('id', req.params.id);
+    if (error) throw new Error(error.message);
+    res.json({ deleted: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/events/:symbol', async (req, res) => {
+  const sym = String(req.params.symbol || '').toUpperCase();
+  try {
+    const rows = await getAllEvents();
+    const today = new Date().toISOString().slice(0, 10);
+    const events = rows.filter(e => e.symbol === sym && e.date >= today)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    res.json({ symbol: sym, events, source: 'NSE event calendar + your events', asOf: new Date(eventsCalCache.ts || Date.now()).toISOString() });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// US macro calendar (FOMC/CPI/jobs/GDP) — seeded ~annually into macro_events
+// by scraper/macro_events.js; dates are fixed a year ahead, so a plain read.
+app.get('/api/macro-events', async (req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data, error } = await supabase.from('macro_events')
+      .select('event_date,title,detail').gte('event_date', today)
+      .order('event_date', { ascending: true }).limit(100);
+    if (error) throw new Error(error.message);
+    res.json({ events: (data || []).map(e => ({ date: e.event_date, title: e.title, detail: e.detail })), source: 'Fed/BLS/BEA schedules (seeded annually, FOMC cross-checked against federalreserve.gov)' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Event-reaction study: measured base rates around past macro events
+// (see backend/macroStudy.js). Heavy-ish (3 Yahoo charts + Fed page) → 24h cache.
+const { macroStudy } = require('./macroStudy');
+let macroStudyCache = { data: null, ts: 0 };
+app.get('/api/macro-study', async (req, res) => {
+  if (macroStudyCache.data && Date.now() - macroStudyCache.ts < 24 * 60 * 60 * 1000) {
+    return res.json({ ...macroStudyCache.data, cached: true });
+  }
+  try {
+    const data = await macroStudy();
+    macroStudyCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// Risk-On / Risk-Off regime: is money flowing into bonds or stocks? Three
+// deterministic gauges over Yahoo daily closes — see backend/riskRegime.js.
+const { riskRegime } = require('./riskRegime');
+let riskRegimeCache = { data: null, ts: 0 };
+app.get('/api/risk-regime', async (req, res) => {
+  if (riskRegimeCache.data && Date.now() - riskRegimeCache.ts < 6 * 60 * 60 * 1000) {
+    return res.json({ ...riskRegimeCache.data, cached: true });
+  }
+  try {
+    const data = await riskRegime();
+    riskRegimeCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// ─── Morning briefing ────────────────────────────────────────────────────────
+// "What changed since yesterday" — market flows + VIX, per-holding analytic
+// deltas (needs holding_state_snapshots), quant-picks churn. See briefing.js.
+const { composeBriefing } = require('./briefing');
+let briefingCache = { data: null, ts: 0 };
+const BRIEFING_TTL = 30 * 60 * 1000;
+app.get('/api/briefing', async (req, res) => {
+  if (briefingCache.data && Date.now() - briefingCache.ts < BRIEFING_TTL && briefingCache.data.date === new Date().toISOString().slice(0, 10)) {
+    return res.json({ ...briefingCache.data, cached: true });
+  }
+  try {
+    const getQuotes = async (instruments) => {
+      const result = await callWithTimeout({ name: 'get_quotes', arguments: { instruments } }, 15000);
+      const txt = result?.content?.[0]?.text;
+      return txt ? JSON.parse(txt) : {};
+    };
+    // Reuse the x-ray (and its 10-min cache) as the holdings-state source.
+    const getXray = async () => {
+      if (xrayCache.data && Date.now() - xrayCache.ts < XRAY_TTL) return xrayCache.data;
+      const r = await fetch(`http://localhost:${PORT}/api/portfolio/xray`);
+      return r.ok ? r.json() : null;
+    };
+    const data = await composeBriefing({ getQuotes, getXray, getEvents: getAllEvents });
+    briefingCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[briefing]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Trade journal ───────────────────────────────────────────────────────────
+// Kite's API only exposes the CURRENT day's trades, so the journal accumulates
+// into Supabase `trade_log`: syncToday() upserts today's fills (idempotent on
+// trade_id), runs at most once per day opportunistically when /stats is hit,
+// and can be forced via POST /api/journal/sync. History is backfilled from a
+// Zerodha Console tradebook CSV via POST /api/journal/import.
+const { journalStats } = require('./journal/engine');
+let lastTradeSyncDay = null;
+
+async function syncTodayTrades() {
+  if (!mcpClient) throw new Error('MCP not connected');
+  const result = await callWithTimeout({ name: 'get_trades', arguments: {} }, 15000);
+  const txt = result?.content?.[0]?.text;
+  if (result.isError || !txt) throw new Error(txt || 'get_trades failed');
+  let trades = JSON.parse(txt);
+  trades = trades.data || trades;
+  if (!Array.isArray(trades) || trades.length === 0) return { synced: 0 };
+  const rows = trades.map(t => ({
+    trade_id: String(t.trade_id),
+    order_id: t.order_id != null ? String(t.order_id) : null,
+    symbol: t.tradingsymbol,
+    exchange: t.exchange || null,
+    side: t.transaction_type, // 'BUY' | 'SELL'
+    qty: t.quantity,
+    price: t.average_price,
+    trade_ts: t.fill_timestamp || t.exchange_timestamp || t.order_timestamp || new Date().toISOString(),
+    imported_via: 'kite',
+  })).filter(r => r.trade_id && r.symbol && r.side && r.qty > 0);
+  if (rows.length) {
+    const { error } = await supabase.from('trade_log').upsert(rows, { onConflict: 'trade_id' });
+    if (error) throw new Error(error.message);
+  }
+  return { synced: rows.length };
+}
+
+app.post('/api/journal/sync', async (req, res) => {
+  try {
+    const out = await syncTodayTrades();
+    lastTradeSyncDay = new Date().toISOString().slice(0, 10);
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Zerodha Console tradebook CSV backfill. Body = raw CSV text.
+app.post('/api/journal/import', express.text({ type: '*/*', limit: '10mb' }), async (req, res) => {
+  try {
+    const { parse } = require('csv-parse/sync');
+    const records = parse(req.body || '', { columns: true, skip_empty_lines: true, trim: true });
+    const rows = [];
+    for (const r of records) {
+      // Console headers: symbol, isin, trade_date, exchange, segment, series,
+      // trade_type, auction, quantity, price, trade_id, order_id,
+      // order_execution_time. Only equity fills make sense here.
+      if (r.segment && !/^EQ/i.test(r.segment)) continue;
+      const side = String(r.trade_type || '').toUpperCase();
+      if (side !== 'BUY' && side !== 'SELL') continue;
+      if (!r.trade_id || !r.symbol) continue;
+      rows.push({
+        trade_id: String(r.trade_id),
+        order_id: r.order_id ? String(r.order_id) : null,
+        symbol: String(r.symbol).toUpperCase(),
+        exchange: r.exchange || null,
+        side,
+        qty: Number(r.quantity),
+        price: Number(r.price),
+        trade_ts: r.order_execution_time || r.trade_date,
+        imported_via: 'csv',
+      });
+    }
+    if (!rows.length) return res.status(400).json({ error: 'No equity BUY/SELL rows found in the CSV — is this a Console tradebook export?' });
+    // Chunked upsert to stay under payload limits.
+    for (let i = 0; i < rows.length; i += 500) {
+      const { error } = await supabase.from('trade_log').upsert(rows.slice(i, i + 500), { onConflict: 'trade_id' });
+      if (error) throw new Error(error.message);
+    }
+    res.json({ imported: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/journal/stats', async (req, res) => {
+  try {
+    // Opportunistic daily accumulation: first stats request of the day pulls
+    // today's fills so the user never has to remember to sync.
+    const today = new Date().toISOString().slice(0, 10);
+    if (lastTradeSyncDay !== today && mcpClient) {
+      try { await syncTodayTrades(); lastTradeSyncDay = today; }
+      catch (e) { console.warn('[journal] daily sync skipped:', e.message); }
+    }
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    const from = dateRe.test(req.query.from || '') ? req.query.from : undefined;
+    const to = dateRe.test(req.query.to || '') ? req.query.to : undefined;
+    res.json(await journalStats({ from, to }));
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

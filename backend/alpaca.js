@@ -21,6 +21,7 @@ const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 // daily candles, which is precisely the shape Alpaca bars produce.
 const { SCREENER_FIELDS, computeScreenerRow, validateConditions, evaluateConditions } = require('./screener/engine');
 const { getSP500, getNasdaq100 } = require('./usUniverses');
+const { hvSpike } = require('./volMath');
 const { getEtfHoldings } = require('./etfHoldings');
 const MIN_SCREENER_BARS = 60;
 
@@ -246,6 +247,20 @@ router.get('/snapshot/:symbol', async (req, res) => {
   }
 });
 
+// Alpaca SIP bars occasionally carry an off-exchange misprint in a wick
+// (seen live: SPY 2026-02-02 daily low of 68.64 against a 686–693 body — a
+// dropped digit). A wick more than 2× away from the open/close body on either
+// side is treated as a bad print and clamped to the body: real extremes that
+// large drag the close with them, misprints don't. Applied at every point
+// where raw Alpaca bars are normalised, so charts, indicators, red flags and
+// the screener all see clean data.
+const sanitizeBar = (b) => {
+  const bodyLo = Math.min(b.open, b.close), bodyHi = Math.max(b.open, b.close);
+  const low = (b.low <= 0 || b.low < bodyLo * 0.5) ? bodyLo : b.low;
+  const high = b.high > bodyHi * 2 ? bodyHi : b.high;
+  return (low === b.low && high === b.high) ? b : { ...b, low, high };
+};
+
 // Historical bars for charting, normalised to the app's {date,open,high,low,close,volume} shape.
 router.get('/bars/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
@@ -265,7 +280,7 @@ router.get('/bars/:symbol', async (req, res) => {
       pageToken = data?.next_page_token || null;
     } while (pageToken && allBars.length < 20000);
 
-    let bars = allBars.map(b => ({
+    let bars = allBars.map(b => sanitizeBar({
       date: b.t,
       open: b.o,
       high: b.h,
@@ -373,11 +388,24 @@ router.get('/red-flags/:symbol', async (req, res) => {
       }
     }
 
+    // 6) Volatility spike — daily swings far outside the stock's own past
+    // year (computed on the full 1y series, not the 60-bar slice). Abnormal
+    // vol is the backdrop of every pattern above — the "look closer" cue.
+    const spike = hvSpike(all.map(b => b.close));
+    if (spike && spike.pctile >= 90) {
+      const span = spike.points >= 200 ? 'past year' : `last ~${spike.points} sessions`;
+      flags.push({
+        id: 'vol-spike', severity: 'amber',
+        title: `Volatility spike — swings bigger than ${Math.min(99, Math.round(spike.pctile))}% of its ${span}`,
+        detail: `20-day realized volatility is ${r1(spike.hv20)}% annualized (≈±${r1(spike.hv20 / Math.sqrt(252))}%/day), near the top of its range over the ${span}. Something changed — check news and earnings before adding, and size smaller.`,
+      });
+    }
+
     res.json({
       symbol: sym, market: 'US',
       source: 'Alpaca daily bars (price/volume only — no delivery-% or bulk-deal data exists for US stocks)',
       asOf: bars.length ? bars[bars.length - 1].date.slice(0, 10) : null,
-      checks: ['thin liquidity', 'pump-and-fade', 'fading volume', 'gap-and-fade', 'quiet volume spikes'],
+      checks: ['thin liquidity', 'pump-and-fade', 'fading volume', 'gap-and-fade', 'quiet volume spikes', 'volatility spike'],
       flags,
     });
   } catch (err) {
@@ -472,7 +500,7 @@ async function fetchDailyBars(symbol, years = 4) {
       if (Array.isArray(data?.bars)) allBars = allBars.concat(data.bars);
       pageToken = data?.next_page_token || null;
     } while (pageToken && allBars.length < 12000);
-    const bars = allBars.map(b => ({ date: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v }));
+    const bars = allBars.map(b => sanitizeBar({ date: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v }));
     if (bars.length > 0) dailyBarsCache[sym] = { data: bars, ts: Date.now() };
     return bars;
   })().finally(() => { delete dailyBarsInflight[sym]; });
@@ -846,6 +874,252 @@ router.get('/global-indices', async (req, res) => {
   }
 });
 
+// ─── GET /api/us/events/:symbol — next earnings + ex-dividend (Yahoo) ───────
+const usEventsCache = {}; // sym -> { data, ts }
+const US_EVENTS_TTL = 12 * 60 * 60 * 1000;
+router.get('/events/:symbol', async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const hit = usEventsCache[sym];
+  if (hit && Date.now() - hit.ts < US_EVENTS_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const q = await yf.quoteSummary(sym, { modules: ['calendarEvents'] });
+    const ce = q.calendarEvents || {};
+    const iso = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+    // earningsDate is a 1–2 element window (Yahoo gives a range until
+    // confirmed) — and when the NEXT report isn't scheduled yet, Yahoo hands
+    // back the LAST one. Only report a window that hasn't fully passed.
+    const earningsDates = (ce.earnings?.earningsDate || []).map(iso).filter(Boolean);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const upcoming = earningsDates.length && earningsDates[earningsDates.length - 1] >= todayIso;
+    const data = {
+      symbol: sym,
+      earnings: upcoming ? { from: earningsDates[0], to: earningsDates[earningsDates.length - 1] } : null,
+      exDividendDate: iso(ce.exDividendDate),
+      dividendDate: iso(ce.dividendDate),
+      source: 'Yahoo Finance calendarEvents',
+    };
+    usEventsCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(err.statusCode || 502).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/us/earnings-calendar — upcoming earnings across S&P500+NDX ────
+// Yahoo's multi-symbol quote endpoint carries earningsTimestampStart/End per
+// symbol, so ~600 names cost 6 batched calls instead of 600 quoteSummary
+// calls. Note earningsTimestamp (no suffix) can be stale — Start/End are the
+// live fields. "mine" flags symbols present in any US basket or virtual
+// portfolio (the US side has no brokerage holdings).
+let earningsCalCache = { data: null, ts: 0 };
+const EARNINGS_CAL_TTL = 12 * 60 * 60 * 1000;
+router.get('/earnings-calendar', async (req, res) => {
+  if (earningsCalCache.data && Date.now() - earningsCalCache.ts < EARNINGS_CAL_TTL) {
+    return res.json({ ...earningsCalCache.data, cached: true });
+  }
+  try {
+    const [sp, ndx] = await Promise.all([getSP500().catch(() => []), getNasdaq100().catch(() => [])]);
+    const symbols = [...new Set([...sp, ...ndx].map(x => x.symbol))];
+
+    // Yahoo uses dashes for share classes (BRK-B), the universe lists use
+    // dots (BRK.B) — query in Yahoo form, report in the app's form. Dotted
+    // symbols also return stub objects that fail the lib's schema validation
+    // and would kill the whole chunk, hence validateResult: false.
+    const appSymbol = new Map(symbols.map(s => [s.replace(/\./g, '-'), s]));
+    const rows = [];
+    const ySymbols = [...appSymbol.keys()];
+    for (let i = 0; i < ySymbols.length; i += 100) {
+      try {
+        const quotes = await yf.quote(ySymbols.slice(i, i + 100), {}, { validateResult: false });
+        for (const q of Array.isArray(quotes) ? quotes : [quotes]) {
+          const start = q.earningsTimestampStart, end = q.earningsTimestampEnd;
+          if (!start) continue;
+          const d = new Date(start);
+          rows.push({
+            symbol: appSymbol.get(q.symbol) || q.symbol,
+            name: q.shortName || q.longName || q.symbol,
+            date: d.toISOString().slice(0, 10),
+            // NYSE/Nasdaq regular session starts 13:30/14:30 UTC — a slot
+            // before that is pre-market, after ~20:00 UTC is post-close.
+            session: d.getUTCHours() < 13 ? 'before open' : d.getUTCHours() >= 20 ? 'after close' : 'during market',
+            estimated: end && new Date(end).toISOString().slice(0, 10) !== d.toISOString().slice(0, 10),
+            marketCap: q.marketCap ?? null,
+          });
+        }
+      } catch (e) { console.warn('[earnings-calendar] chunk failed:', e.message); }
+    }
+
+    // "Your" US symbols: union of basket symbol arrays + portfolio holdings.
+    const mine = new Set();
+    if (supabase) {
+      const [bk, pf] = await Promise.all([
+        supabase.from('us_baskets').select('symbols'),
+        supabase.from('us_virtual_portfolios').select('holdings'),
+      ]);
+      for (const b of bk.data || []) for (const s of b.symbols || []) mine.add(String(s).toUpperCase());
+      for (const p of pf.data || []) for (const h of p.holdings || []) if (h?.symbol) mine.add(String(h.symbol).toUpperCase());
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const horizon = new Date(); horizon.setDate(horizon.getDate() + 60);
+    const hz = horizon.toISOString().slice(0, 10);
+    const events = rows
+      .filter(r => r.date >= today && r.date <= hz)
+      .map(r => ({ ...r, mine: mine.has(r.symbol) }))
+      .sort((a, b) => a.date.localeCompare(b.date) || (b.marketCap ?? 0) - (a.marketCap ?? 0));
+
+    const data = { events, universe: symbols.length, source: 'Yahoo batched quotes over S&P 500 + Nasdaq 100' };
+    earningsCalCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(err.statusCode || 502).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/us/earnings-reaction/:symbol — how it moves on report days ────
+// Historical earnings dates come from SEC EDGAR: an 8-K with Item 2.02
+// ("Results of Operations") is filed the day results are announced — exact,
+// official, free. Reaction per report = the larger of the filing-day and
+// next-day close-to-close moves, because the filing doesn't say whether the
+// release was pre-market (reaction lands day D) or post-close (day D+1); the
+// earnings move dominates that session, so max-abs picks the right one.
+const SEC_UA = { 'User-Agent': 'kite-dashboard/1.0 dinoopm@gmail.com' };
+let cikMapCache = { map: null, ts: 0 };
+const earningsReactionCache = {}; // sym -> { data, ts }
+const EARN_REACT_TTL = 24 * 60 * 60 * 1000;
+
+async function getCikMap() {
+  if (cikMapCache.map && Date.now() - cikMapCache.ts < EARN_REACT_TTL) return cikMapCache.map;
+  const r = await fetch('https://www.sec.gov/files/company_tickers.json', { headers: SEC_UA });
+  if (!r.ok) throw new Error(`SEC ticker map HTTP ${r.status}`);
+  const j = await r.json();
+  const map = new Map(Object.values(j).map(t => [t.ticker.toUpperCase(), String(t.cik_str).padStart(10, '0')]));
+  cikMapCache = { map, ts: Date.now() };
+  return map;
+}
+
+router.get('/earnings-reaction/:symbol', async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const hit = earningsReactionCache[sym];
+  if (hit && Date.now() - hit.ts < EARN_REACT_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const cik = (await getCikMap()).get(sym.replace(/\./g, '-')) || (await getCikMap()).get(sym);
+    if (!cik) return res.status(404).json({ error: `No SEC CIK found for ${sym}` });
+    const sub = await (await fetch(`https://data.sec.gov/submissions/CIK${cik}.json`, { headers: SEC_UA })).json();
+    const rec = sub.filings?.recent || {};
+    const reportDates = [];
+    for (let i = 0; i < (rec.form || []).length; i++) {
+      if (rec.form[i] === '8-K' && (rec.items[i] || '').includes('2.02')) reportDates.push(rec.filingDate[i]);
+    }
+    if (!reportDates.length) return res.status(404).json({ error: 'No earnings 8-Ks on file' });
+
+    const bars = await fetchDailyBars(sym, 4);
+    const idx = new Map(bars.map((b, i) => [b.date.slice(0, 10), i]));
+    const dates = bars.map(b => b.date.slice(0, 10));
+    const reactions = [];
+    for (const d of reportDates) {
+      // Only filings inside the price window — older ones would snap to the
+      // window edge and count an unrelated day as a reaction.
+      if (d < dates[0]) continue;
+      // filing date may be a non-session day — snap to the first session ≥ d
+      let i = idx.get(d);
+      if (i == null) { i = dates.findIndex(x => x >= d); if (i === -1) continue; }
+      const ret = (j) => (j > 0 && j < bars.length ? (bars[j].close / bars[j - 1].close - 1) * 100 : null);
+      const r0 = ret(i), r1 = ret(i + 1);
+      const move = [r0, r1].filter(v => v != null).sort((a, b) => Math.abs(b) - Math.abs(a))[0];
+      if (move != null) reactions.push({ date: d, movePct: +move.toFixed(2) });
+    }
+    if (reactions.length < 2) return res.status(404).json({ error: 'Not enough price history around past reports' });
+
+    const moves = reactions.map(r => r.movePct);
+    const data = {
+      symbol: sym,
+      n: reactions.length,
+      avgAbsPct: +(moves.reduce((s, v) => s + Math.abs(v), 0) / moves.length).toFixed(2),
+      worst: Math.min(...moves),
+      best: Math.max(...moves),
+      pctUp: Math.round((moves.filter(v => v > 0).length / moves.length) * 100),
+      recent: reactions.slice(0, 8),
+      source: 'SEC EDGAR 8-K (Item 2.02) filing dates × Alpaca daily closes',
+    };
+    earningsReactionCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(err.statusCode || 502).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/us/holders/:symbol — institutional ownership (Yahoo 13F) ──────
+// Mirrors /api/institutional/:symbol (India, backend/picks/institutional.js)
+// in spirit: official positions + a deterministic verdict. US positions come
+// from quarterly 13F filings (up to 45 days late by rule), so the panel
+// carries the as-of quarter honestly; netSharePurchaseActivity is Yahoo's
+// rolling ~6m aggregate and is the freshest institutional signal free data has.
+const holdersCache = {}; // sym -> { data, ts }
+const HOLDERS_TTL = 12 * 60 * 60 * 1000; // 12h — 13F data moves quarterly
+router.get('/holders/:symbol', async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const hit = holdersCache[sym];
+  if (hit && Date.now() - hit.ts < HOLDERS_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const q = await yf.quoteSummary(sym, { modules: ['majorHoldersBreakdown', 'institutionOwnership', 'fundOwnership', 'netSharePurchaseActivity'] });
+    const mhb = q.majorHoldersBreakdown || {};
+    const nsp = q.netSharePurchaseActivity || {};
+    const pct = (v) => (v != null ? +(v * 100).toFixed(2) : null);
+    const mapOwner = (o) => ({
+      org: o.organization,
+      pct: pct(o.pctHeld),
+      shares: o.position ?? null,
+      value: o.value ?? null,
+      pctChange: o.pctChange != null ? +(o.pctChange * 100).toFixed(2) : null,
+      reportDate: o.reportDate ? new Date(o.reportDate).toISOString().slice(0, 10) : null,
+    });
+    const topInstitutions = (q.institutionOwnership?.ownershipList || []).slice(0, 10).map(mapOwner);
+    const topFunds = (q.fundOwnership?.ownershipList || []).slice(0, 10).map(mapOwner);
+    const asOf = topInstitutions[0]?.reportDate || topFunds[0]?.reportDate || null;
+
+    const netInstBuyingPct = nsp.netInstBuyingPercent != null ? +(nsp.netInstBuyingPercent * 100).toFixed(2) : null;
+    const changes = topInstitutions.map(o => o.pctChange).filter(v => v != null);
+    const rising = changes.filter(v => v >= 0).length;
+    const lagNote = asOf ? ` Positions as of ${asOf} (13F filings run up to 45 days late).` : '';
+    let verdict = { label: 'NO CLEAR FOOTPRINT', tone: 'neutral', detail: `No decisive institutional pattern in the latest filings.${lagNote}` };
+    if (netInstBuyingPct != null && netInstBuyingPct > 0.3 && changes.length >= 5 && rising > changes.length / 2) {
+      verdict = {
+        label: 'ACCUMULATION FOOTPRINT', tone: 'good',
+        detail: `Institutions net-bought ${netInstBuyingPct}% of shares over ~6 months and ${rising} of the top ${changes.length} holders grew their stake.${lagNote}`,
+      };
+    } else if (netInstBuyingPct != null && netInstBuyingPct < -0.3 && changes.length >= 5 && rising < changes.length / 2) {
+      verdict = {
+        label: 'DISTRIBUTION FOOTPRINT', tone: 'warn',
+        detail: `Institutions net-sold ${Math.abs(netInstBuyingPct)}% of shares over ~6 months and ${changes.length - rising} of the top ${changes.length} holders cut their stake.${lagNote}`,
+      };
+    }
+
+    const data = {
+      symbol: sym, market: 'US', asOf,
+      source: 'Yahoo Finance (13F quarterly filings + ~6m net-activity aggregate)',
+      summary: {
+        instPct: pct(mhb.institutionsPercentHeld),
+        instFloatPct: pct(mhb.institutionsFloatPercentHeld),
+        instCount: mhb.institutionsCount ?? null,
+        insiderPct: pct(mhb.insidersPercentHeld),
+      },
+      netActivity: {
+        period: nsp.period || null,
+        netInstBuyingPct,
+        insiderBuys: nsp.buyInfoShares ?? null,
+        insiderSells: nsp.sellInfoShares ?? null,
+        insiderNetShares: nsp.netInfoShares ?? null,
+      },
+      topInstitutions, topFunds, verdict,
+    };
+    holdersCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 // ─── GET /api/us/fundamentals/:symbol — Yahoo Finance fundamentals ──────────
 const fundamentalsCache = {}; // sym -> { data, ts }
 const FUND_TTL = 60 * 60 * 1000; // 1h
@@ -1158,7 +1432,7 @@ async function fetchBarsMulti(symbols, start) {
       const data = await alpacaGet('/stocks/bars', params, 60 * 60 * 1000);
       const bars = data?.bars || {};
       for (const s of Object.keys(bars)) {
-        (out[s] = out[s] || []).push(...bars[s].map(b => ({ date: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v })));
+        (out[s] = out[s] || []).push(...bars[s].map(b => sanitizeBar({ date: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v })));
       }
       pageToken = data?.next_page_token || null;
     } while (pageToken && ++guard < 60);

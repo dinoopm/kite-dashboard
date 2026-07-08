@@ -2,9 +2,36 @@ import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import EyeIcon from '../components/EyeIcon'
 
+// X-Ray badge palette — same tones the analytics panels use.
+const XRAY_TONES = {
+  alert: { color: '#f87171', border: 'rgba(239,68,68,0.5)' },
+  warn: { color: '#fbbf24', border: 'rgba(251,191,36,0.45)' },
+  good: { color: '#34d399', border: 'rgba(52,211,153,0.45)' },
+  neutral: { color: 'var(--text-secondary)', border: 'var(--border)' },
+}
+
+function XrayBadges({ badges }) {
+  if (!badges?.length) return <span style={{ color: 'var(--text-secondary)', opacity: 0.5 }}>—</span>
+  return (
+    <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+      {badges.map(b => {
+        const t = XRAY_TONES[b.tone] || XRAY_TONES.neutral
+        return (
+          <span key={b.id} title={b.detail} style={{
+            fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px',
+            color: t.color, border: `1px solid ${t.border}`, borderRadius: '4px', padding: '0.05rem 0.3rem',
+            whiteSpace: 'nowrap',
+          }}>{b.label}</span>
+        )
+      })}
+    </div>
+  )
+}
+
 function Portfolio() {
   const [profile, setProfile] = useState(null)
   const [holdings, setHoldings] = useState(null)
+  const [xray, setXray] = useState(null) // /api/portfolio/xray — attention scores + badges per holding
   const [mfHoldings, setMfHoldings] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -69,6 +96,17 @@ function Portfolio() {
     return () => controller.abort();
   }, [])
 
+  // X-Ray loads independently of the holdings table — the first uncached pass
+  // can take a while (screener scrape per symbol), so the page never waits on it.
+  useEffect(() => {
+    let on = true;
+    fetch('/api/portfolio/xray')
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (on && j && !j.error) setXray(j) })
+      .catch(() => { })
+    return () => { on = false };
+  }, [])
+
   if (loading) return <div className="loader"></div>
   if (error) return <div className="dashboard-layout"><div className="glass-panel"><p className="negative">{error}</p><button onClick={() => fetchData()} style={{padding: '0.5rem 1rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem'}}>Retry</button></div></div>
 
@@ -87,6 +125,9 @@ function Portfolio() {
   const pl = currentVal - totalInv;
   const plPercentage = totalInv ? ((pl / totalInv) * 100).toFixed(2) : 0;
 
+  const xrayBySymbol = {};
+  for (const r of xray?.holdings || []) xrayBySymbol[r.symbol] = r;
+
   const filteredAndSortedHoldings = (holdings || [])
     .filter(item => item.tradingsymbol.toLowerCase().includes(searchTerm.toLowerCase()))
     .map(item => {
@@ -98,7 +139,8 @@ function Portfolio() {
       const dayChange = item.day_change !== undefined ? item.day_change : (item.last_price - (item.close_price || item.last_price));
       const dayChangePct = item.day_change_percentage !== undefined ? item.day_change_percentage : (item.close_price ? (dayChange / item.close_price) * 100 : 0);
       const allocation = currentVal ? (currentValue / currentVal) * 100 : 0;
-      return { ...item, displayQuantity: q, currentValue, investment, itemPL, itemPLPercent, dayChange, dayChangePct, allocation };
+      const xr = xrayBySymbol[item.tradingsymbol];
+      return { ...item, displayQuantity: q, currentValue, investment, itemPL, itemPLPercent, dayChange, dayChangePct, allocation, xrayScore: xr?.score ?? -1, xrayBadges: xr?.badges ?? [] };
     })
     .sort((a, b) => {
       let valA = a[sortField];
@@ -338,6 +380,23 @@ function Portfolio() {
             </Link>
           </div>
 
+          {/* X-Ray attention strip — which holdings need a look, and why */}
+          {xray?.summary?.flagged > 0 && (
+            <div title={xray.scoring} style={{
+              display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap',
+              padding: '0.7rem 1rem', marginBottom: '1.25rem', borderRadius: '8px',
+              border: '1px solid rgba(251,191,36,0.35)', fontSize: '0.85rem',
+            }}>
+              <span style={{ fontWeight: 700, color: '#fbbf24' }}>
+                ⚠ {xray.summary.flagged} of {xray.summary.total} holdings need attention
+              </span>
+              <span style={{ color: 'var(--text-secondary)' }}>
+                {xray.summary.worstThree.map(w => `${w.symbol} (${w.score})`).join(' · ')}
+                {' — sort by X-Ray or hover the badges for details'}
+              </span>
+            </div>
+          )}
+
           {/* Portfolio Summary Stats */}
           {(() => {
             const todaysReturn = (holdings || []).reduce((sum, h) => {
@@ -401,6 +460,7 @@ function Portfolio() {
                 <thead>
                   <tr>
                     <th onClick={() => handleSort('tradingsymbol')} style={{cursor: 'pointer'}}>Instrument <SortIcon field="tradingsymbol"/></th>
+                    <th onClick={() => handleSort('xrayScore')} style={{cursor: 'pointer'}} title={xray?.scoring || 'Attention score from red flags, volatility, institutional and signal checks'}>X-Ray <SortIcon field="xrayScore"/></th>
                     <th onClick={() => handleSort('average_price')} style={{cursor: 'pointer'}}>Avg. Cost <SortIcon field="average_price"/></th>
                     <th onClick={() => handleSort('last_price')} style={{cursor: 'pointer'}}>LTP <SortIcon field="last_price"/></th>
                     <th onClick={() => handleSort('quantity')} style={{cursor: 'pointer'}}>Qty. <SortIcon field="quantity"/></th>
@@ -416,6 +476,7 @@ function Portfolio() {
                   {filteredAndSortedHoldings.map((item, index) => (
                     <tr key={index} onClick={() => navigate(`/instrument/${item.instrument_token}?symbol=${encodeURIComponent(item.tradingsymbol)}`)} style={{cursor: 'pointer'}}>
                       <td><strong>{item.tradingsymbol}</strong></td>
+                      <td>{xray ? <XrayBadges badges={item.xrayBadges} /> : <span style={{ color: 'var(--text-secondary)', opacity: 0.4, fontSize: '0.7rem' }}>…</span>}</td>
                       <td>₹{Number(item.average_price).toFixed(2)}</td>
                       <td>₹{item.last_price}</td>
                       <td>{item.displayQuantity}</td>

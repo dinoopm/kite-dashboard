@@ -10,6 +10,7 @@
 // response shape: { flags: [{ id, severity, title, detail }], source, asOf }.
 
 const { createClient } = require('@supabase/supabase-js');
+const { hvSpike } = require('../volMath');
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 const iso = (off) => { const d = new Date(); d.setDate(d.getDate() - off); return d.toISOString().slice(0, 10); };
@@ -20,14 +21,16 @@ async function indiaRedFlags(symbol) {
   const sym = String(symbol || '').toUpperCase();
   if (!sym) throw new Error('symbol required');
 
-  const [surv, deals, bhav, vg, gl] = await Promise.all([
+  const [surv, deals, bhav, vg, gl, hist] = await Promise.all([
     supabase.from('surveillance_stocks').select('measure,stage').eq('symbol', sym),
     supabase.from('large_deals').select('deal_type,quantity,price,client_name').eq('symbol', sym).gte('trade_date', iso(90)),
     supabase.from('nse_bhavcopy').select('trade_date,close,high,prev_close,deliv_per,turnover_lacs').eq('symbol', sym).eq('series', 'EQ').order('trade_date', { ascending: false }).limit(20),
     supabase.from('volume_gainers').select('week1_vol_change,pct_change').eq('symbol', sym).gte('trade_date', iso(30)),
     supabase.from('top_gainers_losers').select('category').eq('symbol', sym).gte('trade_date', iso(30)),
+    // ~1.5y of closes for the volatility-spike check (rolling 20D HV percentile)
+    supabase.from('nse_bhavcopy').select('trade_date,close').eq('symbol', sym).eq('series', 'EQ').order('trade_date', { ascending: false }).limit(400),
   ]);
-  for (const q of [surv, deals, bhav, vg, gl]) if (q.error) throw new Error(q.error.message);
+  for (const q of [surv, deals, bhav, vg, gl, hist]) if (q.error) throw new Error(q.error.message);
 
   const flags = [];
 
@@ -130,11 +133,24 @@ async function indiaRedFlags(symbol) {
     }
   }
 
+  // 5) Volatility spike — daily swings far outside the stock's own past year.
+  // Not manipulation per se, but abnormal vol is the common backdrop of every
+  // pattern above, and the single best "something changed, look closer" cue.
+  const spike = hvSpike((hist.data || []).map(r => r.close).reverse());
+  if (spike && spike.pctile >= 90) {
+    const span = spike.points >= 200 ? 'past year' : `last ~${spike.points} sessions`;
+    flags.push({
+      id: 'vol-spike', severity: 'amber',
+      title: `Volatility spike — swings bigger than ${Math.min(99, Math.round(spike.pctile))}% of its ${span}`,
+      detail: `20-day realized volatility is ${r1(spike.hv20)}% annualized (≈±${r1(spike.hv20 / Math.sqrt(252))}%/day), near the top of its range over the ${span}. Something changed — check news, results and the shareholding tab before adding, and size smaller.`,
+    });
+  }
+
   return {
     symbol: sym, market: 'IN',
     source: 'NSE feeds + daily bhavcopy (surveillance, bulk deals, delivery %, movers)',
     asOf: rows[0]?.trade_date || null,
-    checks: ['surveillance', 'deal churn', 'circuit ladder', 'distribution', 'low delivery', 'volume authenticity'],
+    checks: ['surveillance', 'deal churn', 'circuit ladder', 'distribution', 'low delivery', 'volume authenticity', 'volatility spike'],
     flags,
   };
 }

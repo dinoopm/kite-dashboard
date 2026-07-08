@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import VixWidget from '../components/VixWidget'
 import MacroWidget from '../components/MacroWidget'
+import RiskRegimePanel from '../components/RiskRegimePanel'
 import EyeIcon from '../components/EyeIcon'
 
 function Dashboard() {
@@ -19,6 +20,34 @@ function Dashboard() {
   const [error, setError] = useState(null);
   // Privacy toggle — hide invested amounts and P&L (persisted across sessions).
   const [hideAmounts, setHideAmounts] = useState(() => localStorage.getItem('hideAmounts') === '1');
+  const [xraySummary, setXraySummary] = useState(null); // holdings needing attention (score ≥3)
+  const [briefingTop, setBriefingTop] = useState(null); // top items from today's briefing
+
+  useEffect(() => {
+    let on = true;
+    fetch('/api/briefing')
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => {
+        if (!on || !j || j.error || j.quiet) return;
+        const items = [...(j.holdings || []), ...(j.picks || []), ...(j.market || [])].slice(0, 3);
+        if (items.length) setBriefingTop(items);
+      })
+      .catch(() => { });
+    return () => { on = false };
+  }, []);
+
+  useEffect(() => {
+    let on = true;
+    fetch('/api/portfolio/xray')
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => {
+        if (!on || !j || j.error) return;
+        const serious = (j.holdings || []).filter(h => h.score >= 3);
+        if (serious.length) setXraySummary(serious.slice(0, 3));
+      })
+      .catch(() => { });
+    return () => { on = false };
+  }, []);
   const toggleHideAmounts = () => setHideAmounts(prev => {
     const next = !prev;
     localStorage.setItem('hideAmounts', next ? '1' : '0');
@@ -195,6 +224,40 @@ function Dashboard() {
           </div>
         </div>
       </header>
+
+      {/* Portfolio X-Ray banner — only when a holding scores ≥3 (multiple warnings stacked) */}
+      {xraySummary && (
+        <div onClick={() => navigate('/portfolio')} style={{
+          display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap', cursor: 'pointer',
+          padding: '0.7rem 1.1rem', marginBottom: '1.5rem', borderRadius: '10px',
+          border: '1px solid rgba(251,191,36,0.4)', fontSize: '0.88rem',
+        }}>
+          <span style={{ fontWeight: 700, color: '#fbbf24' }}>⚠ Holdings need attention:</span>
+          <span style={{ color: 'var(--text-secondary)' }}>
+            {xraySummary.map(h => `${h.symbol} — ${h.badges.map(b => b.label).join(', ')}`).join(' · ')}
+          </span>
+          <span style={{ marginLeft: 'auto', color: 'var(--accent)', fontSize: '0.8rem', fontWeight: 600 }}>Portfolio X-Ray →</span>
+        </div>
+      )}
+
+      {/* Morning briefing teaser — top 3 items, deterministic composer */}
+      {briefingTop && (
+        <div onClick={() => navigate('/briefing')} className="glass-panel" style={{ padding: '0.9rem 1.2rem', marginBottom: '1.5rem', cursor: 'pointer' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.7rem', marginBottom: '0.5rem' }}>
+            <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)' }}>Morning Briefing</span>
+            <span style={{ marginLeft: 'auto', color: 'var(--accent)', fontSize: '0.78rem', fontWeight: 600 }}>full briefing →</span>
+          </div>
+          {briefingTop.map((it, i) => (
+            <div key={i} style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.6, display: 'flex', gap: '0.5rem', alignItems: 'baseline' }}>
+              <span style={{ flexShrink: 0, width: '6px', height: '6px', borderRadius: '50%', background: it.tone === 'warn' ? '#fbbf24' : it.tone === 'alert' ? '#f87171' : it.tone === 'good' ? '#34d399' : 'var(--text-secondary)' }} />
+              <span>{it.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Risk-on / risk-off — is money flowing into bonds or stocks? */}
+      <RiskRegimePanel />
 
       {/* Major Indices */}
       {data.indices && (

@@ -22,6 +22,8 @@ import UsBasketDetail from './pages/us/UsBasketDetail'
 import UsVirtualPortfolio from './pages/us/UsVirtualPortfolio'
 import UsVirtualPortfolioDetail from './pages/us/UsVirtualPortfolioDetail'
 import Chat from './pages/Chat'
+import Journal from './pages/Journal'
+import Briefing from './pages/Briefing'
 import FiiDii from './pages/marketData/FiiDii'
 import LargeDeals from './pages/marketData/LargeDeals'
 import Week52HighLow from './pages/marketData/Week52HighLow'
@@ -30,6 +32,7 @@ import VolumeGainers from './pages/marketData/VolumeGainers'
 import SurveillanceStocks from './pages/marketData/SurveillanceStocks'
 import StockPicks from './pages/marketData/StockPicks'
 import MacroEconomics from './pages/marketData/MacroEconomics'
+import EventsCalendar from './pages/marketData/EventsCalendar'
 import Navbar from './components/Navbar'
 
 function App() {
@@ -153,6 +156,8 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/alerts" element={<Alerts />} />
+          <Route path="/journal" element={<Journal />} />
+          <Route path="/briefing" element={<Briefing />} />
           <Route path="/indices" element={<SectorIndices />} />
           <Route path="/vix" element={<VixIndex />} />
           <Route path="/chat" element={<Chat />} />
@@ -164,6 +169,7 @@ function App() {
           <Route path="/market-data/volume-gainers" element={<VolumeGainers />} />
           <Route path="/market-data/surveillance" element={<SurveillanceStocks />} />
           <Route path="/market-data/macro" element={<MacroEconomics />} />
+          <Route path="/market-data/events" element={<EventsCalendar />} />
           <Route path="/instrument/:token" element={<Instrument />} />
           <Route path="/sector/:sectorId" element={<SectorDetail />} />
           <Route path="/basket" element={<Basket />} />

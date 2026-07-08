@@ -9,6 +9,9 @@ import { breakoutRank, breakoutLabel } from '../../lib/breakout';
 import { generateSignals } from '../../lib/signalEngine';
 import SignalChart from '../../components/SignalChart';
 import RedFlagsPanel from '../../components/RedFlagsPanel';
+import VolatilityPanel from '../../components/VolatilityPanel';
+import EventBadge from '../../components/EventBadge';
+import { realizedVol } from '../../lib/vixAnalytics';
 import AnalystsPanel from '../../components/AnalystsPanel';
 
 // US ETF/equity detail: company name, snapshot, price chart with MA overlays,
@@ -362,6 +365,115 @@ function Fundamentals({ sym }) {
       </div>
       <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '1rem', fontStyle: 'italic' }}>
         Fundamentals via Yahoo Finance{d.cached ? ' · cached' : ''}. ETFs report limited fundamentals.
+      </p>
+    </div>
+  );
+}
+
+// "What am I signing up for if I hold this through earnings?" — measured
+// reaction to its own past reports (/api/us/earnings-reaction: SEC 8-K dates
+// × daily closes). Rendered next to the upcoming-events chips.
+function EarningsReaction({ sym }) {
+  const [d, setD] = useState(null);
+  useEffect(() => {
+    let on = true; setD(null);
+    fetch(`/api/us/earnings-reaction/${sym}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (on && j && !j.error) setD(j); })
+      .catch(() => { });
+    return () => { on = false; };
+  }, [sym]);
+  if (!d) return null;
+  const hot = d.avgAbsPct >= 5;
+  return (
+    <div style={{ fontSize: '0.72rem', color: GREY, margin: '-0.5rem 0 0.9rem' }}
+      title={`${d.source} · last ${d.n} reports · best +${d.best}% / worst ${d.worst}%`}>
+      Earnings history: typically moves <b style={{ color: hot ? '#fbbf24' : 'var(--text-primary)' }}>±{d.avgAbsPct}%</b> on
+      report day ({d.n} reports, worst {d.worst}%) — {d.pctUp}% of them up.
+      {hot && ' Big-gap name: size accordingly if holding through the date.'}
+    </div>
+  );
+}
+
+// Verdict badge palette shared with VolatilityPanel/RedFlagsPanel styling.
+const VERDICT_TONES = {
+  good: { color: '#34d399', border: 'rgba(52,211,153,0.45)' },
+  neutral: { color: 'var(--text-secondary)', border: 'var(--border)' },
+  warn: { color: '#fbbf24', border: 'rgba(251,191,36,0.45)' },
+};
+
+function HolderTable({ title, rows }) {
+  if (!rows?.length) return null;
+  return (
+    <div className="glass-panel" style={{ padding: '0 0 0.25rem' }}>
+      <div style={{ padding: '0.6rem 0.9rem', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)', borderBottom: '1px solid var(--border)' }}>{title}</div>
+      <div style={{ display: 'flex', padding: '0.4rem 0.9rem', borderBottom: '1px solid var(--border)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.4px', color: GREY }}>
+        <span style={{ flex: '1 1 auto' }}>Holder</span>
+        <span style={{ flex: '0 0 4.5rem', textAlign: 'right' }}>% held</span>
+        <span style={{ flex: '0 0 5.5rem', textAlign: 'right' }}>QoQ chg</span>
+        <span style={{ flex: '0 0 6.5rem', textAlign: 'right' }}>Value</span>
+      </div>
+      {rows.map((o, i) => (
+        <div key={`${o.org}-${i}`} style={{ display: 'flex', padding: '0.45rem 0.9rem', borderBottom: '1px solid var(--border)', fontSize: '0.82rem', fontVariantNumeric: 'tabular-nums' }}>
+          <span style={{ flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.org}</span>
+          <span style={{ flex: '0 0 4.5rem', textAlign: 'right', fontWeight: 600 }}>{o.pct != null ? `${o.pct}%` : '—'}</span>
+          <span style={{ flex: '0 0 5.5rem', textAlign: 'right', color: o.pctChange == null ? GREY : o.pctChange >= 0 ? GREEN : RED }}>
+            {o.pctChange != null ? `${o.pctChange >= 0 ? '+' : ''}${o.pctChange}%` : '—'}
+          </span>
+          <span style={{ flex: '0 0 6.5rem', textAlign: 'right', color: GREY }}>{o.value != null ? fmtBig(o.value) : '—'}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Institutional ownership tab — Yahoo 13F data via /api/us/holders. Quarterly
+// positions (up to 45 days late by SEC rule) + Yahoo's rolling ~6m net-buying
+// aggregate, read into a deterministic verdict server-side.
+function Holders({ sym }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let on = true; setLoading(true); setErr(null);
+    fetch(`/api/us/holders/${sym}`).then(r => r.json())
+      .then(j => { if (!on) return; if (j.error) setErr(j.error); else setD(j); })
+      .catch(e => on && setErr(e.message)).finally(() => on && setLoading(false));
+    return () => { on = false; };
+  }, [sym]);
+
+  if (loading) return <div className="loader" />;
+  if (err) return <div className="glass-panel" style={{ padding: '1.5rem', color: RED }}>Failed to load holders: {err}</div>;
+  if (!d) return null;
+  const { summary: s, netActivity: n, verdict } = d;
+  const tone = VERDICT_TONES[verdict?.tone] || VERDICT_TONES.neutral;
+  return (
+    <div>
+      {verdict && (
+        <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1.25rem' }}>
+          <span style={{
+            fontSize: '0.62rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px',
+            color: tone.color, border: `1px solid ${tone.border}`, borderRadius: '4px', padding: '0.1rem 0.4rem', marginRight: '0.7rem',
+          }}>{verdict.label}</span>
+          <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>{verdict.detail}</span>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
+        <StatCard label="Institutions hold" value={s.instPct != null ? `${s.instPct}%` : '—'} sub={s.instCount != null ? `${s.instCount.toLocaleString('en-US')} institutions` : null} />
+        <StatCard label="Of float" value={s.instFloatPct != null ? `${s.instFloatPct}%` : '—'} sub="institution-held share of tradable float" />
+        <StatCard label="Insiders hold" value={s.insiderPct != null ? `${s.insiderPct}%` : '—'} sub={n.insiderNetShares != null ? `net ${n.insiderNetShares >= 0 ? '+' : ''}${n.insiderNetShares.toLocaleString('en-US')} sh (${n.period || '6m'})` : null} />
+        <StatCard label={`Net inst. buying (${n.period || '6m'})`} value={n.netInstBuyingPct != null ? `${n.netInstBuyingPct >= 0 ? '+' : ''}${n.netInstBuyingPct}%` : '—'}
+          sub="of shares outstanding" subColor={n.netInstBuyingPct == null ? undefined : n.netInstBuyingPct >= 0 ? GREEN : RED} />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1rem' }}>
+        <HolderTable title="Top institutions" rows={d.topInstitutions} />
+        <HolderTable title="Top mutual funds" rows={d.topFunds} />
+      </div>
+
+      <p style={{ margin: '0.9rem 0 0', fontSize: '0.7rem', color: GREY, fontStyle: 'italic' }}>
+        {d.source}{d.asOf ? ` · positions as of ${d.asOf}` : ''} — 13F filings disclose quarter-end positions up to 45 days later; this is as fresh as US holdings data legally gets.
       </p>
     </div>
   );
@@ -1011,6 +1123,7 @@ export default function UsInstrument() {
       macd, signal, hist: macd - signal,
       bbMid: mid, bbUpper: mid != null && sd != null ? mid + 2 * sd : null, bbLower: mid != null && sd != null ? mid - 2 * sd : null,
       atr: atr14(dailyBars, 14), adx: adx14(dailyBars, 14), st: superTrend(dailyBars, 10, 3),
+      hv20: realizedVol(closes, 20),
       breakout: breakoutRank(dailyBars),
     };
     // Directional bias across the trend-following indicators.
@@ -1063,12 +1176,16 @@ export default function UsInstrument() {
         </div>
       </div>
 
+      {/* Upcoming events (earnings window + ex-dividend from Yahoo) */}
+      <EventBadge url={`/api/us/events/${encodeURIComponent(sym)}`} />
+      <EarningsReaction sym={sym} />
+
       {/* Manipulation red flags (Alpaca daily bars — see /api/us/red-flags in backend/alpaca.js) */}
       <RedFlagsPanel url={`/api/us/red-flags/${encodeURIComponent(sym)}`} />
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', marginBottom: '1.5rem' }}>
-        {[{ id: 'technicals', label: 'Technicals' }, { id: 'signals', label: 'Signals' }, { id: 'fundamentals', label: 'Fundamentals' }, { id: 'analysts', label: 'Analysts' }, { id: 'pnl', label: 'P&L' }, { id: 'balanceSheet', label: 'Balance Sheet' }, { id: 'cashflow', label: 'Cashflow' }].map(t => (
+        {[{ id: 'technicals', label: 'Technicals' }, { id: 'signals', label: 'Signals' }, { id: 'volatility', label: 'Volatility' }, { id: 'fundamentals', label: 'Fundamentals' }, { id: 'analysts', label: 'Analysts' }, { id: 'holders', label: 'Holders' }, { id: 'pnl', label: 'P&L' }, { id: 'balanceSheet', label: 'Balance Sheet' }, { id: 'cashflow', label: 'Cashflow' }].map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
             padding: '0.6rem 1.1rem', cursor: 'pointer', background: 'transparent', border: 'none',
             borderBottom: `2px solid ${activeTab === t.id ? 'var(--accent)' : 'transparent'}`,
@@ -1078,9 +1195,18 @@ export default function UsInstrument() {
         ))}
       </div>
 
+      {/* Historical volatility from the 2Y daily series */}
+      {activeTab === 'volatility' && (
+        dailyBars.length > 20
+          ? <VolatilityPanel bars={dailyBars} currency="$" />
+          : <p style={{ color: GREY, fontSize: '0.85rem' }}>Loading daily history…</p>
+      )}
+
       {activeTab === 'fundamentals' && <Fundamentals sym={sym} />}
 
       {activeTab === 'analysts' && <Analysts sym={sym} />}
+
+      {activeTab === 'holders' && <Holders sym={sym} />}
 
       {activeTab === 'pnl' && <PnL sym={sym} />}
 
@@ -1343,6 +1469,7 @@ export default function UsInstrument() {
             <IndicatorCard label="MACD Histogram" value={ind.hist != null ? ind.hist.toFixed(2) : '—'} cls={ind.hist >= 0 ? cls('BULLISH', GREEN) : cls('BEARISH', RED)} />
             <IndicatorCard label="ADX (14)" value={ind.adx != null ? ind.adx.toFixed(1) : '—'} cls={ind.adx >= 25 ? cls('TRENDING', GREEN) : cls('WEAK', GREY)} />
             <IndicatorCard label="ATR (14)" value={`$${fmtPrice(ind.atr)}`} cls={null} />
+            <IndicatorCard label="HV (20D)" value={ind.hv20 != null ? `${ind.hv20.toFixed(1)}%` : '—'} cls={null} />
             <IndicatorCard label="BB Upper" value={`$${fmtPrice(ind.bbUpper)}`} cls={cls('NEUTRAL', GREY)} />
             <IndicatorCard label="BB Middle" value={`$${fmtPrice(ind.bbMid)}`} cls={maCls(ind.price, ind.bbMid)} />
             <IndicatorCard label="BB Lower" value={`$${fmtPrice(ind.bbLower)}`} cls={cls('NEUTRAL', GREY)} />

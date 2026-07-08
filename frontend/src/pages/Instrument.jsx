@@ -11,6 +11,9 @@ import TradePlanModal from '../components/alerts/TradePlanModal'
 import ValuationPanel from '../components/ValuationPanel'
 import AnalystsPanel from '../components/AnalystsPanel'
 import RedFlagsPanel from '../components/RedFlagsPanel'
+import VolatilityPanel from '../components/VolatilityPanel'
+import InstitutionalPanel from '../components/InstitutionalPanel'
+import EventBadge from '../components/EventBadge'
 
 // ₹ formatters for the shared AnalystsPanel: prices/EPS in rupees, revenue in Cr.
 const inrMoney = (v) => (v == null ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
@@ -985,12 +988,19 @@ function Instrument() {
     return () => controller.abort();
   }, [token, timeframe])
 
-  // Deep daily history (5Y) used ONLY to compute the 10/50 signals, so the slow
-  // SMA is warm even on a 3M view (the chart's own `data` is just the timeframe
-  // slice). Dates are formatted identically to `data` so markers match exactly.
-  // Fetched lazily — only once the Signals overlay is switched on.
+  // Navigating to another instrument reuses this component, so drop the
+  // previous stock's deep history — the fetch below re-runs when it's needed.
+  useEffect(() => { setSignalBars([]) }, [token])
+
+  // Deep daily history (5Y) shared by the 10/50 signals (so the slow SMA is
+  // warm even on a 3M view — the chart's own `data` is just the timeframe
+  // slice) and the Volatility tab. Dates are formatted identically to `data`
+  // so signal markers match exactly. Fetched lazily — only once the Signals
+  // overlay or the Volatility tab is first opened — and kept once loaded.
   useEffect(() => {
-    if (!showSignals || !token || token === '0') return;
+    if (!showSignals && activeTab !== 'volatility') return;
+    if (signalBars.length > 0) return;
+    if (!token || token === '0') return;
     const controller = new AbortController();
     (async () => {
       try {
@@ -1009,7 +1019,7 @@ function Instrument() {
       } catch { /* leave signals empty on failure */ }
     })();
     return () => controller.abort();
-  }, [token, showSignals])
+  }, [token, showSignals, activeTab, signalBars.length])
 
   const tfOptions = ['1D', '1W', '1M', '3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y'];
 
@@ -1128,6 +1138,9 @@ function Instrument() {
         </div>
       </header>
 
+      {/* Upcoming corporate events (results/dividend dates from the NSE calendar) */}
+      {symbol && <EventBadge url={`/api/events/${encodeURIComponent(symbol)}`} />}
+
       {/* Manipulation red flags (NSE feeds + bhavcopy — see backend/picks/redFlags.js) */}
       {symbol && <RedFlagsPanel url={`/api/red-flags/${encodeURIComponent(symbol)}`} />}
 
@@ -1243,7 +1256,7 @@ function Instrument() {
             fontSize: '1rem'
           }}
         >
-          Shareholding
+          Institutional
         </button>
         <button
           onClick={() => setActiveTab('peers')}
@@ -1276,6 +1289,22 @@ function Instrument() {
           }}
         >
           Signals
+        </button>
+        <button
+          onClick={() => setActiveTab('volatility')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'volatility' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'volatility' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '0.5rem 1rem',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'volatility' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+            fontSize: '1rem'
+          }}
+        >
+          Volatility
         </button>
         <button
           onClick={() => setActiveTab('notes')}
@@ -1454,6 +1483,13 @@ function Instrument() {
 
       {activeTab === 'signals' && (
         <SignalChart token={token} symbol={symbol} />
+      )}
+
+      {/* Historical volatility from the deep 5Y daily series */}
+      {activeTab === 'volatility' && (
+        signalBars.length > 20
+          ? <VolatilityPanel bars={signalBars} currency="₹" />
+          : <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading daily history…</p>
       )}
 
       {activeTab === 'notes' && (() => {
@@ -3290,10 +3326,14 @@ function Instrument() {
       })()}
 
       {activeTab === 'shareholding' && (
-        <ShareholdingPanel
-          payload={screenerShareholding}
-          error={screenerShareholdingError}
-        />
+        <>
+          {/* Institutional activity: verdict + deals + delivery + market flows */}
+          {symbol && <InstitutionalPanel symbol={symbol} />}
+          <ShareholdingPanel
+            payload={screenerShareholding}
+            error={screenerShareholdingError}
+          />
+        </>
       )}
 
       <ConvictionModal stock={convictionStock} onClose={() => setConvictionStock(null)} />

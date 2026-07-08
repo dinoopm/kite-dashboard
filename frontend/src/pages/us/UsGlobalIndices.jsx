@@ -73,9 +73,64 @@ function RegionTable({ region, rows }) {
   );
 }
 
+// Heatmap cell color: green/red with intensity scaled to the 90th percentile
+// of |return| across all indices for the selected period — so one outlier
+// (a hyperinflation index on 5Y, say) doesn't wash every other cell grey.
+function heatColor(v, cap) {
+  if (v == null) return { background: 'rgba(255,255,255,0.03)', color: 'var(--text-secondary)' };
+  const t = Math.min(1, Math.abs(v) / (cap || 1));
+  const alpha = 0.10 + 0.55 * t;
+  return {
+    background: v >= 0 ? `rgba(16,185,129,${alpha})` : `rgba(239,68,68,${alpha})`,
+    color: '#fff',
+  };
+}
+
+function Heatmap({ rows, colKey, label }) {
+  const cap = useMemo(() => {
+    const vals = rows.map(r => Math.abs(r[colKey])).filter(v => v != null && isFinite(v)).sort((a, b) => a - b);
+    if (!vals.length) return 1;
+    return vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.9))] || 1;
+  }, [rows, colKey]);
+
+  return (
+    <div>
+      {REGIONS.map(region => {
+        const regionRows = rows.filter(r => r.region === region);
+        if (!regionRows.length) return null;
+        // Within each region, strongest movers first for scanability.
+        const ordered = [...regionRows].sort((a, b) => (b[colKey] ?? -Infinity) - (a[colKey] ?? -Infinity));
+        return (
+          <div key={region} style={{ marginBottom: '1.5rem' }}>
+            <h3 style={{ margin: '0 0 0.6rem' }}>{region}</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '0.5rem' }}>
+              {ordered.map(r => {
+                const v = r[colKey];
+                const c = heatColor(v, cap);
+                return (
+                  <div key={r.symbol} title={`${r.label} (${r.country}) · ${label}: ${fmtPct(v)} · last ${fmtPrice(r.price, r.currency)}`}
+                    style={{ ...c, borderRadius: '8px', padding: '0.6rem 0.7rem', minHeight: '62px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                    <div>
+                      <div style={{ fontSize: '0.78rem', fontWeight: 700, lineHeight: 1.25 }}>{r.label}</div>
+                      <div style={{ fontSize: '0.62rem', opacity: 0.75 }}>{r.country}</div>
+                    </div>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtPct(v)}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function UsGlobalIndices() {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(null);
+  const [view, setView] = useState('table'); // 'table' (default) | 'heatmap'
+  const [heatKey, setHeatKey] = useState('change1D');
 
   useEffect(() => {
     const c = new AbortController();
@@ -93,16 +148,38 @@ export default function UsGlobalIndices() {
   if (error) return <div className="glass-panel" style={{ padding: '1.5rem', color: 'var(--danger)' }}>Failed to load global indices: {error}</div>;
   if (!rows) return <div className="loader" />;
 
+  const pill = (active) => ({
+    padding: '0.3rem 0.75rem', borderRadius: '6px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 700,
+    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+    background: active ? 'rgba(56,189,248,0.12)' : 'transparent',
+    color: active ? 'var(--accent)' : 'var(--text-secondary)',
+  });
+  const heatLabel = RET_COLS.find(c => c.key === heatKey)?.label || '1D';
+
   return (
     <div>
-      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: 0 }}>
-        Major world indices via Yahoo Finance. Returns in each index's local currency; click a column to sort.
-      </p>
-      {REGIONS.map(region => {
-        const regionRows = rows.filter(r => r.region === region);
-        if (regionRows.length === 0) return null;
-        return <RegionTable key={region} region={region} rows={regionRows} />;
-      })}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.9rem' }}>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: 0, marginRight: 'auto' }}>
+          Major world indices via Yahoo Finance. Returns in each index's local currency
+          {view === 'table' ? '; click a column to sort.' : `; heat colors scale within the ${heatLabel} window.`}
+        </p>
+        {view === 'heatmap' && RET_COLS.map(c => (
+          <button key={c.key} onClick={() => setHeatKey(c.key)} style={pill(heatKey === c.key)}>{c.label}</button>
+        ))}
+        <span style={{ width: '1px', height: '18px', background: 'var(--border)', margin: '0 0.3rem' }} />
+        <button onClick={() => setView('table')} style={pill(view === 'table')}>Table</button>
+        <button onClick={() => setView('heatmap')} style={pill(view === 'heatmap')}>Heatmap</button>
+      </div>
+
+      {view === 'heatmap' ? (
+        <Heatmap rows={rows} colKey={heatKey} label={heatLabel} />
+      ) : (
+        REGIONS.map(region => {
+          const regionRows = rows.filter(r => r.region === region);
+          if (regionRows.length === 0) return null;
+          return <RegionTable key={region} region={region} rows={regionRows} />;
+        })
+      )}
     </div>
   );
 }
