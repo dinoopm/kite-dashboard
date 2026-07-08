@@ -15,6 +15,7 @@
 // "delayed_sip" (full-volume, 15-min-delayed; plain "sip" is blocked for recent
 // data on the free tier). Paid SIP accounts can override both via env.
 const express = require('express');
+const axios = require('axios');
 const YahooFinance = require('yahoo-finance2').default;
 const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 // Reuse the exact screener engine the Indian screener uses — it operates on raw
@@ -902,6 +903,93 @@ router.get('/events/:symbol', async (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(err.statusCode || 502).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/us/treasury-10y — US 10Y Treasury yield series ─────────────────
+// The risk-free rate that drives equity valuations and FII flows. The LIVE
+// value + today's change come from CNBC's US10Y quote (real-time, matches
+// cnbc.com/Google); Yahoo ^TNX is only used for the historical series shape
+// because its live index lags a full session. The CNBC live point is appended
+// so the chart line reaches the current level.
+const tnxCache = {}; // range -> { data, ts }
+const num = (s) => { const n = parseFloat(String(s).replace(/[%+,]/g, '')); return isFinite(n) ? n : null; };
+
+async function cnbcUs10y() {
+  const r = await axios.get('https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=US10Y&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json',
+    { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' }, timeout: 12000 });
+  const d = r.data?.FormattedQuoteResult?.FormattedQuote?.[0];
+  if (!d) throw new Error('CNBC quote empty');
+  return { last: num(d.last), change: num(d.change), prev: num(d.previous_day_closing), time: d.last_time || null };
+}
+
+router.get('/treasury-10y', async (req, res) => {
+  const range = (req.query.range || '6M').toUpperCase();
+  const hit = tnxCache[range];
+  if (hit && Date.now() - hit.ts < 5 * 60 * 1000) return res.json({ ...hit.data, cached: true });
+  try {
+    const now = new Date();
+    const back = (days) => new Date(now.getTime() - days * 864e5);
+    const cfg = {
+      '1M': { period1: back(31), interval: '1d' },
+      '3M': { period1: back(93), interval: '1d' },
+      '6M': { period1: back(186), interval: '1d' },
+      '1Y': { period1: back(370), interval: '1d' },
+      '5Y': { period1: back(5 * 366), interval: '1wk' },
+    }[range] || { period1: back(186), interval: '1d' };
+
+    // History from Yahoo; live value from CNBC (independent — either can fail).
+    const [chartR, liveR] = await Promise.allSettled([
+      yf.chart('^TNX', { period1: cfg.period1, interval: cfg.interval }, { validateResult: false }),
+      cnbcUs10y(),
+    ]);
+    let series = (chartR.status === 'fulfilled' ? chartR.value.quotes || [] : [])
+      .filter(q => q.close != null)
+      .map(q => ({ t: q.date.toISOString(), y: +q.close.toFixed(3) }));
+
+    const live = liveR.status === 'fulfilled' ? liveR.value : null;
+    // Reach the live level: append (new session) or replace (same day) the
+    // final point with CNBC's real-time value so the line ends at "now".
+    if (live?.last != null && series.length) {
+      const liveDay = (live.time || now.toISOString()).slice(0, 10);
+      if (series[series.length - 1].t.slice(0, 10) < liveDay) series.push({ t: new Date().toISOString(), y: live.last });
+      else series[series.length - 1] = { t: series[series.length - 1].t, y: live.last };
+    }
+
+    const current = live?.last ?? (series.length ? series[series.length - 1].y : null);
+    const first = series.length ? series[0].y : null;
+    const data = {
+      range,
+      current,
+      // 1D-equivalent move comes straight from CNBC; longer ranges vs the series start.
+      changeBps: current != null && first != null ? Math.round((current - first) * 100) : null,
+      todayBps: live?.change != null ? Math.round(live.change * 100) : null,
+      series,
+      asOf: live?.time || null,
+      source: live ? 'Live: CNBC US10Y · history: Yahoo ^TNX' : 'Yahoo ^TNX (CNBC live value unavailable)',
+    };
+    tnxCache[range] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(err.statusCode || 502).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/us/news/:symbol — Yahoo headline RSS for the News tab ─────────
+const { fetchYahooNews } = require('./yahooNews');
+const usNewsCache = {}; // sym -> { data, ts }
+const US_NEWS_TTL = 15 * 60 * 1000;
+router.get('/news/:symbol', async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const hit = usNewsCache[sym];
+  if (hit && Date.now() - hit.ts < US_NEWS_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const items = await fetchYahooNews(sym);
+    const data = { symbol: sym, items, source: 'Yahoo Finance' };
+    usNewsCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
   }
 });
 

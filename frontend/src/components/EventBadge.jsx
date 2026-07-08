@@ -55,7 +55,7 @@ export default function EventBadge({ url }) {
             color: soon ? '#fbbf24' : 'var(--text-secondary)',
             border: `1px solid ${soon ? 'rgba(251,191,36,0.45)' : 'var(--border)'}`,
             borderRadius: '4px', padding: '0.15rem 0.45rem',
-          }}>📅 {it.label}{soon && d >= 0 ? ` (${d}d)` : ''}</span>
+          }}>📅 {it.label}{d != null && d >= 0 ? ` (${d}d)` : ''}</span>
         )
       })}
     </div>

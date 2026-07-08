@@ -14,6 +14,7 @@ import VirtualPortfolioDetail from './pages/VirtualPortfolioDetail'
 import VixIndex from './pages/VixIndex'
 import Screener from './pages/Screener'
 import UsIndices from './pages/us/UsIndices'
+import UsMacro from './pages/us/UsMacro'
 import UsSectorDetail from './pages/us/UsSectorDetail'
 import UsInstrument from './pages/us/UsInstrument'
 import UsScreener from './pages/us/UsScreener'
@@ -178,6 +179,7 @@ function App() {
           <Route path="/virtual/:portfolioId" element={<VirtualPortfolioDetail />} />
           <Route path="/screener" element={<Screener />} />
           <Route path="/us" element={<UsIndices />} />
+          <Route path="/us/macro" element={<UsMacro />} />
           <Route path="/us/screener" element={<UsScreener />} />
           <Route path="/us/basket" element={<UsBasket />} />
           <Route path="/us/basket/:id" element={<UsBasketDetail />} />

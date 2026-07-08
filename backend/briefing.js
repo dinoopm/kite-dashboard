@@ -12,6 +12,11 @@ const { createClient } = require('@supabase/supabase-js');
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 const today = () => new Date().toISOString().slice(0, 10);
+// "(today)" / "(tomorrow)" / "(in N days)" for a YYYY-MM-DD date.
+const daysLeft = (dateStr) => {
+  const d = Math.ceil((new Date(dateStr + 'T00:00:00') - new Date(today() + 'T00:00:00')) / 86400000);
+  return d <= 0 ? 'today' : d === 1 ? 'tomorrow' : `in ${d} days`;
+};
 const cr = (v) => `${v >= 0 ? '+' : '−'}₹${Math.abs(Math.round(v)).toLocaleString('en-IN')} cr`;
 
 async function marketItems(getQuotes) {
@@ -40,7 +45,7 @@ async function marketItems(getQuotes) {
       const big = /FOMC|Fed Meeting|CPI/.test(e.title);
       items.push({
         tone: big ? 'warn' : 'neutral',
-        text: `US macro: ${e.title} on ${e.event_date}${big ? ' — expect bigger swings globally' : ''}`,
+        text: `US macro: ${e.title} on ${e.event_date} (${daysLeft(e.event_date)})${big ? ' — expect bigger swings globally' : ''}`,
         link: '/market-data/events',
       });
     }
@@ -167,7 +172,7 @@ async function eventItems(getEvents, getXray) {
       })
       .map(e => ({
         tone: why.get(e.symbol) === 'holding' ? 'warn' : 'neutral',
-        text: `${e.symbol}: ${e.purpose} on ${e.date} (${why.get(e.symbol)})`,
+        text: `${e.symbol}: ${e.purpose} ${daysLeft(e.date)} — ${e.date} (${why.get(e.symbol)})`,
         link: `/instrument/0?symbol=${encodeURIComponent(e.symbol)}`,
       }));
 

@@ -9,6 +9,7 @@ import { breakoutRank, breakoutLabel } from '../../lib/breakout';
 import { generateSignals } from '../../lib/signalEngine';
 import SignalChart from '../../components/SignalChart';
 import RedFlagsPanel from '../../components/RedFlagsPanel';
+import NewsPanel from '../../components/NewsPanel';
 import VolatilityPanel from '../../components/VolatilityPanel';
 import EventBadge from '../../components/EventBadge';
 import { realizedVol } from '../../lib/vixAnalytics';
@@ -1185,7 +1186,7 @@ export default function UsInstrument() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', marginBottom: '1.5rem' }}>
-        {[{ id: 'technicals', label: 'Technicals' }, { id: 'signals', label: 'Signals' }, { id: 'volatility', label: 'Volatility' }, { id: 'fundamentals', label: 'Fundamentals' }, { id: 'analysts', label: 'Analysts' }, { id: 'holders', label: 'Holders' }, { id: 'pnl', label: 'P&L' }, { id: 'balanceSheet', label: 'Balance Sheet' }, { id: 'cashflow', label: 'Cashflow' }].map(t => (
+        {[{ id: 'technicals', label: 'Technicals' }, { id: 'signals', label: 'Signals' }, { id: 'volatility', label: 'Volatility' }, { id: 'fundamentals', label: 'Fundamentals' }, { id: 'analysts', label: 'Analysts' }, { id: 'holders', label: 'Holders' }, { id: 'news', label: 'News' }, { id: 'pnl', label: 'P&L' }, { id: 'balanceSheet', label: 'Balance Sheet' }, { id: 'cashflow', label: 'Cashflow' }].map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
             padding: '0.6rem 1.1rem', cursor: 'pointer', background: 'transparent', border: 'none',
             borderBottom: `2px solid ${activeTab === t.id ? 'var(--accent)' : 'transparent'}`,
@@ -1207,6 +1208,8 @@ export default function UsInstrument() {
       {activeTab === 'analysts' && <Analysts sym={sym} />}
 
       {activeTab === 'holders' && <Holders sym={sym} />}
+
+      {activeTab === 'news' && <NewsPanel url={`/api/us/news/${encodeURIComponent(sym)}`} />}
 
       {activeTab === 'pnl' && <PnL sym={sym} />}
 

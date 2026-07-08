@@ -14,6 +14,7 @@ import RedFlagsPanel from '../components/RedFlagsPanel'
 import VolatilityPanel from '../components/VolatilityPanel'
 import InstitutionalPanel from '../components/InstitutionalPanel'
 import EventBadge from '../components/EventBadge'
+import NewsPanel from '../components/NewsPanel'
 
 // ₹ formatters for the shared AnalystsPanel: prices/EPS in rupees, revenue in Cr.
 const inrMoney = (v) => (v == null ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
@@ -1307,6 +1308,22 @@ function Instrument() {
           Volatility
         </button>
         <button
+          onClick={() => setActiveTab('news')}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            borderBottom: activeTab === 'news' ? '2px solid var(--accent)' : '2px solid transparent',
+            color: activeTab === 'news' ? 'var(--text-primary)' : 'var(--text-secondary)',
+            padding: '0.5rem 1rem',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'news' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+            fontSize: '1rem'
+          }}
+        >
+          News
+        </button>
+        <button
           onClick={() => setActiveTab('notes')}
           style={{
             background: 'transparent',
@@ -1491,6 +1508,8 @@ function Instrument() {
           ? <VolatilityPanel bars={signalBars} currency="₹" />
           : <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading daily history…</p>
       )}
+
+      {activeTab === 'news' && symbol && <NewsPanel url={`/api/news/${encodeURIComponent(symbol)}`} />}
 
       {activeTab === 'notes' && (() => {
         const dirty = note !== noteLoadedRef.current;

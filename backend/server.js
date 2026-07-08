@@ -5410,6 +5410,26 @@ app.get('/api/macro-study', async (req, res) => {
   }
 });
 
+// Per-stock news for the instrument-page News tab (Yahoo headline RSS via
+// backend/yahooNews.js). India appends .NS through toYahooSymbol; the US page
+// has its own /api/us/news in alpaca.js. Cached 15 min per symbol.
+const { fetchYahooNews } = require('./yahooNews');
+const newsCache = {}; // sym -> { data, ts }
+const NEWS_TTL = 15 * 60 * 1000;
+app.get('/api/news/:symbol', async (req, res) => {
+  const sym = String(req.params.symbol || '').toUpperCase();
+  const hit = newsCache[sym];
+  if (hit && Date.now() - hit.ts < NEWS_TTL) return res.json({ ...hit.data, cached: true });
+  try {
+    const items = await fetchYahooNews(toYahooSymbol(sym));
+    const data = { symbol: sym, items, source: 'Yahoo Finance' };
+    newsCache[sym] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Risk-On / Risk-Off regime: is money flowing into bonds or stocks? Three
 // deterministic gauges over Yahoo daily closes — see backend/riskRegime.js.
 const { riskRegime } = require('./riskRegime');
