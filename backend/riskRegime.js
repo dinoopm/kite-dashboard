@@ -11,6 +11,7 @@
 
 const YahooFinance = require('yahoo-finance2').default;
 const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
+const { cnbcUs10y } = require('./cnbcQuote');
 
 const r1 = (v) => (v == null || !isFinite(v) ? null : +v.toFixed(1));
 const r2 = (v) => (v == null || !isFinite(v) ? null : +v.toFixed(2));
@@ -33,7 +34,15 @@ async function riskRegime() {
     ['^TNX', 'TLT', 'SPY', 'HYG', 'LQD'].map(s => closes(s, start))
   );
 
-  const yield1mo = chg(tnx, M), yield3mo = chg(tnx, Q);
+  // The displayed 10Y level uses CNBC's live value (Yahoo ^TNX lags a session,
+  // which made this panel disagree with the Treasury chart). The Yahoo series
+  // is still used for the 1mo/3mo trend, with the live value as the current
+  // endpoint so the change reflects today. Falls back to Yahoo if CNBC is down.
+  let live = null;
+  try { live = await cnbcUs10y(); } catch { /* fall back to Yahoo close */ }
+  const yieldNow = live?.last ?? tnx[tnx.length - 1];
+  const yield1mo = tnx.length > M ? yieldNow - tnx[tnx.length - 1 - M] : chg(tnx, M);
+  const yield3mo = tnx.length > Q ? yieldNow - tnx[tnx.length - 1 - Q] : chg(tnx, Q);
   const spyTlt1mo = (ret(spy, M) ?? 0) - (ret(tlt, M) ?? 0);
   const hygLqd1mo = (ret(hyg, M) ?? 0) - (ret(lqd, M) ?? 0);
 
@@ -41,7 +50,7 @@ async function riskRegime() {
     {
       id: 'yield',
       label: 'US 10Y Treasury yield',
-      value: `${r2(tnx[tnx.length - 1])}%`,
+      value: `${r2(yieldNow)}%`,
       score: yield1mo > 0.08 ? 1 : yield1mo < -0.08 ? -1 : 0,
       detail: yield1mo > 0.08 ? `rising (+${r2(yield1mo)}pp in a month) — money leaving bonds`
         : yield1mo < -0.08 ? `falling (${r2(yield1mo)}pp in a month) — money moving into bonds`
@@ -75,7 +84,7 @@ async function riskRegime() {
       : { label: 'NEUTRAL', tone: 'neutral', text: 'No decisive rotation between stocks and bonds right now.' };
 
   // India tie-in: the yield level that historically pressures FII flows.
-  const y = tnx[tnx.length - 1];
+  const y = yieldNow;
   const indiaNote = y >= 4.75
     ? `US 10Y at ${r2(y)}% is in the zone (~4.75%+) that historically triggers FII selling of Indian equities.`
     : `US 10Y at ${r2(y)}% is below the ~4.75% zone where FII outflows from India tend to accelerate.`;
@@ -86,7 +95,7 @@ async function riskRegime() {
     context: { spy3mo: r1(ret(spy, Q)), tlt3mo: r1(ret(tlt, Q)) },
     indiaNote,
     asOf: new Date().toISOString(),
-    source: 'Yahoo daily closes — ^TNX, TLT, SPY, HYG, LQD',
+    source: `${live ? 'CNBC live 10Y' : 'Yahoo ^TNX'} + Yahoo daily closes — TLT, SPY, HYG, LQD`,
   };
 }
 

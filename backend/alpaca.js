@@ -262,6 +262,18 @@ const sanitizeBar = (b) => {
   return (low === b.low && high === b.high) ? b : { ...b, low, high };
 };
 
+// Is an ISO timestamp inside the US regular session (9:30 AM–4:00 PM ET)?
+// DST-safe via the America/New_York timezone. Alpaca's intraday bars include
+// pre/post-market prints, which otherwise leak into the "1D" chart and its
+// Period Return — making them disagree with the header's regular-session
+// change (the header comes from the snapshot's regular-session daily bar).
+const isRegularHours = (iso) => {
+  const et = new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit', minute: '2-digit' });
+  const [h, m] = et.split(':').map(Number);
+  const mins = h * 60 + m;
+  return mins >= 570 && mins < 960; // 09:30 → 16:00 ET (bar start times)
+};
+
 // Historical bars for charting, normalised to the app's {date,open,high,low,close,volume} shape.
 router.get('/bars/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
@@ -289,6 +301,11 @@ router.get('/bars/:symbol', async (req, res) => {
       close: b.c,
       volume: b.v,
     }));
+    // Drop extended-hours prints from intraday charts so the 1D view and its
+    // Period Return track the regular session (matching the header change).
+    if (timeframe.includes('Min') || timeframe.includes('Hour')) {
+      bars = bars.filter(b => isRegularHours(b.date));
+    }
     // "1D" fetches a 4-day window of 15-min bars only to be sure the latest
     // session is present (weekends/holidays). Trim to that latest session so the
     // chart and the "(1D)" period stats reflect a single day — not 3–4. US
@@ -912,16 +929,8 @@ router.get('/events/:symbol', async (req, res) => {
 // cnbc.com/Google); Yahoo ^TNX is only used for the historical series shape
 // because its live index lags a full session. The CNBC live point is appended
 // so the chart line reaches the current level.
+const { cnbcUs10y } = require('./cnbcQuote');
 const tnxCache = {}; // range -> { data, ts }
-const num = (s) => { const n = parseFloat(String(s).replace(/[%+,]/g, '')); return isFinite(n) ? n : null; };
-
-async function cnbcUs10y() {
-  const r = await axios.get('https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=US10Y&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json',
-    { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' }, timeout: 12000 });
-  const d = r.data?.FormattedQuoteResult?.FormattedQuote?.[0];
-  if (!d) throw new Error('CNBC quote empty');
-  return { last: num(d.last), change: num(d.change), prev: num(d.previous_day_closing), time: d.last_time || null };
-}
 
 router.get('/treasury-10y', async (req, res) => {
   const range = (req.query.range || '6M').toUpperCase();
