@@ -33,6 +33,7 @@ function Portfolio() {
   const [holdings, setHoldings] = useState(null)
   const [xray, setXray] = useState(null) // /api/portfolio/xray — attention scores + badges per holding
   const [mfHoldings, setMfHoldings] = useState(null)
+  const [companyNames, setCompanyNames] = useState({}) // symbol -> company name
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
@@ -107,6 +108,22 @@ function Portfolio() {
     return () => { on = false };
   }, [])
 
+  // Fetch company names for all equity holdings in bulk after they load.
+  useEffect(() => {
+    if (!holdings || !holdings.length) return;
+    let on = true;
+    const symbols = [...new Set(holdings.map(h => h.tradingsymbol))];
+    fetch('/api/instrument-names', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbols }),
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (on && j && !j.error) setCompanyNames(j) })
+      .catch(() => {})
+    return () => { on = false };
+  }, [holdings])
+
   if (loading) return <div className="loader"></div>
   if (error) return <div className="dashboard-layout"><div className="glass-panel"><p className="negative">{error}</p><button onClick={() => fetchData()} style={{padding: '0.5rem 1rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem'}}>Retry</button></div></div>
 
@@ -129,7 +146,13 @@ function Portfolio() {
   for (const r of xray?.holdings || []) xrayBySymbol[r.symbol] = r;
 
   const filteredAndSortedHoldings = (holdings || [])
-    .filter(item => item.tradingsymbol.toLowerCase().includes(searchTerm.toLowerCase()))
+    .filter(item => {
+      const q = searchTerm.toLowerCase();
+      return (
+        item.tradingsymbol.toLowerCase().includes(q) ||
+        (companyNames[item.tradingsymbol] || '').toLowerCase().includes(q)
+      );
+    })
     .map(item => {
       const q = (item.quantity || 0) + (item.t1_quantity || 0);
       const currentValue = q * item.last_price;
@@ -475,7 +498,14 @@ function Portfolio() {
                 <tbody>
                   {filteredAndSortedHoldings.map((item, index) => (
                     <tr key={index} onClick={() => navigate(`/instrument/${item.instrument_token}?symbol=${encodeURIComponent(item.tradingsymbol)}`)} style={{cursor: 'pointer'}}>
-                      <td><strong>{item.tradingsymbol}</strong></td>
+                      <td>
+                        <strong>{item.tradingsymbol}</strong>
+                        {companyNames[item.tradingsymbol] && (
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.1rem', fontWeight: 400, lineHeight: 1.3 }}>
+                            {companyNames[item.tradingsymbol]}
+                          </div>
+                        )}
+                      </td>
                       <td>{xray ? <XrayBadges badges={item.xrayBadges} /> : <span style={{ color: 'var(--text-secondary)', opacity: 0.4, fontSize: '0.7rem' }}>…</span>}</td>
                       <td>₹{Number(item.average_price).toFixed(2)}</td>
                       <td>₹{item.last_price}</td>

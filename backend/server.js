@@ -1048,6 +1048,29 @@ app.get('/api/instrument-info/:symbol', async (req, res) => {
   }
 });
 
+// ─── Bulk instrument-names lookup ────────────────────────────────
+// POST /api/instrument-names  body: { symbols: ['VAML','CGPOWER',...] }
+// Returns { VAML: 'VA TECH WABAG LTD', CGPOWER: 'CG POWER AND INDUSTRIAL SOLUTIONS LTD', ... }
+// Resolves all symbols in parallel, reusing the instrumentInfoCache above.
+app.post('/api/instrument-names', async (req, res) => {
+  if (!mcpClient) return res.status(500).json({ error: 'MCP not connected' });
+  const { symbols = [] } = req.body;
+  if (!symbols.length) return res.json({});
+  try {
+    const results = await Promise.all(
+      symbols.map(async (sym) => {
+        const name = await resolveInstrumentName(sym, 'NSE');
+        return [sym, name];
+      })
+    );
+    const map = {};
+    for (const [sym, name] of results) { if (name) map[sym] = name; }
+    res.json(map);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Search instruments (navbar autocomplete) ────────────────────
 // Kite's search_instruments returns F&O options first when filtering on name
 // (242 RELIANCE matches, most of them strikes). We over-fetch then filter to
