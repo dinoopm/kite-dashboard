@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 
@@ -34,6 +34,7 @@ export default function UsVirtualPortfolioDetail() {
   const navigate = useNavigate();
   const [portfolio, setPortfolio] = useState(null);
   const [holdings, setHoldings] = useState(null); // null = loading
+  const [fundamentals, setFundamentals] = useState({}); // { SYM: { pe, targetMean, currentPrice } }
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null); // transient success message (e.g. merged lot)
   const [lastRefreshed, setLastRefreshed] = useState(null);
@@ -115,6 +116,28 @@ export default function UsVirtualPortfolioDetail() {
     loadHoldings(controller.signal);
     return () => controller.abort();
   }, [loadHoldings]);
+
+  // Stable symbol-key for the fundamentals fetch below — recomputed only when
+  // the actual set of held symbols changes, not on every price-refresh tick
+  // (which mints a new `holdings` array reference every 30s).
+  const fundSymbolKey = useMemo(
+    () => [...new Set((holdings || []).map(h => h.symbol).filter(Boolean))].sort().join(','),
+    [holdings]
+  );
+
+  // Bulk-fetch P/E + analyst target fundamentals for all held symbols.
+  useEffect(() => {
+    const symbols = fundSymbolKey ? fundSymbolKey.split(',') : [];
+    if (!symbols.length) return;
+    let on = true;
+    fetch(`${API}/api/us/holdings-fundamentals`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbols }),
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (on && j && !j.error) setFundamentals(j); })
+      .catch(() => {});
+    return () => { on = false; };
+  }, [fundSymbolKey]);
 
   // Price-only refresh — merges fresh LTP / previous close into existing rows by
   // id, leaving the user's avg cost / quantity untouched. Used by the button and
@@ -410,6 +433,8 @@ export default function UsVirtualPortfolioDetail() {
                 {sortableTh('Instrument', 'name', 'left', { width: '160px' })}
                 {sortableTh('Avg. Cost', 'avgCost', 'right')}
                 {sortableTh('LTP', 'ltp', 'right')}
+                <th style={{ ...th, textAlign: 'right' }}>P/E</th>
+                <th style={{ ...th, textAlign: 'right' }}>Target</th>
                 {sortableTh('Qty.', 'quantity', 'right')}
                 {sortableTh('Invested', 'invested', 'right')}
                 {sortableTh('Cur. Value', 'curValue', 'right')}
@@ -436,6 +461,19 @@ export default function UsVirtualPortfolioDetail() {
                       style={editInput} />
                   </td>
                   <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>{r.ltp == null ? '—' : fmtMoney(r.ltp)}</td>
+                  <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>{fundamentals[r.symbol?.toUpperCase()]?.pe != null ? fundamentals[r.symbol?.toUpperCase()].pe.toFixed(1) : '—'}</td>
+                  <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>
+                    {(() => {
+                      const f = fundamentals[r.symbol?.toUpperCase()];
+                      if (!f || f.targetMean == null) return '—';
+                      const cur = f.currentPrice ?? r.ltp;
+                      const up = cur ? ((f.targetMean - cur) / cur) * 100 : null;
+                      return <>
+                        ${f.targetMean.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                        {up != null && <span className={up >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.72rem', marginLeft: '0.3rem' }}>{up >= 0 ? '+' : ''}{up.toFixed(0)}%</span>}
+                      </>;
+                    })()}
+                  </td>
                   <td style={{ ...td, textAlign: 'right' }}>
                     <input type="number" step="any" min="0" value={r.quantity}
                       onChange={e => updateField(r.id, 'quantity', e.target.value)}
@@ -471,6 +509,8 @@ export default function UsVirtualPortfolioDetail() {
             <tfoot>
               <tr>
                 <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: 'var(--text-primary)', position: 'sticky', bottom: 0, background: '#1e293b' }}>Total</td>
+                <td style={{ ...td, position: 'sticky', bottom: 0, background: '#1e293b' }} />
+                <td style={{ ...td, position: 'sticky', bottom: 0, background: '#1e293b' }} />
                 <td style={{ ...td, position: 'sticky', bottom: 0, background: '#1e293b' }} />
                 <td style={{ ...td, position: 'sticky', bottom: 0, background: '#1e293b' }} />
                 <td style={{ ...td, position: 'sticky', bottom: 0, background: '#1e293b' }} />

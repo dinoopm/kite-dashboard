@@ -1314,6 +1314,41 @@ router.get('/fundamentals/:symbol', async (req, res) => {
   }
 });
 
+// ─── POST /api/us/holdings-fundamentals — bulk P/E + analyst target (Yahoo) ─
+// Bulk P/E + analyst target for the US holdings table (Yahoo, $). Cached per symbol.
+const usHoldingsFundCache = {}; // sym -> { data, ts }
+const US_HOLDINGS_FUND_TTL = 60 * 60 * 1000; // 1h
+
+router.post('/holdings-fundamentals', async (req, res) => {
+  const { symbols = [] } = req.body || {};
+  if (!Array.isArray(symbols) || !symbols.length) return res.json({});
+  const uniq = [...new Set(symbols.map(s => String(s).toUpperCase()))];
+  const out = {};
+  const CONCURRENCY = 6;
+  let i = 0;
+  const worker = async () => {
+    while (i < uniq.length) {
+      const sym = uniq[i++];
+      const hit = usHoldingsFundCache[sym];
+      if (hit && Date.now() - hit.ts < US_HOLDINGS_FUND_TTL) { out[sym] = hit.data; continue; }
+      try {
+        const q = await yf.quoteSummary(sym,
+          { modules: ['summaryDetail', 'financialData', 'price'] }, { validateResult: false });
+        const sd = q.summaryDetail || {}, fd = q.financialData || {}, price = q.price || {};
+        const data = {
+          pe: sd.trailingPE ?? null,
+          targetMean: fd.targetMeanPrice ?? null,
+          currentPrice: fd.currentPrice ?? price.regularMarketPrice ?? null,
+        };
+        usHoldingsFundCache[sym] = { data, ts: Date.now() };
+        out[sym] = data;
+      } catch { out[sym] = { pe: null, targetMean: null, currentPrice: null }; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, uniq.length) }, worker));
+  res.json(out);
+});
+
 // ─── GET /api/us/pnl/:symbol — annual + quarterly income statement (Yahoo) ──
 const pnlCache = {}; // sym -> { data, ts }
 const PNL_TTL = 6 * 60 * 60 * 1000; // 6h — statements rarely change intraday
