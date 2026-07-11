@@ -1482,6 +1482,7 @@ app.get('/api/indicators/:token', async (req, res) => {
 // the backtester, and the screener share identical SuperTrend math (same
 // iterative sticky-band semantics documented there).
 const { computeSuperTrend } = require('./backtest/indicators');
+const { computeVcpScore, computeVcpContractions } = require('./screener/vcp');
 
 //
 // `holding` is the raw Kite holdings row when called from /api/alerts; pass
@@ -1518,6 +1519,24 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   const closes = workingCandles.map(c => c.close);
   const highs = workingCandles.map(c => c.high);
   const lows = workingCandles.map(c => c.low);
+
+  // Volatility Contraction Pattern — deterministic score + contraction anatomy.
+  // atr14 intentionally omitted: vcp.js computes and left-pads its own ATR(14)
+  // from closes/highs/lows — the local atr14Arr below is a raw (unpadded,
+  // shorter-than-closes) ATR.calculate() result and would misalign windows.
+  const vcpVolumes = workingCandles.map(c => c.volume || 0);
+  const vcpScoreRes = computeVcpScore({ closes, highs, lows, volumes: vcpVolumes });
+  const vcpAnatomy = computeVcpContractions({ closes, highs, lows, volumes: vcpVolumes });
+  const vcp = {
+    score: vcpScoreRes.vcpScore,
+    setup: vcpScoreRes.vcpSetup,
+    gatePassed: vcpScoreRes.gatePassed,
+    gateFailReason: vcpScoreRes.gateFailReason,
+    components: vcpScoreRes.components,
+    contractions: vcpAnatomy.contractions,
+    tightening: vcpAnatomy.tightening,
+    verdict: vcpScoreRes.gatePassed ? vcpAnatomy.verdict : `no valid VCP: ${vcpScoreRes.gateFailReason}`,
+  };
 
   const sma5Arr = SMA.calculate({ period: 5, values: closes });
   const sma20Arr = SMA.calculate({ period: 20, values: closes });
@@ -1996,6 +2015,7 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
       : null,
     isBreakout,
     tradePlan,
+    vcp,
     rsiHistory,
     confidence,
     confBreakdown,
