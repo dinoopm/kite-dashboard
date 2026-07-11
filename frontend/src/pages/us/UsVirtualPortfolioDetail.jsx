@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 
@@ -117,11 +117,19 @@ export default function UsVirtualPortfolioDetail() {
     return () => controller.abort();
   }, [loadHoldings]);
 
+  // Stable symbol-key for the fundamentals fetch below — recomputed only when
+  // the actual set of held symbols changes, not on every price-refresh tick
+  // (which mints a new `holdings` array reference every 30s).
+  const fundSymbolKey = useMemo(
+    () => [...new Set((holdings || []).map(h => h.symbol).filter(Boolean))].sort().join(','),
+    [holdings]
+  );
+
   // Bulk-fetch P/E + analyst target fundamentals for all held symbols.
   useEffect(() => {
-    if (!holdings || !holdings.length) return;
+    const symbols = fundSymbolKey ? fundSymbolKey.split(',') : [];
+    if (!symbols.length) return;
     let on = true;
-    const symbols = [...new Set(holdings.map(h => h.symbol).filter(Boolean))];
     fetch(`${API}/api/us/holdings-fundamentals`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbols }),
     })
@@ -129,7 +137,7 @@ export default function UsVirtualPortfolioDetail() {
       .then(j => { if (on && j && !j.error) setFundamentals(j); })
       .catch(() => {});
     return () => { on = false; };
-  }, [holdings]);
+  }, [fundSymbolKey]);
 
   // Price-only refresh — merges fresh LTP / previous close into existing rows by
   // id, leaving the user's avg cost / quantity untouched. Used by the button and
@@ -453,16 +461,16 @@ export default function UsVirtualPortfolioDetail() {
                       style={editInput} />
                   </td>
                   <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>{r.ltp == null ? '—' : fmtMoney(r.ltp)}</td>
-                  <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>{fundamentals[r.symbol]?.pe != null ? fundamentals[r.symbol].pe.toFixed(1) : '—'}</td>
+                  <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>{fundamentals[r.symbol?.toUpperCase()]?.pe != null ? fundamentals[r.symbol?.toUpperCase()].pe.toFixed(1) : '—'}</td>
                   <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>
                     {(() => {
-                      const f = fundamentals[r.symbol];
+                      const f = fundamentals[r.symbol?.toUpperCase()];
                       if (!f || f.targetMean == null) return '—';
                       const cur = f.currentPrice ?? r.ltp;
                       const up = cur ? ((f.targetMean - cur) / cur) * 100 : null;
                       return <>
                         ${f.targetMean.toLocaleString('en-US', { maximumFractionDigits: 2 })}
-                        {up != null && <span className={up >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.72rem', marginLeft: '0.3rem', color: signColor(up) }}>{up >= 0 ? '+' : ''}{up.toFixed(0)}%</span>}
+                        {up != null && <span className={up >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.72rem', marginLeft: '0.3rem' }}>{up >= 0 ? '+' : ''}{up.toFixed(0)}%</span>}
                       </>;
                     })()}
                   </td>
