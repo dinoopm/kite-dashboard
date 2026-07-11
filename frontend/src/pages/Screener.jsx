@@ -24,6 +24,7 @@ const RESULT_COLUMNS = [
   { key: 'ret1Y', label: '1Y %', pct: true },
   { key: 'dist20dHigh', label: '20dH %', pct: true },
   { key: 'dist52wHigh', label: '52wH %', pct: true },
+  { key: 'vcpScore', label: 'VCP' },
 ]
 
 const inputStyle = {
@@ -189,6 +190,15 @@ function ResultsTable({ matches, label }) {
                 if (c.key === 'supertrend' || c.key === 'signal1050') {
                   const color = (v === 'BULL' || v === 'BUY') ? '#22c55e' : (v === 'BEAR' || v === 'SELL') ? '#ef4444' : 'var(--text-secondary)'
                   return <td key={c.key} style={{ ...td, color, fontWeight: 600 }}>{v}</td>
+                }
+                if (c.key === 'vcpScore' && m.values.vcpSetup === 'YES') {
+                  return (
+                    <td key={c.key} style={td}>
+                      <span style={{ color: 'var(--accent)', border: '1px solid rgba(56,189,248,0.35)', borderRadius: '4px', padding: '0.05rem 0.35rem', fontWeight: 700 }}>
+                        {v}
+                      </span>
+                    </td>
+                  )
                 }
                 return (
                   <td key={c.key} style={td} className={c.pct ? pnlClass(v) : ''}>
