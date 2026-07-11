@@ -112,4 +112,47 @@ function computeVcpScore({ closes, highs, lows, volumes, atr14 } = {}) {
   };
 }
 
-module.exports = { computeVcpScore, VCP_SETUP_THRESHOLD, MIN_BARS, ramp, mean, smaAt };
+// ZigZag over closes: a pivot forms when price reverses >= reversalPct from the
+// running extreme. Contractions = each swing-high followed by a swing-low.
+function computeVcpContractions({ closes, highs, lows, volumes, lookback = 65, reversalPct = 5 } = {}) {
+  const n = Array.isArray(closes) ? closes.length : 0;
+  if (n < 20) return { contractions: [], tightening: false, verdict: 'insufficient history' };
+  const from = Math.max(0, n - lookback);
+
+  const piv = []; // { idx, price, type: 'H' | 'L' }
+  let extIdx = from, extPrice = closes[from], dir = 0; // dir: 1 up, -1 down, 0 unknown
+  for (let i = from + 1; i < n; i++) {
+    const c = closes[i];
+    if (dir >= 0) {
+      if (c > extPrice) { extPrice = c; extIdx = i; }
+      else if (((extPrice - c) / extPrice) * 100 >= reversalPct) {
+        piv.push({ idx: extIdx, price: extPrice, type: 'H' }); dir = -1; extPrice = c; extIdx = i;
+      }
+    }
+    if (dir <= 0) {
+      if (c < extPrice) { extPrice = c; extIdx = i; }
+      else if (((c - extPrice) / extPrice) * 100 >= reversalPct) {
+        piv.push({ idx: extIdx, price: extPrice, type: 'L' }); dir = 1; extPrice = c; extIdx = i;
+      }
+    }
+  }
+
+  const contractions = [];
+  for (let i = 0; i < piv.length - 1; i++) {
+    if (piv[i].type === 'H' && piv[i + 1].type === 'L') {
+      const depthPct = +(((piv[i].price - piv[i + 1].price) / piv[i].price) * 100).toFixed(2);
+      const avgVolume = Math.round(mean(volumes, piv[i].idx, piv[i + 1].idx + 1) || 0);
+      contractions.push({ depthPct, avgVolume });
+    }
+  }
+
+  const depths = contractions.map(c => c.depthPct);
+  const tightening = depths.length >= 2 && depths.every((d, i) => i === 0 || d <= depths[i - 1] + 0.01);
+  let verdict;
+  if (contractions.length === 0) verdict = 'no contractions detected in base';
+  else verdict = `${contractions.length} contraction${contractions.length > 1 ? 's' : ''} `
+    + `${depths.map(d => Math.round(d) + '%').join('→')}${tightening ? ' — tightening' : ''}`;
+  return { contractions, tightening, verdict };
+}
+
+module.exports = { computeVcpScore, computeVcpContractions, VCP_SETUP_THRESHOLD, MIN_BARS, ramp, mean, smaAt };

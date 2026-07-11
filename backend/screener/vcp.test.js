@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { computeVcpScore } = require('./vcp');
+const { computeVcpScore, computeVcpContractions } = require('./vcp');
 
 // Build a synthetic textbook VCP: long prior uptrend, then a tightening base
 // with declining volatility and drying volume, price coiled just under the high.
@@ -79,4 +79,40 @@ test('210-bar series with recent decline fails gate (SMA200 slope unverifiable)'
   assert.strictEqual(r.gatePassed, false, `expected gatePassed=false, got true with reason: ${r.gateFailReason}`);
   assert.strictEqual(r.vcpSetup, 'NO');
   assert.ok(r.gateFailReason.includes('200SMA'), `expected gateFailReason to mention 200SMA, got: ${r.gateFailReason}`);
+});
+
+// Three successive pullbacks of decreasing depth (~20%, ~12%, ~6%) on a zigzag.
+function tighteningBase() {
+  const seq = [];
+  const legs = [[100, 80], [110, 97], [112, 105], [113]]; // H,L pairs, decreasing depth
+  legs.forEach((leg, li) => {
+    leg.forEach((target, ti) => {
+      // ramp a few bars toward each target so reversals exceed the 5% threshold
+      for (let k = 0; k < 4; k++) seq.push(target);
+    });
+  });
+  return seq.map(c => ({ open: c, high: c, low: c, close: c, volume: 1000 }));
+}
+
+test('detects decreasing contractions and tightening', () => {
+  const candles = tighteningBase();
+  const r = computeVcpContractions({
+    closes: candles.map(c => c.close), highs: candles.map(c => c.high),
+    lows: candles.map(c => c.low), volumes: candles.map(c => c.volume),
+  });
+  assert.ok(r.contractions.length >= 2, `expected >=2 contractions, got ${r.contractions.length}`);
+  const depths = r.contractions.map(c => c.depthPct);
+  for (let i = 1; i < depths.length; i++) assert.ok(depths[i] <= depths[i - 1] + 0.01);
+  assert.strictEqual(r.tightening, true);
+  assert.match(r.verdict, /contraction/);
+});
+
+test('flat series yields no contractions', () => {
+  const flat = Array.from({ length: 40 }, () => ({ open: 100, high: 100, low: 100, close: 100, volume: 1000 }));
+  const r = computeVcpContractions({
+    closes: flat.map(c => c.close), highs: flat.map(c => c.high),
+    lows: flat.map(c => c.low), volumes: flat.map(c => c.volume),
+  });
+  assert.strictEqual(r.contractions.length, 0);
+  assert.strictEqual(r.tightening, false);
 });
