@@ -63,6 +63,7 @@ export default function EventsCalendar() {
   const [onlyHeld, setOnlyHeld] = useState(false)
   const [form, setForm] = useState({ symbol: '', date: '', title: '', notes: '' })
   const [formMsg, setFormMsg] = useState(null)
+  const [showModal, setShowModal] = useState(false)
   const [reactions, setReactions] = useState({}) // symbol -> earnings-reaction stats (US, "mine" rows only)
 
   const load = (mkt = market) => {
@@ -146,6 +147,7 @@ export default function EventsCalendar() {
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
       setForm({ symbol: '', date: '', title: '', notes: '' })
       setFormMsg('Added ✓')
+      setShowModal(false)
       load()
     } catch (err) { setFormMsg(err.message) }
   }
@@ -205,15 +207,43 @@ export default function EventsCalendar() {
       </div>
 
       {/* Add your own event (India calendar only for now) */}
-      {market === 'in' && <form onSubmit={addEvent} className="glass-panel" style={{ padding: '0.9rem 1.1rem', marginBottom: '1.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)', marginRight: '0.3rem' }}>Add event</span>
-        <input style={{ ...input, width: '9rem' }} placeholder="Symbol (e.g. RELIANCE)" value={form.symbol} onChange={e => setForm(f => ({ ...f, symbol: e.target.value.toUpperCase() }))} required />
-        <input style={input} type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} required />
-        <input style={{ ...input, width: '13rem' }} placeholder="Title (e.g. AGM, lock-in expiry)" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} required />
-        <input style={{ ...input, flex: '1 1 12rem' }} placeholder="Notes (optional)" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
-        <button type="submit" style={{ padding: '0.45rem 1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.82rem', border: '1px solid rgba(56,189,248,0.25)', background: 'rgba(56,189,248,0.08)', color: 'var(--accent)' }}>+ Add</button>
-        {formMsg && <span style={{ fontSize: '0.78rem', color: formMsg === 'Added ✓' ? '#34d399' : '#f87171' }}>{formMsg}</span>}
-      </form>}
+      {market === 'in' && (
+        <div style={{ marginBottom: '1.5rem' }}>
+          <button onClick={() => { setFormMsg(null); setShowModal(true) }} style={{ padding: '0.5rem 1.1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.82rem', border: '1px solid rgba(56,189,248,0.25)', background: 'rgba(56,189,248,0.08)', color: 'var(--accent)' }}>+ Add event</button>
+        </div>
+      )}
+
+      {showModal && (
+        <div onClick={() => setShowModal(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(2,6,23,0.7)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}>
+          <form onClick={e => e.stopPropagation()} onSubmit={addEvent} className="glass-panel" style={{ padding: '2.25rem', width: '100%', maxWidth: '44rem', display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)' }}>Add event</span>
+              <button type="button" onClick={() => setShowModal(false)} style={{ background: 'transparent', border: 'none', color: GREY, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>✕</button>
+            </div>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: GREY }}>
+              Symbol
+              <input style={{ ...input, textTransform: 'none' }} placeholder="e.g. RELIANCE" value={form.symbol} onChange={e => setForm(f => ({ ...f, symbol: e.target.value.toUpperCase() }))} required />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: GREY }}>
+              Date
+              <input style={input} type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} required />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: GREY }}>
+              Title
+              <input style={{ ...input, textTransform: 'none' }} placeholder="e.g. AGM, lock-in expiry" value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} required />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: GREY }}>
+              Notes (optional)
+              <textarea rows={3} style={{ ...input, textTransform: 'none', resize: 'vertical', fontFamily: 'inherit' }} placeholder="Notes" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+            </label>
+            <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', marginTop: '0.3rem' }}>
+              <button type="submit" style={{ padding: '0.5rem 1.2rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 700, fontSize: '0.82rem', border: '1px solid rgba(56,189,248,0.25)', background: 'rgba(56,189,248,0.08)', color: 'var(--accent)' }}>+ Add</button>
+              <button type="button" onClick={() => setShowModal(false)} style={{ padding: '0.5rem 1.1rem', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '0.82rem', border: '1px solid var(--border)', background: 'transparent', color: GREY }}>Cancel</button>
+              {formMsg && formMsg !== 'Added ✓' && <span style={{ fontSize: '0.78rem', color: '#f87171' }}>{formMsg}</span>}
+            </div>
+          </form>
+        </div>
+      )}
 
       {market === 'macro' && <MacroStudy />}
 
