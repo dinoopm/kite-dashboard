@@ -58,7 +58,8 @@ function computeVcpScore({ closes, highs, lows, volumes, atr14 } = {}) {
   if (sma200 == null) gateFailReason = 'insufficient history for 200SMA';
   else if (price <= sma200) gateFailReason = 'price below 200SMA';
   else if (sma50 != null && price <= sma50) gateFailReason = 'price below 50SMA';
-  else if (sma200prev != null && sma200 <= sma200prev) gateFailReason = '200SMA not rising';
+  else if (sma200prev == null) gateFailReason = 'insufficient history for 200SMA slope';
+  else if (sma200 <= sma200prev) gateFailReason = '200SMA not rising';
   const gatePassed = gateFailReason == null;
 
   // ---- Component 1: volatility contraction (ATR% now vs ~50 bars ago) ----

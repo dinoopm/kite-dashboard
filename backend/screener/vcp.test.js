@@ -56,3 +56,27 @@ test('downtrend fails gate and is not a setup', () => {
   assert.strictEqual(r.vcpSetup, 'NO');
   assert.ok(r.vcpScore < 70);
 });
+
+test('210-bar series with recent decline fails gate (SMA200 slope unverifiable)', () => {
+  const candles = [];
+  let price = 50;
+  // 190 bars uptrend: steep rise
+  for (let i = 0; i < 190; i++) {
+    price *= 1.012;
+    const wig = price * 0.02;
+    candles.push({ open: price, high: price + wig, low: price - wig, close: price, volume: 100000 });
+  }
+  const peakPrice = price;
+  // 20 bars gentle decline: only ~3% drop so price stays well above 50SMA
+  // but SMA200(last-20) cannot be computed (need 220 bars for that)
+  for (let i = 0; i < 20; i++) {
+    price *= 0.9985;
+    const wig = price * 0.02;
+    candles.push({ open: price, high: price + wig, low: price - wig, close: price, volume: 100000 });
+  }
+  assert.strictEqual(candles.length, 210);
+  const r = computeVcpScore(arrs(candles));
+  assert.strictEqual(r.gatePassed, false, `expected gatePassed=false, got true with reason: ${r.gateFailReason}`);
+  assert.strictEqual(r.vcpSetup, 'NO');
+  assert.ok(r.gateFailReason.includes('200SMA'), `expected gateFailReason to mention 200SMA, got: ${r.gateFailReason}`);
+});
