@@ -1622,6 +1622,46 @@ function Instrument() {
             )}
           </section>
 
+          {instrumentAlert?.alert?.vcp && (
+            <section className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1.25rem' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)' }}>Volatility Contraction</span>
+                <span style={{ fontSize: '1.4rem', fontWeight: 800, color: instrumentAlert.alert.vcp.setup === 'YES' ? 'var(--accent)' : 'var(--text-primary)' }}>
+                  {instrumentAlert.alert.vcp.score ?? '—'}
+                </span>
+                <span style={{ fontSize: '0.72rem', color: instrumentAlert.alert.vcp.gatePassed ? '#34d399' : '#f87171' }}>
+                  trend template: {instrumentAlert.alert.vcp.gatePassed ? 'pass' : `fail (${instrumentAlert.alert.vcp.gateFailReason})`}
+                </span>
+              </div>
+              <div style={{ fontSize: '0.85rem', marginBottom: '0.6rem', color: 'var(--text-primary)' }}>
+                {instrumentAlert.alert.vcp.verdict}
+              </div>
+              {instrumentAlert.alert.vcp.components && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                  {[
+                    ['Contraction', instrumentAlert.alert.vcp.components.contraction],
+                    ['Coiling', instrumentAlert.alert.vcp.components.coiling],
+                    ['Volume dry-up', instrumentAlert.alert.vcp.components.volumeDryUp],
+                    ['Base sanity', instrumentAlert.alert.vcp.components.baseSanity],
+                  ].map(([label, val]) => (
+                    <div key={label}>
+                      <div>{label}</div>
+                      <div style={{ height: '5px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', marginTop: '3px' }}>
+                        <div style={{ width: `${Math.round((val || 0) * 100)}%`, height: '100%', background: 'var(--accent)', borderRadius: '3px' }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {instrumentAlert.alert.vcp.contractions?.length > 0 && (
+                <div style={{ marginTop: '0.7rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  Contractions: {instrumentAlert.alert.vcp.contractions.map((c) => `${c.depthPct}%`).join(' → ')}
+                  {instrumentAlert.alert.vcp.tightening ? ' (tightening)' : ''}
+                </div>
+              )}
+            </section>
+          )}
+
           {/* Price snapshot — moved below Technical Alerts */}
           {quote && (
             <section className="grid" style={{ marginBottom: '1rem' }}>
