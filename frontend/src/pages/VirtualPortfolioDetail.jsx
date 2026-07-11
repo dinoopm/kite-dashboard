@@ -389,7 +389,7 @@ export default function VirtualPortfolioDetail() {
                 {sortableTh('Cur. Value', 'curValue', 'right')}
                 {sortableTh('Net Chg.', 'netChgPct', 'right')}
                 {sortableTh('P&L', 'pnl', 'right')}
-                {sortableTh('Day Chg.', 'dayChgAbs', 'right')}
+                {sortableTh('Day Chg.', 'dayChgPct', 'right')}
                 {sortableTh('Allocation', 'allocation', 'right')}
                 <th style={{ ...th, textAlign: 'center' }} />
               </tr>
