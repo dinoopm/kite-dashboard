@@ -1071,6 +1071,43 @@ app.post('/api/instrument-names', async (req, res) => {
   }
 });
 
+// ─── Bulk P/E + analyst target lookup (holdings tables) ──────────
+// Bulk P/E + analyst target for holdings tables (Yahoo, ₹). Cached per symbol.
+const holdingsFundCacheIN = {}; // sym -> { data, ts }
+const HOLDINGS_FUND_TTL = 60 * 60 * 1000; // 1h
+
+// POST /api/holdings-fundamentals  body: { symbols: ['RELIANCE','TCS',...] }
+// → { RELIANCE: { pe, targetMean, currentPrice }, ... }
+app.post('/api/holdings-fundamentals', async (req, res) => {
+  const { symbols = [] } = req.body || {};
+  if (!Array.isArray(symbols) || !symbols.length) return res.json({});
+  const uniq = [...new Set(symbols)];
+  const out = {};
+  const CONCURRENCY = 6;
+  let i = 0;
+  const worker = async () => {
+    while (i < uniq.length) {
+      const sym = uniq[i++];
+      const hit = holdingsFundCacheIN[sym];
+      if (hit && Date.now() - hit.ts < HOLDINGS_FUND_TTL) { out[sym] = hit.data; continue; }
+      try {
+        const q = await yahooFinance.quoteSummary(toYahooSymbol(sym),
+          { modules: ['summaryDetail', 'financialData', 'price'] }, { validateResult: false });
+        const sd = q.summaryDetail || {}, fd = q.financialData || {}, price = q.price || {};
+        const data = {
+          pe: sd.trailingPE ?? null,
+          targetMean: fd.targetMeanPrice ?? null,
+          currentPrice: fd.currentPrice ?? price.regularMarketPrice ?? null,
+        };
+        holdingsFundCacheIN[sym] = { data, ts: Date.now() };
+        out[sym] = data;
+      } catch { out[sym] = { pe: null, targetMean: null, currentPrice: null }; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, uniq.length) }, worker));
+  res.json(out);
+});
+
 // ─── Search instruments (navbar autocomplete) ────────────────────
 // Kite's search_instruments returns F&O options first when filtering on name
 // (242 RELIANCE matches, most of them strikes). We over-fetch then filter to
