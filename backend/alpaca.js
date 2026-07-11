@@ -21,6 +21,7 @@ const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 // Reuse the exact screener engine the Indian screener uses — it operates on raw
 // daily candles, which is precisely the shape Alpaca bars produce.
 const { SCREENER_FIELDS, computeScreenerRow, validateConditions, evaluateConditions } = require('./screener/engine');
+const { computeVcpScore, computeVcpContractions } = require('./screener/vcp');
 const { getSP500, getNasdaq100 } = require('./usUniverses');
 const { hvSpike } = require('./volMath');
 const { getEtfHoldings } = require('./etfHoldings');
@@ -425,6 +426,39 @@ router.get('/red-flags/:symbol', async (req, res) => {
       asOf: bars.length ? bars[bars.length - 1].date.slice(0, 10) : null,
       checks: ['thin liquidity', 'pump-and-fade', 'fading volume', 'gap-and-fade', 'quiet volume spikes', 'volatility spike'],
       flags,
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// Volatility Contraction Pattern for one US symbol — same deterministic module
+// as the India screener/instrument, fed Alpaca daily bars.
+router.get('/vcp/:symbol', async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const bars = await fetchDailyBars(symbol, 2);
+    if (!Array.isArray(bars) || bars.length < 60) {
+      return res.status(422).json({ error: `Insufficient history for VCP (${bars?.length || 0} bars, need >= 60)` });
+    }
+    const closes = bars.map(b => b.close);
+    const highs = bars.map(b => b.high);
+    const lows = bars.map(b => b.low);
+    const volumes = bars.map(b => b.volume || 0);
+    const score = computeVcpScore({ closes, highs, lows, volumes });
+    const anatomy = computeVcpContractions({ closes, highs, lows, volumes });
+    res.json({
+      symbol,
+      vcp: {
+        score: score.vcpScore,
+        setup: score.vcpSetup,
+        gatePassed: score.gatePassed,
+        gateFailReason: score.gateFailReason,
+        components: score.components,
+        contractions: anatomy.contractions,
+        tightening: anatomy.tightening,
+        verdict: score.gatePassed ? anatomy.verdict : `no valid VCP: ${score.gateFailReason}`,
+      },
     });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
