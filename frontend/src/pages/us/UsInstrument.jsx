@@ -1029,6 +1029,7 @@ export default function UsInstrument() {
   const [snap, setSnap] = useState(null);
   const [bars, setBars] = useState([]);
   const [dailyBars, setDailyBars] = useState([]); // 1Y+ daily for stable indicators
+  const [usVcp, setUsVcp] = useState(null);
   const [range, setRange] = useState('6M');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1056,10 +1057,14 @@ export default function UsInstrument() {
   const loadDaily = useCallback(async () => {
     try { const r = await fetch(`/api/us/bars/${sym}?range=2Y`); const j = await r.json(); if (r.ok) setDailyBars(j.bars || []); } catch { /* */ }
   }, [sym]);
+  const loadVcp = useCallback(async () => {
+    try { const r = await fetch(`/api/us/vcp/${sym}`); const j = await r.json(); if (r.ok) setUsVcp(j.vcp); else setUsVcp(null); } catch { setUsVcp(null); }
+  }, [sym]);
 
   useEffect(() => { loadSnap(); }, [loadSnap]);
   useEffect(() => { loadBars(); }, [loadBars]);
   useEffect(() => { loadDaily(); }, [loadDaily]);
+  useEffect(() => { loadVcp(); }, [loadVcp]);
 
   const q = snap?.quote || {};
   const companyName = snap?.name || snap?.meta?.label || sym;
@@ -1261,6 +1266,42 @@ export default function UsInstrument() {
               <div style={{ fontSize: '0.7rem', color: GREY }}>new-high reach</div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Volatility contraction pattern (VCP) — see /api/us/vcp in backend */}
+      {usVcp && (
+        <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)' }}>Volatility Contraction</span>
+            <span style={{ fontSize: '1.4rem', fontWeight: 800, color: usVcp.setup === 'YES' ? 'var(--accent)' : 'var(--text-primary)' }}>{usVcp.score ?? '—'}</span>
+            <span style={{ fontSize: '0.72rem', color: usVcp.gatePassed ? '#34d399' : '#f87171' }}>
+              trend template: {usVcp.gatePassed ? 'pass' : `fail (${usVcp.gateFailReason})`}
+            </span>
+          </div>
+          <div style={{ fontSize: '0.85rem', marginBottom: '0.6rem' }}>{usVcp.verdict}</div>
+          {usVcp.components && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+              {[
+                ['Contraction', usVcp.components.contraction],
+                ['Coiling', usVcp.components.coiling],
+                ['Volume dry-up', usVcp.components.volumeDryUp],
+                ['Base sanity', usVcp.components.baseSanity],
+              ].map(([label, val]) => (
+                <div key={label}>
+                  <div>{label}</div>
+                  <div style={{ height: '5px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', marginTop: '3px' }}>
+                    <div style={{ width: `${Math.round((val || 0) * 100)}%`, height: '100%', background: 'var(--accent)', borderRadius: '3px' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {usVcp.gatePassed && usVcp.contractions?.length > 0 && (
+            <div style={{ marginTop: '0.7rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              Contractions: {usVcp.contractions.map(c => `${c.depthPct}%`).join(' → ')}{usVcp.tightening ? ' (tightening)' : ''}
+            </div>
+          )}
         </div>
       )}
 
