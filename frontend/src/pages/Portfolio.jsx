@@ -34,6 +34,7 @@ function Portfolio() {
   const [xray, setXray] = useState(null) // /api/portfolio/xray — attention scores + badges per holding
   const [mfHoldings, setMfHoldings] = useState(null)
   const [companyNames, setCompanyNames] = useState({}) // symbol -> company name
+  const [fundamentals, setFundamentals] = useState({}) // symbol -> { pe, targetMean, currentPrice }
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
@@ -124,6 +125,22 @@ function Portfolio() {
     return () => { on = false };
   }, [holdings])
 
+  // Fetch P/E + analyst target price for all equity holdings in bulk after they load.
+  useEffect(() => {
+    if (!holdings || !holdings.length) return;
+    let on = true;
+    const symbols = [...new Set(holdings.map(h => h.tradingsymbol))];
+    fetch('/api/holdings-fundamentals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbols }),
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => { if (on && j && !j.error) setFundamentals(j) })
+      .catch(() => {})
+    return () => { on = false };
+  }, [holdings])
+
   if (loading) return <div className="loader"></div>
   if (error) return <div className="dashboard-layout"><div className="glass-panel"><p className="negative">{error}</p><button onClick={() => fetchData()} style={{padding: '0.5rem 1rem', background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem'}}>Retry</button></div></div>
 
@@ -166,10 +183,16 @@ function Portfolio() {
       return { ...item, displayQuantity: q, currentValue, investment, itemPL, itemPLPercent, dayChange, dayChangePct, allocation, xrayScore: xr?.score ?? -1, xrayBadges: xr?.badges ?? [] };
     })
     .sort((a, b) => {
-      let valA = a[sortField];
-      let valB = b[sortField];
+      const sortVal = (h) => (sortField === 'pe' || sortField === 'targetMean')
+        ? (fundamentals[h.tradingsymbol]?.[sortField] ?? null)
+        : h[sortField];
+      let valA = sortVal(a);
+      let valB = sortVal(b);
       if (typeof valA === 'string') valA = valA.toLowerCase();
       if (typeof valB === 'string') valB = valB.toLowerCase();
+      if (valA == null && valB == null) return 0;
+      if (valA == null) return 1;
+      if (valB == null) return -1;
       if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
       if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
       return 0;
@@ -486,6 +509,8 @@ function Portfolio() {
                     <th onClick={() => handleSort('xrayScore')} style={{cursor: 'pointer'}} title={xray?.scoring || 'Attention score from red flags, volatility, institutional and signal checks'}>X-Ray <SortIcon field="xrayScore"/></th>
                     <th onClick={() => handleSort('average_price')} style={{cursor: 'pointer'}}>Avg. Cost <SortIcon field="average_price"/></th>
                     <th onClick={() => handleSort('last_price')} style={{cursor: 'pointer'}}>LTP <SortIcon field="last_price"/></th>
+                    <th onClick={() => handleSort('pe')} style={{cursor: 'pointer'}}>P/E <SortIcon field="pe"/></th>
+                    <th onClick={() => handleSort('targetMean')} style={{cursor: 'pointer'}}>Target <SortIcon field="targetMean"/></th>
                     <th onClick={() => handleSort('quantity')} style={{cursor: 'pointer'}}>Qty. <SortIcon field="quantity"/></th>
                     <th onClick={() => handleSort('investment')} style={{cursor: 'pointer'}}>Invested <SortIcon field="investment"/></th>
                     <th onClick={() => handleSort('currentValue')} style={{cursor: 'pointer'}}>Cur. Value <SortIcon field="currentValue"/></th>
@@ -509,6 +534,19 @@ function Portfolio() {
                       <td>{xray ? <XrayBadges badges={item.xrayBadges} /> : <span style={{ color: 'var(--text-secondary)', opacity: 0.4, fontSize: '0.7rem' }}>…</span>}</td>
                       <td>₹{Number(item.average_price).toFixed(2)}</td>
                       <td>₹{item.last_price}</td>
+                      <td>{fundamentals[item.tradingsymbol]?.pe != null ? fundamentals[item.tradingsymbol].pe.toFixed(1) : '—'}</td>
+                      <td>
+                        {(() => {
+                          const f = fundamentals[item.tradingsymbol];
+                          if (!f || f.targetMean == null) return '—';
+                          const cur = f.currentPrice ?? item.last_price;
+                          const up = cur ? ((f.targetMean - cur) / cur) * 100 : null;
+                          return <>
+                            ₹{f.targetMean.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                            {up != null && <span className={up >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.72rem', marginLeft: '0.3rem' }}>{up >= 0 ? '+' : ''}{up.toFixed(0)}%</span>}
+                          </>;
+                        })()}
+                      </td>
                       <td>{item.displayQuantity}</td>
                       <td>{priv(`₹${item.investment.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}</td>
                       <td>{priv(`₹${item.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}</td>
