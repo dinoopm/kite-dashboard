@@ -1622,7 +1622,7 @@ function Instrument() {
             )}
           </section>
 
-          {instrumentAlert?.alert?.vcp && (
+          {instrumentAlert?.alert?.vcp && instrumentAlert.alert.vcp.score >= 70 && (
             <section className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1.25rem' }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)' }}>Volatility Contraction</span>

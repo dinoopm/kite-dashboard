@@ -1270,7 +1270,7 @@ export default function UsInstrument() {
       )}
 
       {/* Volatility contraction pattern (VCP) — see /api/us/vcp in backend */}
-      {usVcp && (
+      {usVcp && usVcp.score >= 70 && (
         <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1.25rem' }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
             <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--accent)' }}>Volatility Contraction</span>
