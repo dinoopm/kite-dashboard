@@ -16,6 +16,7 @@ const PRESET_SCREENS = [
   { id: 'p-strong', name: 'Strong Uptrend (ST+ADX)', scope: { type: 'sp500' }, conditions: [{ field: 'supertrend', op: 'is', value: 'BULL' }, { field: 'smaCross', op: 'is', value: 'GOLDEN' }, { field: 'adx14', op: 'gte', value: 25 }, { field: 'pctVsSma200', op: 'gt', value: 0 }] },
   { id: 'p-approaching', name: 'Approaching Breakout', scope: { type: 'sp500' }, conditions: [{ field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 15 }, { field: 'dist20dHigh', op: 'gte', value: -3 }] },
   { id: 'p-buy20d', name: 'BUY + 20d Breakout', scope: { type: 'sp500' }, conditions: [{ field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'breakout20d', op: 'is', value: 'YES' }] },
+  { id: 'p-vcp', name: 'VCP setups', scope: { type: 'sp500' }, conditions: [{ field: 'vcpSetup', op: 'is', value: 'YES' }] },
 ];
 
 const RESULT_COLUMNS = [
@@ -30,6 +31,7 @@ const RESULT_COLUMNS = [
   { key: 'ret1M', label: '1M %', pct: true },
   { key: 'ret1Y', label: '1Y %', pct: true },
   { key: 'dist52wHigh', label: '52wH %', pct: true },
+  { key: 'vcpScore', label: 'VCP' },
 ];
 
 // Analyst columns are appended to the results table only when the scan actually
@@ -122,6 +124,13 @@ function ResultsTable({ matches }) {
                 }
                 if (c.key === 'consensusRating') {
                   return <td key={c.key} style={{ ...td, color: RATING_COLOR[v] || 'var(--text-secondary)', fontWeight: 700, fontSize: '0.78rem' }}>{v.replace('_', ' ')}</td>;
+                }
+                if (c.key === 'vcpScore' && m.values.vcpSetup === 'YES') {
+                  return (
+                    <td key={c.key} style={td}>
+                      <span style={{ color: 'var(--accent)', border: '1px solid rgba(56,189,248,0.35)', borderRadius: '4px', padding: '0.05rem 0.35rem', fontWeight: 700 }}>{v}</span>
+                    </td>
+                  );
                 }
                 return <td key={c.key} style={td} className={c.pct ? pnlClass(v) : ''}>{typeof v === 'number' ? `${c.pct && v > 0 ? '+' : ''}${v}${c.pct ? '%' : ''}` : v}</td>;
               })}
