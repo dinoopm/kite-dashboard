@@ -1653,7 +1653,7 @@ function Instrument() {
                   ))}
                 </div>
               )}
-              {instrumentAlert.alert.vcp.contractions?.length > 0 && (
+              {instrumentAlert.alert.vcp.gatePassed && instrumentAlert.alert.vcp.contractions?.length > 0 && (
                 <div style={{ marginTop: '0.7rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                   Contractions: {instrumentAlert.alert.vcp.contractions.map((c) => `${c.depthPct}%`).join(' → ')}
                   {instrumentAlert.alert.vcp.tightening ? ' (tightening)' : ''}
