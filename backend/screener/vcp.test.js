@@ -116,3 +116,17 @@ test('flat series yields no contractions', () => {
   assert.strictEqual(r.contractions.length, 0);
   assert.strictEqual(r.tightening, false);
 });
+
+const { computeScreenerRow, SCREENER_FIELDS } = require('./engine');
+
+test('screener row exposes vcp fields', () => {
+  assert.ok(SCREENER_FIELDS.some(f => f.key === 'vcpScore'));
+  assert.ok(SCREENER_FIELDS.some(f => f.key === 'vcpSetup' && f.type === 'enum'));
+  const candles = Array.from({ length: 220 }, (_, i) => {
+    const p = 50 + i * 0.5;
+    return { open: p, high: p * 1.01, low: p * 0.99, close: p, volume: 100000, date: `2025-01-${(i % 28) + 1}` };
+  });
+  const row = computeScreenerRow(candles);
+  assert.ok('vcpScore' in row);
+  assert.ok(row.vcpSetup === 'YES' || row.vcpSetup === 'NO');
+});

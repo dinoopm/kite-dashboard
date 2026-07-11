@@ -3,6 +3,7 @@
 // numbers can never disagree with backtest/alert math), then evaluates
 // user-defined conditions against that row. All conditions are ANDed.
 const { buildSeries, rollingMax } = require('../backtest/indicators');
+const { computeVcpScore } = require('./vcp');
 
 // Field catalog — drives both the UI's condition builder (dropdowns, operator
 // choices, value inputs) and server-side validation. `group` is only a UI hint.
@@ -36,6 +37,8 @@ const SCREENER_FIELDS = [
   { key: 'smaCross',    label: 'SMA 50/200 state',         type: 'enum', enumValues: ['GOLDEN', 'DEATH'], group: 'Trend' },
   { key: 'breakout20d', label: 'Above prior 20d high',     type: 'enum', enumValues: ['YES', 'NO'], group: 'Levels' },
   { key: 'breakout55d', label: 'Above prior 55d high',     type: 'enum', enumValues: ['YES', 'NO'], group: 'Levels' },
+  { key: 'vcpScore', label: 'VCP score (0-100)', type: 'number', group: 'Patterns' },
+  { key: 'vcpSetup', label: 'VCP setup',         type: 'enum', enumValues: ['YES', 'NO'], group: 'Patterns' },
 ];
 
 const FIELD_BY_KEY = Object.fromEntries(SCREENER_FIELDS.map(f => [f.key, f]));
@@ -131,6 +134,10 @@ function computeScreenerRow(candles) {
     smaCross: (sma50 != null && sma200 != null) ? (sma50 > sma200 ? 'GOLDEN' : 'DEATH') : null,
     breakout20d: hi20 != null ? (price > hi20 ? 'YES' : 'NO') : null,
     breakout55d: hi55 != null ? (price > hi55 ? 'YES' : 'NO') : null,
+    ...(() => {
+      const v = computeVcpScore({ closes: S.closes, highs: S.highs, lows: S.lows, volumes: S.volumes, atr14: S.atr14 });
+      return { vcpScore: v.vcpScore, vcpSetup: v.vcpSetup };
+    })(),
   };
 }
 
