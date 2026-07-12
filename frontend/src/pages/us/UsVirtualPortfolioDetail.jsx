@@ -434,7 +434,6 @@ export default function UsVirtualPortfolioDetail() {
                 {sortableTh('Avg. Cost', 'avgCost', 'right')}
                 {sortableTh('LTP', 'ltp', 'right')}
                 <th style={{ ...th, textAlign: 'right' }}>P/E</th>
-                <th style={{ ...th, textAlign: 'right' }}>Target</th>
                 {sortableTh('Qty.', 'quantity', 'right')}
                 {sortableTh('Invested', 'invested', 'right')}
                 {sortableTh('Cur. Value', 'curValue', 'right')}
@@ -442,6 +441,7 @@ export default function UsVirtualPortfolioDetail() {
                 {sortableTh('P&L', 'pnl', 'right')}
                 {sortableTh('Day Chg.', 'dayChgAbs', 'right')}
                 {sortableTh('Allocation', 'allocation', 'right')}
+                <th style={{ ...th, textAlign: 'right' }}>Target</th>
                 <th style={{ ...th, textAlign: 'center' }} />
               </tr>
             </thead>
@@ -462,18 +462,6 @@ export default function UsVirtualPortfolioDetail() {
                   </td>
                   <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>{r.ltp == null ? '—' : fmtMoney(r.ltp)}</td>
                   <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>{fundamentals[r.symbol?.toUpperCase()]?.pe != null ? fundamentals[r.symbol?.toUpperCase()].pe.toFixed(1) : '—'}</td>
-                  <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>
-                    {(() => {
-                      const f = fundamentals[r.symbol?.toUpperCase()];
-                      if (!f || f.targetMean == null) return '—';
-                      const cur = f.currentPrice ?? r.ltp;
-                      const up = cur ? ((f.targetMean - cur) / cur) * 100 : null;
-                      return <>
-                        ${f.targetMean.toLocaleString('en-US', { maximumFractionDigits: 2 })}
-                        {up != null && <span className={up >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.72rem', marginLeft: '0.3rem' }}>{up >= 0 ? '+' : ''}{up.toFixed(0)}%</span>}
-                      </>;
-                    })()}
-                  </td>
                   <td style={{ ...td, textAlign: 'right' }}>
                     <input type="number" step="any" min="0" value={r.quantity}
                       onChange={e => updateField(r.id, 'quantity', e.target.value)}
@@ -499,6 +487,18 @@ export default function UsVirtualPortfolioDetail() {
                       </div>
                     )}
                   </td>
+                  <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)' }}>
+                    {(() => {
+                      const f = fundamentals[r.symbol?.toUpperCase()];
+                      if (!f || f.targetMean == null) return '—';
+                      const cur = f.currentPrice ?? r.ltp;
+                      const up = cur ? ((f.targetMean - cur) / cur) * 100 : null;
+                      return <>
+                        ${f.targetMean.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                        {up != null && <span className={up >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.72rem', marginLeft: '0.3rem' }}>{up >= 0 ? '+' : ''}{up.toFixed(0)}%</span>}
+                      </>;
+                    })()}
+                  </td>
                   <td style={{ ...td, textAlign: 'center' }}>
                     <button onClick={() => removeHolding(r.id, r.symbol)} title="Remove from portfolio"
                       style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.9rem' }}>✕</button>
@@ -513,13 +513,13 @@ export default function UsVirtualPortfolioDetail() {
                 <td style={{ ...td, position: 'sticky', bottom: 0, background: '#1e293b' }} />
                 <td style={{ ...td, position: 'sticky', bottom: 0, background: '#1e293b' }} />
                 <td style={{ ...td, position: 'sticky', bottom: 0, background: '#1e293b' }} />
-                <td style={{ ...td, position: 'sticky', bottom: 0, background: '#1e293b' }} />
                 <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: 'var(--text-primary)', position: 'sticky', bottom: 0, background: '#1e293b' }}>{fmtMoney(totals.invested)}</td>
                 <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: 'var(--text-primary)', position: 'sticky', bottom: 0, background: '#1e293b' }}>{fmtMoney(totals.curValue)}</td>
                 <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: signColor(totalPnlPct), position: 'sticky', bottom: 0, background: '#1e293b' }}>{fmtPct(totalPnlPct)}</td>
                 <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: signColor(totals.pnl), position: 'sticky', bottom: 0, background: '#1e293b' }}>{fmtSignedMoney(totals.pnl)}</td>
                 <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: signColor(totals.dayChg), position: 'sticky', bottom: 0, background: '#1e293b' }}>{fmtSignedMoney(totals.dayChg)}</td>
                 <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: 'var(--text-primary)', position: 'sticky', bottom: 0, background: '#1e293b' }}>100%</td>
+                <td style={{ ...td, position: 'sticky', bottom: 0, background: '#1e293b' }} />
                 <td style={{ ...td, position: 'sticky', bottom: 0, background: '#1e293b' }} />
               </tr>
             </tfoot>

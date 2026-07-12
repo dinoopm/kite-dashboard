@@ -510,7 +510,6 @@ function Portfolio() {
                     <th onClick={() => handleSort('average_price')} style={{cursor: 'pointer'}}>Avg. Cost <SortIcon field="average_price"/></th>
                     <th onClick={() => handleSort('last_price')} style={{cursor: 'pointer'}}>LTP <SortIcon field="last_price"/></th>
                     <th onClick={() => handleSort('pe')} style={{cursor: 'pointer'}}>P/E <SortIcon field="pe"/></th>
-                    <th onClick={() => handleSort('targetMean')} style={{cursor: 'pointer'}}>Target <SortIcon field="targetMean"/></th>
                     <th onClick={() => handleSort('quantity')} style={{cursor: 'pointer'}}>Qty. <SortIcon field="quantity"/></th>
                     <th onClick={() => handleSort('investment')} style={{cursor: 'pointer'}}>Invested <SortIcon field="investment"/></th>
                     <th onClick={() => handleSort('currentValue')} style={{cursor: 'pointer'}}>Cur. Value <SortIcon field="currentValue"/></th>
@@ -518,6 +517,7 @@ function Portfolio() {
                     <th onClick={() => handleSort('itemPL')} style={{cursor: 'pointer'}}>P&L <SortIcon field="itemPL"/></th>
                     <th onClick={() => handleSort('dayChangePct')} style={{cursor: 'pointer'}}>Day Chg. <SortIcon field="dayChangePct"/></th>
                     <th onClick={() => handleSort('allocation')} style={{cursor: 'pointer'}}>Allocation <SortIcon field="allocation"/></th>
+                    <th onClick={() => handleSort('targetMean')} style={{cursor: 'pointer'}}>Target <SortIcon field="targetMean"/></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -535,18 +535,6 @@ function Portfolio() {
                       <td>₹{Number(item.average_price).toFixed(2)}</td>
                       <td>₹{item.last_price}</td>
                       <td>{fundamentals[item.tradingsymbol]?.pe != null ? fundamentals[item.tradingsymbol].pe.toFixed(1) : '—'}</td>
-                      <td>
-                        {(() => {
-                          const f = fundamentals[item.tradingsymbol];
-                          if (!f || f.targetMean == null) return '—';
-                          const cur = f.currentPrice ?? item.last_price;
-                          const up = cur ? ((f.targetMean - cur) / cur) * 100 : null;
-                          return <>
-                            ₹{f.targetMean.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                            {up != null && <span className={up >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.72rem', marginLeft: '0.3rem' }}>{up >= 0 ? '+' : ''}{up.toFixed(0)}%</span>}
-                          </>;
-                        })()}
-                      </td>
                       <td>{item.displayQuantity}</td>
                       <td>{priv(`₹${item.investment.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}</td>
                       <td>{priv(`₹${item.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`)}</td>
@@ -564,6 +552,18 @@ function Portfolio() {
                           </div>
                           <span style={{ minWidth: '46px', textAlign: 'right' }}>{item.allocation.toFixed(2)}%</span>
                         </div>
+                      </td>
+                      <td>
+                        {(() => {
+                          const f = fundamentals[item.tradingsymbol];
+                          if (!f || f.targetMean == null) return '—';
+                          const cur = f.currentPrice ?? item.last_price;
+                          const up = cur ? ((f.targetMean - cur) / cur) * 100 : null;
+                          return <>
+                            ₹{f.targetMean.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                            {up != null && <span className={up >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.72rem', marginLeft: '0.3rem' }}>{up >= 0 ? '+' : ''}{up.toFixed(0)}%</span>}
+                          </>;
+                        })()}
                       </td>
                     </tr>
                   ))}
