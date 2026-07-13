@@ -7,7 +7,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } f
 // (see docs/superpowers/specs/2026-07-12-oil-tracker-design.md).
 const GREY = 'var(--text-secondary)'
 const REFRESH_MS = 60000
-const TIMEFRAMES = ['1M', '6M', '1Y']
+const TIMEFRAMES = ['1D', '1W', '1M', '6M', '1Y']
 const BRENT_COLOR = '#fbbf24'
 
 const fmt = (v, digits = 2) => (v == null ? '—' : v.toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits }))
@@ -102,12 +102,24 @@ function OilChart() {
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={hist.points} margin={{ top: 5, right: 10, bottom: 0, left: 0 }}>
             <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} tickLine={false} axisLine={false}
-              minTickGap={40} tickFormatter={d => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} />
+              minTickGap={40} tickFormatter={d => {
+                // Daily points are 'YYYY-MM-DD'; intraday points are full ISO timestamps.
+                if (hist.intraday) {
+                  const t = new Date(d)
+                  return tf === '1D'
+                    ? t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+                    : t.toLocaleDateString('en-US', { weekday: 'short', hour: 'numeric' })
+                }
+                return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+              }} />
             <YAxis domain={['auto', 'auto']} tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} tickLine={false} axisLine={false} width={48}
               tickFormatter={v => `$${v}`} />
             <Tooltip
               contentStyle={{ background: '#1e293b', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '0.8rem' }}
               labelStyle={{ color: 'var(--text-secondary)' }}
+              labelFormatter={d => (hist.intraday
+                ? new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+                : d)}
               formatter={(v, name) => [`$${fmt(v)}`, name === 'wti' ? 'WTI' : 'Brent']} />
             <Legend formatter={name => (name === 'wti' ? 'WTI (CL=F)' : 'Brent (BZ=F)')} wrapperStyle={{ fontSize: '0.78rem' }} />
             <Line type="monotone" dataKey="wti" stroke="var(--accent)" strokeWidth={2} dot={false} connectNulls />

@@ -2306,31 +2306,46 @@ app.get('/api/oil', async (req, res) => {
   }
 });
 
-// ─── GET /api/oil/history?tf=1M|6M|1Y — WTI + Brent daily closes, merged ─────
-// Two yahoo chart calls merged by date into one series for the combined chart.
+// ─── GET /api/oil/history?tf=1D|1W|1M|6M|1Y — WTI + Brent closes, merged ─────
+// Two yahoo chart calls merged by timestamp into one series for the combined
+// chart. 1D/1W use intraday bars (futures trade nearly 24h Sun–Fri); intraday
+// caches expire faster since the bars keep filling in.
+const OIL_TFS = {
+  '1D': { days: 2, interval: '15m', ttl: 5 * 60 * 1000 },   // 2 calendar days so weekends/holidays still show the last session
+  '1W': { days: 7, interval: '60m', ttl: 15 * 60 * 1000 },
+  '1M': { days: 31, interval: '1d', ttl: 30 * 60 * 1000 },
+  '6M': { days: 183, interval: '1d', ttl: 30 * 60 * 1000 },
+  '1Y': { days: 366, interval: '1d', ttl: 30 * 60 * 1000 },
+};
 const oilHistCache = {}; // tf -> { data, ts }
-const OIL_HIST_TTL = 30 * 60 * 1000;
 app.get('/api/oil/history', async (req, res) => {
-  const tf = ['1M', '6M', '1Y'].includes(req.query.tf) ? req.query.tf : '1M';
+  const tf = OIL_TFS[req.query.tf] ? req.query.tf : '1M';
+  const { days, interval, ttl } = OIL_TFS[tf];
   const hit = oilHistCache[tf];
-  if (hit && Date.now() - hit.ts < OIL_HIST_TTL) return res.json(hit.data);
+  if (hit && Date.now() - hit.ts < ttl) return res.json(hit.data);
   try {
-    const months = tf === '1Y' ? 12 : tf === '6M' ? 6 : 1;
-    const period1 = new Date();
-    period1.setMonth(period1.getMonth() - months);
+    const period1 = new Date(Date.now() - days * 86400000);
     const [wti, brent] = await Promise.all(
-      ['CL=F', 'BZ=F'].map(sym => yahooFinance.chart(sym, { period1, interval: '1d' }))
+      ['CL=F', 'BZ=F'].map(sym => yahooFinance.chart(sym, { period1, interval }))
     );
+    const intraday = interval !== '1d';
     const byDate = new Map();
     for (const [key, r] of [['wti', wti], ['brent', brent]]) {
       for (const q of r?.quotes || []) {
         if (q?.close == null || !q.date) continue;
-        const d = q.date.toISOString().slice(0, 10);
+        // Daily bars key by date; intraday bars keep the full timestamp.
+        const d = intraday ? q.date.toISOString() : q.date.toISOString().slice(0, 10);
         if (!byDate.has(d)) byDate.set(d, { date: d });
         byDate.get(d)[key] = +q.close.toFixed(2);
       }
     }
-    const data = { tf, points: [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1)) };
+    let points = [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
+    if (tf === '1D' && points.length > 0) {
+      // Keep only the most recent ~24h of bars from the 2-day fetch window.
+      const cutoff = new Date(new Date(points[points.length - 1].date).getTime() - 86400000).toISOString();
+      points = points.filter(p => p.date >= cutoff);
+    }
+    const data = { tf, intraday, points };
     oilHistCache[tf] = { data, ts: Date.now() };
     res.json(data);
   } catch (err) {
