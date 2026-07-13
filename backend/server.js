@@ -2267,6 +2267,45 @@ app.get('/api/cashflow/:symbol', async (req, res) => {
   }
 });
 
+// ─── GET /api/oil — WTI + Brent crude spot (Yahoo, 10-min delayed) ──────────
+// Thin cached proxy over one Yahoo quote call. Names are hardcoded because
+// Yahoo shortNames carry contract-month noise ("Crude Oil Aug 26").
+let oilCache = null; // { data, ts }
+const OIL_TTL = 2 * 60 * 1000;
+const mapOilQuote = (r, name) => ({
+  symbol: r?.symbol ?? null,
+  name,
+  price: r?.regularMarketPrice ?? null,
+  change: r?.regularMarketChange ?? null,
+  changePct: r?.regularMarketChangePercent ?? null,
+  prevClose: r?.regularMarketPreviousClose ?? null,
+  dayLow: r?.regularMarketDayLow ?? null,
+  dayHigh: r?.regularMarketDayHigh ?? null,
+  week52Low: r?.fiftyTwoWeekLow ?? null,
+  week52High: r?.fiftyTwoWeekHigh ?? null,
+  currency: r?.currency ?? 'USD',
+  quoteTime: r?.regularMarketTime ?? null,
+  delayMin: r?.exchangeDataDelayedBy ?? 10,
+  marketState: r?.marketState ?? null,
+});
+app.get('/api/oil', async (req, res) => {
+  if (oilCache && Date.now() - oilCache.ts < OIL_TTL) return res.json(oilCache.data);
+  try {
+    const q = await yahooFinance.quote(['CL=F', 'BZ=F'], {}, { validateResult: false });
+    const bySym = Object.fromEntries((Array.isArray(q) ? q : [q]).map(r => [r.symbol, r]));
+    const data = {
+      wti: mapOilQuote(bySym['CL=F'], 'WTI Crude'),
+      brent: mapOilQuote(bySym['BZ=F'], 'Brent Crude'),
+      asOf: new Date().toISOString(),
+    };
+    oilCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    if (oilCache) return res.json({ ...oilCache.data, stale: true });
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // ─── GET /api/analysts/:symbol — Wall Street analyst coverage (Yahoo, ₹) ─────
 // Indian counterpart of /api/us/analysts: same shape, NSE symbol resolved via
 // toYahooSymbol(). Coverage is good for liquid large/mid-caps and absent for
