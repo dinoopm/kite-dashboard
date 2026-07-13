@@ -79,10 +79,31 @@ function OilChart() {
     return () => { on = false }
   }, [tf])
 
+  // Change over the visible window: first → last non-null close per grade.
+  const periodChange = (key) => {
+    const pts = hist?.points || []
+    const first = pts.find(p => p[key] != null)?.[key]
+    const last = [...pts].reverse().find(p => p[key] != null)?.[key]
+    if (first == null || last == null || first === 0) return null
+    return { abs: last - first, pct: ((last - first) / first) * 100 }
+  }
+  const changeChip = (label, color, c) => c && (
+    <span style={{ fontSize: '0.78rem', fontWeight: 700 }}>
+      <span style={{ color }}>{label}</span>{' '}
+      <span className={c.abs >= 0 ? 'positive' : 'negative'}>
+        {c.abs >= 0 ? '+' : ''}{fmt(c.abs)} ({c.abs >= 0 ? '+' : ''}{fmt(c.pct)}%)
+      </span>
+    </span>
+  )
+
   return (
     <div className="glass-panel" style={{ padding: '1.1rem 1.25rem', marginTop: '1.25rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.6rem', marginBottom: '0.6rem' }}>
-        <h3 style={{ margin: 0, fontSize: '1.02rem' }}>Price history <span style={{ fontSize: '0.72rem', color: GREY, fontWeight: 500 }}>daily closes, $/bbl</span></h3>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.9rem', flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0, fontSize: '1.02rem' }}>Price history <span style={{ fontSize: '0.72rem', color: GREY, fontWeight: 500 }}>{hist?.intraday ? 'intraday' : 'daily'} closes, $/bbl</span></h3>
+          {hist && changeChip('WTI', 'var(--accent)', periodChange('wti'))}
+          {hist && changeChip('Brent', BRENT_COLOR, periodChange('brent'))}
+        </div>
         <div style={{ display: 'flex', gap: '0.35rem' }}>
           {TIMEFRAMES.map(t => (
             <button key={t} onClick={() => setTf(t)} style={{
