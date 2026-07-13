@@ -14,6 +14,7 @@ const MARKET_DATA_LINKS = [
   { to: '/market-data/surveillance',        label: 'Surveillance (ASM / GSM)',  hint: 'NSE ASM and GSM surveillance list — handle with extra care.' },
   { to: '/market-data/macro',               label: 'Macro Economics',           hint: 'GDP, inflation, RBI policy, fiscal & external balances.' },
   { to: '/market-data/events',              label: 'Corporate Events',          hint: 'Upcoming results/dividend dates + your own events; holdings highlighted.' },
+  { to: '/market-data/oil',                 label: 'Crude Oil (WTI / Brent)',   hint: 'WTI & Brent spot, day change and ranges (10-min delayed).' },
 ];
 
 // Sublinks under the "US" dropdown (Alpaca-powered US market data).
