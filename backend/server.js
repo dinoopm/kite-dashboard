@@ -2306,6 +2306,39 @@ app.get('/api/oil', async (req, res) => {
   }
 });
 
+// ─── GET /api/oil/history?tf=1M|6M|1Y — WTI + Brent daily closes, merged ─────
+// Two yahoo chart calls merged by date into one series for the combined chart.
+const oilHistCache = {}; // tf -> { data, ts }
+const OIL_HIST_TTL = 30 * 60 * 1000;
+app.get('/api/oil/history', async (req, res) => {
+  const tf = ['1M', '6M', '1Y'].includes(req.query.tf) ? req.query.tf : '1M';
+  const hit = oilHistCache[tf];
+  if (hit && Date.now() - hit.ts < OIL_HIST_TTL) return res.json(hit.data);
+  try {
+    const months = tf === '1Y' ? 12 : tf === '6M' ? 6 : 1;
+    const period1 = new Date();
+    period1.setMonth(period1.getMonth() - months);
+    const [wti, brent] = await Promise.all(
+      ['CL=F', 'BZ=F'].map(sym => yahooFinance.chart(sym, { period1, interval: '1d' }))
+    );
+    const byDate = new Map();
+    for (const [key, r] of [['wti', wti], ['brent', brent]]) {
+      for (const q of r?.quotes || []) {
+        if (q?.close == null || !q.date) continue;
+        const d = q.date.toISOString().slice(0, 10);
+        if (!byDate.has(d)) byDate.set(d, { date: d });
+        byDate.get(d)[key] = +q.close.toFixed(2);
+      }
+    }
+    const data = { tf, points: [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1)) };
+    oilHistCache[tf] = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    if (hit) return res.json({ ...hit.data, stale: true });
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // ─── GET /api/analysts/:symbol — Wall Street analyst coverage (Yahoo, ₹) ─────
 // Indian counterpart of /api/us/analysts: same shape, NSE symbol resolved via
 // toYahooSymbol(). Coverage is good for liquid large/mid-caps and absent for

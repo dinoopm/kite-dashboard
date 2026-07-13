@@ -1,10 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 
-// Crude oil spot tracker: WTI (CL=F) + Brent (BZ=F) from /api/oil (Yahoo,
-// 10-min delayed NYMEX). Spot cards only — chart/spread are deliberate
-// non-goals (see docs/superpowers/specs/2026-07-12-oil-tracker-design.md).
+// Crude oil tracker: WTI (CL=F) + Brent (BZ=F) spot cards from /api/oil plus
+// a combined daily-close chart from /api/oil/history (Yahoo, 10-min delayed
+// NYMEX). Spread/INR are deliberate non-goals
+// (see docs/superpowers/specs/2026-07-12-oil-tracker-design.md).
 const GREY = 'var(--text-secondary)'
 const REFRESH_MS = 60000
+const TIMEFRAMES = ['1M', '6M', '1Y']
+const BRENT_COLOR = '#fbbf24'
 
 const fmt = (v, digits = 2) => (v == null ? '—' : v.toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits }))
 
@@ -51,6 +55,66 @@ function GradeCard({ g }) {
         <div style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: GREY }}>52-week range</div>
         <RangeBar low={g.week52Low} high={g.week52High} value={g.price} lowLabel={`$${fmt(g.week52Low)}`} highLabel={`$${fmt(g.week52High)}`} />
       </div>
+    </div>
+  )
+}
+
+// Combined WTI + Brent daily-close chart with timeframe toggle.
+function OilChart() {
+  const [tf, setTf] = useState('1M')
+  const [hist, setHist] = useState(null)   // { tf, points } for the active tf
+  const [histError, setHistError] = useState(null)
+
+  useEffect(() => {
+    let on = true
+    setHist(null); setHistError(null)
+    fetch(`/api/oil/history?tf=${tf}`)
+      .then(r => r.json().then(j => ({ ok: r.ok, j })))
+      .then(({ ok, j }) => {
+        if (!on) return
+        if (!ok) throw new Error(j.error || 'history unavailable')
+        setHist(j)
+      })
+      .catch(e => { if (on) setHistError(e.message) })
+    return () => { on = false }
+  }, [tf])
+
+  return (
+    <div className="glass-panel" style={{ padding: '1.1rem 1.25rem', marginTop: '1.25rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.6rem', marginBottom: '0.6rem' }}>
+        <h3 style={{ margin: 0, fontSize: '1.02rem' }}>Price history <span style={{ fontSize: '0.72rem', color: GREY, fontWeight: 500 }}>daily closes, $/bbl</span></h3>
+        <div style={{ display: 'flex', gap: '0.35rem' }}>
+          {TIMEFRAMES.map(t => (
+            <button key={t} onClick={() => setTf(t)} style={{
+              padding: '0.25rem 0.7rem', borderRadius: '6px', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 700,
+              border: `1px solid ${tf === t ? 'var(--accent)' : 'var(--border)'}`,
+              background: tf === t ? 'rgba(56,189,248,0.12)' : 'transparent',
+              color: tf === t ? 'var(--accent)' : GREY,
+            }}>{t}</button>
+          ))}
+        </div>
+      </div>
+      {histError ? (
+        <p style={{ margin: 0, color: GREY, fontSize: '0.85rem' }}>Chart unavailable: {histError}</p>
+      ) : !hist ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}><div className="loader" /></div>
+      ) : (
+        <ResponsiveContainer width="100%" height={300}>
+          <LineChart data={hist.points} margin={{ top: 5, right: 10, bottom: 0, left: 0 }}>
+            <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} tickLine={false} axisLine={false}
+              minTickGap={40} tickFormatter={d => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} />
+            <YAxis domain={['auto', 'auto']} tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} tickLine={false} axisLine={false} width={48}
+              tickFormatter={v => `$${v}`} />
+            <Tooltip
+              contentStyle={{ background: '#1e293b', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '0.8rem' }}
+              labelStyle={{ color: 'var(--text-secondary)' }}
+              formatter={(v, name) => [`$${fmt(v)}`, name === 'wti' ? 'WTI' : 'Brent']} />
+            <Legend formatter={name => (name === 'wti' ? 'WTI (CL=F)' : 'Brent (BZ=F)')} wrapperStyle={{ fontSize: '0.78rem' }} />
+            <Line type="monotone" dataKey="wti" stroke="var(--accent)" strokeWidth={2} dot={false} connectNulls />
+            <Line type="monotone" dataKey="brent" stroke={BRENT_COLOR} strokeWidth={2} dot={false} connectNulls />
+          </LineChart>
+        </ResponsiveContainer>
+      )}
     </div>
   )
 }
@@ -106,6 +170,7 @@ export default function OilTracker() {
         <GradeCard g={data.wti} />
         <GradeCard g={data.brent} />
       </div>
+      <OilChart />
     </div>
   )
 }
