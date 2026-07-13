@@ -94,6 +94,7 @@ export default function OilTracker() {
             WTI &amp; Brent spot · Yahoo Finance · {data.wti?.delayMin ?? 10}-min delayed
             {asOf && <> · as of {asOf}</>}
             {data.stale && <span style={{ color: '#fbbf24' }}> · stale data</span>}
+            {error && <span style={{ color: '#fbbf24' }}> · refresh failed — showing last data</span>}
           </p>
         </div>
         <button onClick={load} title="Refresh prices"
