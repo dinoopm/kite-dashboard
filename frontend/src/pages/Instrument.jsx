@@ -1025,7 +1025,7 @@ function Instrument() {
     return () => controller.abort();
   }, [token, showSignals, activeTab, signalBars.length])
 
-  const tfOptions = ['1D', '1W', '1M', '3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y'];
+  const tfOptions = ['1D', '1W', '1M', '3M', '6M', 'YTD', '1Y', '2Y', '3Y', '4Y', '5Y'];
 
   // Support/resistance levels for the chart overlay (intraday 1D excluded —
   // pivots there are noise). Recomputed whenever the visible candles change.

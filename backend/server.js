@@ -1297,6 +1297,7 @@ app.get('/api/historical/:token', async (req, res) => {
       else if (tf === '1M') daysBack = 30;
       else if (tf === '3M') daysBack = 90;
       else if (tf === '6M') daysBack = 180;
+      else if (tf === 'YTD') daysBack = Math.max(1, Math.ceil((Date.now() - new Date(new Date().getFullYear(), 0, 1)) / 86400000));
       else if (tf === '1Y') daysBack = 365;
       else if (tf === '2Y') daysBack = 730;
       else if (tf === '3Y') daysBack = 1095;
@@ -1330,6 +1331,7 @@ app.get('/api/historical/:token', async (req, res) => {
     if (tf === '1W') daysBack = 10;
     else if (tf === '3M') daysBack = 90;
     else if (tf === '6M') daysBack = 180;
+    else if (tf === 'YTD') daysBack = Math.max(1, Math.ceil((Date.now() - new Date(new Date().getFullYear(), 0, 1)) / 86400000));
     else if (tf === '1Y') daysBack = 365;
     else if (tf === '2Y') daysBack = 730;
     else if (tf === '3Y') daysBack = 1095;
@@ -1372,6 +1374,7 @@ app.get('/api/historical/:token', async (req, res) => {
       else if (tf === '1M') daysBack = 30;
       else if (tf === '3M') daysBack = 90;
       else if (tf === '6M') daysBack = 180;
+      else if (tf === 'YTD') daysBack = Math.max(1, Math.ceil((Date.now() - new Date(new Date().getFullYear(), 0, 1)) / 86400000));
       else if (tf === '1Y') daysBack = 365;
       else if (tf === '2Y') daysBack = 730;
       else if (tf === '3Y') daysBack = 1095;

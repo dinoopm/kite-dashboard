@@ -19,7 +19,7 @@ import AnalystsPanel from '../../components/AnalystsPanel';
 // RSI panel, a technical-signal strip, period stats, and a full indicator grid —
 // all computed client-side from Alpaca bars.
 
-const RANGES = ['1D', '1W', '1M', '3M', '6M', '1Y', '2Y', '3Y', '5Y'];
+const RANGES = ['1D', '1W', '1M', '3M', '6M', 'YTD', '1Y', '2Y', '3Y', '5Y'];
 
 const fmtPrice = (v) => (v == null ? '—' : v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const fmtPct = (v) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`);

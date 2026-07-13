@@ -191,6 +191,7 @@ function rangeToQuery(range) {
     case '1M': start.setMonth(now.getMonth() - 1); return { timeframe: '1Day', start };
     case '3M': start.setMonth(now.getMonth() - 3); return { timeframe: '1Day', start };
     case '6M': start.setMonth(now.getMonth() - 6); return { timeframe: '1Day', start };
+    case 'YTD': return { timeframe: '1Day', start: new Date(now.getFullYear(), 0, 1) };
     case '1Y': start.setFullYear(now.getFullYear() - 1); return { timeframe: '1Day', start };
     case '2Y': start.setFullYear(now.getFullYear() - 2); return { timeframe: '1Day', start };
     case '3Y': start.setFullYear(now.getFullYear() - 3); return { timeframe: '1Day', start };
