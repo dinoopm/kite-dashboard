@@ -79,19 +79,34 @@ async function fetchSSGA(sym) {
   return out;
 }
 
-// ─── Everyone else: StockAnalysis.com holdings API (top ~25 by weight) ───────
+// ─── Everyone else: StockAnalysis.com (top ~25 by weight) ────────────────────
+// The old JSON API (/api/symbol/e/<sym>/holdings) started returning 404, so
+// primary is now the holdings page itself: the SvelteKit payload embeds rows
+// as JS object literals like {no:7,n:"ASML Holding N.V.",s:"$ASML",...}. The
+// API is still tried first in case it comes back.
 async function fetchStockAnalysis(sym) {
-  const resp = await fetch(`https://stockanalysis.com/api/symbol/e/${sym}/holdings`, { headers: { 'User-Agent': UA } });
-  if (!resp.ok) throw new Error(`StockAnalysis ${sym} ${resp.status}`);
-  const j = await resp.json();
   const out = [];
   const seen = new Set();
-  for (const h of j?.data?.holdings || []) {
-    const symbol = cleanSymbol(h.s);
-    if (!symbol || seen.has(symbol)) continue;
+  const push = (rawSym, rawName) => {
+    const symbol = cleanSymbol(rawSym);
+    if (!symbol || seen.has(symbol)) return;
     seen.add(symbol);
-    out.push({ symbol, name: (h.n || symbol).trim() });
+    out.push({ symbol, name: (rawName || symbol).trim() });
+  };
+
+  const resp = await fetch(`https://stockanalysis.com/api/symbol/e/${sym}/holdings`, { headers: { 'User-Agent': UA } });
+  if (resp.ok) {
+    const j = await resp.json().catch(() => null);
+    for (const h of j?.data?.holdings || []) push(h.s, h.n);
   }
+
+  if (!out.length) {
+    const page = await fetch(`https://stockanalysis.com/etf/${sym.toLowerCase()}/holdings/`, { headers: { 'User-Agent': UA } });
+    if (!page.ok) throw new Error(`StockAnalysis ${sym} page ${page.status}`);
+    const html = await page.text();
+    for (const m of html.matchAll(/\{no:\d+,n:"([^"]*)",s:"([^"]*)"/g)) push(m[2], m[1]);
+  }
+
   if (!out.length) throw new Error(`StockAnalysis ${sym}: no holdings`);
   return out;
 }
