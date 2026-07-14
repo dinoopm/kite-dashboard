@@ -450,7 +450,10 @@ function UsIndices() {
       const rsi14 = rsi14At(sorted, sorted.length - 1);
       const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
       const history = sorted.slice(-120).map(c => ({ date: c.date, close: c.close }));
-      return { ...historyObj, sparkline, aboveSma50, rsi14, history };
+      // `sorted` here is the synthetic equal-weight composite series (close only,
+      // no true high/low for an index composite), so ADX can't be computed.
+      const adx14 = null;
+      return { ...historyObj, sparkline, aboveSma50, rsi14, adx14, history };
     };
 
     const loadComposites = async () => {
@@ -601,6 +604,11 @@ function UsIndices() {
 
       const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
 
+      // ADX(14) needs true high/low, which only the full `sorted` bars carry —
+      // the `history` tail built below is close-only. Compute it here, while
+      // the full OHLC bars are still in scope.
+      const adx14 = sorted.length >= 29 ? +computeAdx14(sorted).toFixed(1) : null;
+
       // Commodity rows + NIFTY 50 (commodity-chart benchmark) retain the full
       // daily series for the normalized performance line chart. All other rows
       // keep a compact 120-bar tail — enough for the momentum ranking's
@@ -613,7 +621,7 @@ function UsIndices() {
 
       setData(prevData => prevData.map(item =>
         item.id === index.id
-          ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14, history }
+          ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14, adx14, history }
           : item
       ));
     } else {
@@ -974,7 +982,7 @@ function UsIndices() {
         momentumBreakdown: breakdownById[r.id] || null,
         rs1M: r['1M'] !== null && benchmark1M !== null ? r['1M'] - benchmark1M : null,
         rs1MBenchmark: benchmarkShort,
-        adx14: r.history && r.history.length >= 29 ? +computeAdx14(r.history).toFixed(1) : null,
+        adx14: r.adx14 ?? null,
         rrgRatio: latestRrg ? latestRrg.rsRatio : null,
         rrgMomentum: latestRrg ? latestRrg.rsMomentum : null,
         rrgQuadrant: quadrant,
