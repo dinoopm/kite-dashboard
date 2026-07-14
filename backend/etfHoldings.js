@@ -24,13 +24,35 @@ const inflight = {}; // sym -> Promise
 // SPDR funds resolvable from State Street's public daily-holdings xlsx.
 const SSGA_FUNDS = new Set(['XBI', 'KRE', 'XOP', 'XRT', 'DIA']);
 
+// StockAnalysis tags non-US-primary listings with the home exchange
+// ("!tsx/AEM"), and the segment after the slash is the HOME ticker, not the US
+// one. For many dual-listed names they coincide (AEM, WPM, FNV, PAAS…), so the
+// default is to use that segment — but where they differ, or where the name has
+// no US exchange listing at all (OTC-only), Alpaca can't price it and the row
+// would render as "–" / 0.00%. This map fixes the known offenders: value is the
+// US ticker, null means drop the row. Same treatment for German-listed ADR rows
+// ("EDG.DE") whose real US ADR trades under another symbol.
+const FOREIGN_US_MAP = {
+  'TSX/K': 'KGC',    // Kinross Gold
+  'TSX/ABX': 'B',    // Barrick Mining
+  'TSX/IMG': 'IAG',  // IAMGOLD
+  'TSX/ELD': 'EGO',  // Eldorado Gold
+  'TSX/LUG': null,   // Lundin Gold — OTC only (LUGDF)
+  'TSX/DPM': null,   // DPM Metals — OTC only (DPMLF)
+  'TSX/EDV': null,   // Endeavour Mining — OTC only (EDVMF)
+  'ASX/NST': null,   // Northern Star Resources — OTC only (NESRF)
+  'ASX/EVN': null,   // Evolution Mining — OTC only (CAHPF)
+  'LON/FRES': null,  // Fresnillo — OTC only (FNLPF)
+  'EDG.DE': 'GFI',   // Gold Fields ADR
+  'HAM.DE': 'HMY',   // Harmony Gold ADR
+};
+
 // Normalize to a ticker Alpaca can price: letters with an optional dot class
-// (BRK.B). StockAnalysis tags non-US-primary listings as "!TSX/AEM" — take the
-// segment after the slash, which is the US ticker for the many dual-listed
-// names (AEM, WPM, FNV… in GDX). Cash/derivative rows fail the test → dropped.
+// (BRK.B). Cash/derivative rows fail the test → dropped.
 const cleanSymbol = (raw) => {
-  let s = (raw || '').replace(/^\$/, '').trim().toUpperCase();
-  if (s.includes('/')) s = s.split('/').pop(); // "!TSX/AEM" -> "AEM"
+  let s = (raw || '').replace(/^[$!]/, '').trim().toUpperCase();
+  if (s in FOREIGN_US_MAP) return FOREIGN_US_MAP[s];
+  if (s.includes('/')) s = s.split('/').pop(); // "TSX/AEM" -> "AEM"
   return /^[A-Z]{1,6}(\.[A-Z])?$/.test(s) ? s : null;
 };
 
