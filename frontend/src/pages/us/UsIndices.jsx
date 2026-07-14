@@ -4,6 +4,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Cell as Recharts
 import RRGChart from '../../components/RRGChart';
 import UsGlobalIndices from './UsGlobalIndices';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
+import { adx14 as computeAdx14 } from '../../lib/indicators';
 
 // ─── RRG Color Palette ─────────────────────────────────────────
 const RRG_COLORS = [
@@ -86,6 +87,7 @@ const emptyRowFor = (entry) => ({
   price: 0, '1D': null,
   '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null,
   sparkline: null, aboveSma50: null, rsi14: null, dist52WHigh: null, rs1M: null,
+  adx14: null,
 });
 
 // ─── localStorage snapshot for instant paint on revisit ────────
@@ -920,6 +922,7 @@ function UsIndices() {
         momentumBreakdown: breakdownById[r.id] || null,
         rs1M: r['1M'] !== null && benchmark1M !== null ? r['1M'] - benchmark1M : null,
         rs1MBenchmark: benchmarkShort,
+        adx14: r.history && r.history.length >= 29 ? +computeAdx14(r.history).toFixed(1) : null,
         rrgRatio: latestRrg ? latestRrg.rsRatio : null,
         rrgMomentum: latestRrg ? latestRrg.rsMomentum : null,
         rrgQuadrant: quadrant,
@@ -958,7 +961,7 @@ function UsIndices() {
     if (!rows.length) return;
     const headers = [
       'Name', 'Category', 'Price', '1D%', '1W%', '1M%', '3M%', '6M%', '1Y%', '2Y%', '3Y%',
-      'RS-Ratio', 'RS-Momentum', 'Quadrant', 'RSI14', 'MomentumScore', '1M-RS',
+      'RS-Ratio', 'RS-Momentum', 'Quadrant', 'RSI14', 'ADX14', 'MomentumScore', '1M-RS',
       '%52W-High', 'Signal'
     ];
     const fmt = (v) => (v === null || v === undefined) ? '' : (typeof v === 'number' ? v.toFixed(2) : String(v));
@@ -971,7 +974,7 @@ function UsIndices() {
       lines.push([
         r.name, r.category, r.price,
         r['1D'], r['1W'], r['1M'], r['3M'], r['6M'], r['1Y'], r['2Y'], r['3Y'],
-        r.rrgRatio, r.rrgMomentum, r.rrgQuadrant, r.rsi14, r.momentumScore, r.rs1M,
+        r.rrgRatio, r.rrgMomentum, r.rrgQuadrant, r.rsi14, r.adx14, r.momentumScore, r.rs1M,
         r.dist52WHigh, r.marketSignal?.label || ''
       ].map(esc).join(','));
     }
@@ -1712,6 +1715,9 @@ function UsIndices() {
               <th onClick={() => requestSort('rsi14')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
                 RSI {renderSortIndicator('rsi14')}
               </th>
+              <th onClick={() => requestSort('adx14')} title="ADX(14) — trend strength. ≥25 trending (green up / red down via 50DMA), <20 choppy." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
+                ADX{renderSortIndicator('adx14')}
+              </th>
               <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. Hover the score for a breakdown." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
                 Momentum {renderSortIndicator('momentumScore')}
               </th>
@@ -1792,6 +1798,23 @@ function UsIndices() {
                       border: `1px solid ${row.rsi14 >= 70 ? 'rgba(239,68,68,0.3)' : row.rsi14 <= 30 ? 'rgba(34,197,94,0.3)' : 'rgba(255,255,255,0.1)'}`
                     }}>
                       {row.rsi14}
+                    </span>
+                  )}
+                </td>
+                <td style={{ padding: '0.5rem', textAlign: 'right' }}>
+                  {row.adx14 === null ? (
+                    <span style={{ color: 'var(--text-secondary)' }}>–</span>
+                  ) : (
+                    <span style={{
+                      display: 'inline-block', padding: '0.2rem 0.5rem', borderRadius: '6px',
+                      fontSize: '0.85rem', fontWeight: '600',
+                      background: row.adx14 >= 25 ? (row.aboveSma50 ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)') : 'rgba(255,255,255,0.07)',
+                      color: row.adx14 >= 25 ? (row.aboveSma50 ? '#22c55e' : '#ef4444')
+                           : row.adx14 < 20 ? 'var(--text-secondary)' : 'var(--text-primary)',
+                      border: `1px solid ${row.adx14 >= 25 ? (row.aboveSma50 ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)') : 'rgba(255,255,255,0.1)'}`,
+                      opacity: row.adx14 < 20 ? 0.7 : 1,
+                    }}>
+                      {row.adx14.toFixed(1)}
                     </span>
                   )}
                 </td>
@@ -1928,7 +1951,7 @@ function UsIndices() {
             );
             }) : (
               <tr>
-                <td colSpan="16" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
+                <td colSpan="17" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
               </tr>
             )}
           </tbody>
