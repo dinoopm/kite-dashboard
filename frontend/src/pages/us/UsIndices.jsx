@@ -201,14 +201,15 @@ const verdict200 = (pct) =>
   : pct < 40 ? 'Bear territory'
   : 'Transition zone';
 
-const TIP_50 = 'Of the 500 S&P stocks, how many trade above their own 50-day average price (short-term pulse). Above 70% = broad rally. 40–70% = mixed, be picky. Below 40% = most stocks weak.';
-const TIP_200 = 'How many of the 500 trade above their 200-day average (big-picture regime). Above 60% = bull market intact. Below 40% = bear territory.';
+const TIP_50 = 'How many index members trade above their own 50-day average price (short-term pulse). Above 70% = broad rally. 40–70% = mixed, be picky. Below 40% = most stocks weak. Nasdaq 100 row shows whether tech/growth joins the move.';
+const TIP_200 = 'How many members trade above their 200-day average (big-picture regime). Above 60% = bull market intact. Below 40% = bear territory. Verdict follows the S&P row.';
+const TIP_DIVERGENCE = 'S&P and Nasdaq 100 short-term breadth differ by 15+ points — one side of the market is not confirming the other. Narrow tech = fragile growth rally; broad tech with weak S&P = growth leading a turn.';
 const TIP_SECTORS = 'How many of the sector ETFs in this table are above their 50-day average. Broad participation = healthy rally; only a few = narrow, fragile market.';
 const TIP_ADV = 'How many sector ETFs are up today. If the index is up but most sectors are red, a few big names are carrying the move.';
 
 const BREADTH_HELP_KEY = 'us-breadth-help-open-v1';
 
-function BreadthStrip({ breadth, rows }) {
+function BreadthStrip({ breadth, ndxBreadth, rows }) {
   const [helpOpen, setHelpOpen] = useState(() => {
     try { return localStorage.getItem(BREADTH_HELP_KEY) !== 'closed'; } catch { return true; }
   });
@@ -225,12 +226,24 @@ function BreadthStrip({ breadth, rows }) {
   const adv = advRows.filter(r => r['1D'] > 0).length;
   if (!breadth && sectorRows.length === 0) return null;
 
-  const stat = (label, pct, count, total, verdict, tip) => (
-    <div title={tip} style={{ padding: '0.6rem 1rem', background: 'var(--card-bg, rgba(255,255,255,0.03))', border: '1px solid var(--border)', borderRadius: '8px', minWidth: '150px', cursor: 'help' }}>
+  // Paired card: S&P row (primary, drives the verdict) + Nasdaq 100 row when
+  // its fetch succeeded. Both percentages carry their own zone color.
+  const stat = (label, sp, ndx, key, verdictFn, tip) => (
+    <div title={tip} style={{ padding: '0.6rem 1rem', background: 'var(--card-bg, rgba(255,255,255,0.03))', border: '1px solid var(--border)', borderRadius: '8px', minWidth: '190px', cursor: 'help' }}>
       <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label} ⓘ</div>
-      <div style={{ fontSize: '1.35rem', fontWeight: 700, color: breadthColor(pct) }}>{pct.toFixed(1)}%</div>
-      <div style={{ fontSize: '0.72rem', color: breadthColor(pct) }}>{verdict}</div>
-      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{count} of {total}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', minWidth: '68px' }}>S&P 500</span>
+        <span style={{ fontSize: '1.25rem', fontWeight: 700, color: breadthColor(sp[key]) }}>{sp[key].toFixed(1)}%</span>
+        <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>{sp[key === 'pctAbove50' ? 'above50' : 'above200']} of {sp.total}</span>
+      </div>
+      {ndx && (
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+          <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', minWidth: '68px' }}>Nasdaq 100</span>
+          <span style={{ fontSize: '1.05rem', fontWeight: 700, color: breadthColor(ndx[key]) }}>{ndx[key].toFixed(1)}%</span>
+          <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>{ndx[key === 'pctAbove50' ? 'above50' : 'above200']} of {ndx.total}</span>
+        </div>
+      )}
+      <div style={{ fontSize: '0.72rem', color: breadthColor(sp[key]) }}>{verdictFn(sp[key])}</div>
     </div>
   );
 
@@ -245,11 +258,18 @@ function BreadthStrip({ breadth, rows }) {
   return (
     <div style={{ margin: '0.8rem 0' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap' }}>
-        {breadth && stat('S&P 500 above 50DMA', breadth.pctAbove50, breadth.above50, breadth.total, verdict50(breadth.pctAbove50), TIP_50)}
-        {breadth && stat('S&P 500 above 200DMA', breadth.pctAbove200, breadth.above200, breadth.total, verdict200(breadth.pctAbove200), TIP_200)}
+        {breadth && stat('Above 50DMA — short-term', breadth, ndxBreadth, 'pctAbove50', verdict50, TIP_50)}
+        {breadth && stat('Above 200DMA — big picture', breadth, ndxBreadth, 'pctAbove200', verdict200, TIP_200)}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           {sectorRows.length > 0 && chip(`Sectors above 50DMA: ${above}/${sectorRows.length} — ${sectorWord}`, above >= sectorRows.length / 2, TIP_SECTORS)}
           {advRows.length > 0 && chip(`Advancing today: ${adv}/${advRows.length} — ${advWord}`, adv >= advRows.length / 2, TIP_ADV)}
+          {breadth && ndxBreadth && Math.abs(breadth.pctAbove50 - ndxBreadth.pctAbove50) >= 15 && (
+            <span title={TIP_DIVERGENCE} style={{ padding: '0.25rem 0.6rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid var(--border)', color: '#f5c344', background: 'rgba(245,195,68,0.08)', cursor: 'help' }}>
+              {breadth.pctAbove50 > ndxBreadth.pctAbove50
+                ? 'S&P broad but tech narrow — growth rally is thin'
+                : 'Tech broader than S&P — growth is leading'}
+            </span>
+          )}
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.3rem' }}>
           <button onClick={toggleHelp} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-secondary)', fontSize: '0.7rem', padding: '0.2rem 0.55rem', cursor: 'pointer' }}>
@@ -287,7 +307,8 @@ function UsIndices() {
   const [showColumnMenu, setShowColumnMenu] = useState(false);
   const [momentumPopover, setMomentumPopover] = useState(null); // { rowId, x, y }
   const searchInputRef = useRef(null);
-  const [breadth, setBreadth] = useState(null); // { pctAbove50, ... } | null
+  const [breadth, setBreadth] = useState(null);       // S&P 500 { pctAbove50, ... } | null
+  const [ndxBreadth, setNdxBreadth] = useState(null); // Nasdaq 100, same shape | null
 
   // Sorting state
   const [sortConfig, setSortConfig] = useState({ key: 'momentumScore', direction: 'desc' });
@@ -358,18 +379,20 @@ function UsIndices() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // S&P 500 breadth internals (% above 50/200 DMA) — refreshed every 30 min.
+  // Breadth internals (% above 50/200 DMA) for S&P 500 + Nasdaq 100 —
+  // refreshed every 30 min. Each universe fails independently (row hidden).
   useEffect(() => {
     let alive = true;
-    const load = async () => {
+    const load = async (universe, set) => {
       try {
-        const res = await fetchWithAbort('/api/us/breadth', { timeoutMs: 90_000 });
+        const res = await fetchWithAbort(`/api/us/breadth?universe=${universe}`, { timeoutMs: 90_000 });
         const j = await res.json();
-        if (alive && res.ok && j.pctAbove50 != null) setBreadth(j);
-      } catch { /* card stays hidden */ }
+        if (alive && res.ok && j.pctAbove50 != null) set(j);
+      } catch { /* row stays hidden */ }
     };
-    load();
-    const t = setInterval(load, 30 * 60 * 1000);
+    const loadAll = () => { load('sp500', setBreadth); load('ndx100', setNdxBreadth); };
+    loadAll();
+    const t = setInterval(loadAll, 30 * 60 * 1000);
     return () => { alive = false; clearInterval(t); };
   }, []);
 
@@ -1310,7 +1333,7 @@ function UsIndices() {
         </div>
       </div>
 
-      {activeTab !== 'global' && <BreadthStrip breadth={breadth} rows={data} />}
+      {activeTab !== 'global' && <BreadthStrip breadth={breadth} ndxBreadth={ndxBreadth} rows={data} />}
 
       {/* Momentum Score Bar Chart */}
       <style>{`

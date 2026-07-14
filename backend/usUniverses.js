@@ -81,21 +81,54 @@ async function fetchWikiConstituents(url) {
   return rows;
 }
 
-async function getCached(key, url, fallback) {
+// Official Nasdaq constituents feed — the same API the nasdaq.com NDX index
+// page loads its table from. Authoritative and updated on rebalance day,
+// unlike Wikipedia. Needs a browser UA or Akamai rejects it.
+async function fetchNasdaqOfficial() {
+  const resp = await fetch('https://api.nasdaq.com/api/quote/list-type/nasdaq100', {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
+      'Accept': 'application/json',
+    },
+  });
+  if (!resp.ok) throw new Error(`api.nasdaq.com ${resp.status}`);
+  const j = await resp.json();
+  return (j?.data?.data?.rows || [])
+    .map(r => ({
+      symbol: String(r.symbol || '').trim().toUpperCase(),
+      sector: r.sector || null,
+      // Drop share-class boilerplate: "… Common Stock", "… Common Stock Class A",
+      // "… Common Stock (DE)", "… Class A Ordinary Shares", "… Depositary Shares" etc.
+      name: String(r.companyName || r.symbol || '')
+        .replace(/\s+(Common|Capital|Ordinary|Depositary|New York Registry)\s+(Stock|Shares?).*$/i, '')
+        .replace(/\s+Class\s+[A-C](\s.*)?$/i, '')
+        .trim(),
+    }))
+    .filter(r => r.symbol);
+}
+
+async function getCachedBy(key, fetcher, fallback) {
   const hit = cache[key];
   if (hit && Date.now() - hit.ts < TTL) return hit.data;
   try {
-    const rows = await fetchWikiConstituents(url);
+    const rows = await fetcher();
     if (rows.length > 50) { cache[key] = { data: rows, ts: Date.now() }; return rows; }
     throw new Error(`only ${rows.length} rows`);
   } catch (e) {
-    console.warn(`[usUniverses] ${key} scrape failed (${e.message}); using fallback`);
+    console.warn(`[usUniverses] ${key} fetch failed (${e.message}); using fallback`);
     if (hit) return hit.data; // stale beats fallback
     return fallback;
   }
 }
 
-const getSP500 = () => getCached('sp500', 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies', SP500_FALLBACK);
-const getNasdaq100 = () => getCached('nasdaq100', 'https://en.wikipedia.org/wiki/Nasdaq-100', NASDAQ100_FALLBACK);
+const getSP500 = () => getCachedBy('sp500',
+  () => fetchWikiConstituents('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'), SP500_FALLBACK);
+// Primary: official Nasdaq API. Backup: Wikipedia's list article (the main
+// Nasdaq-100 page dropped its constituents table in a mid-2026 restructure).
+const getNasdaq100 = () => getCachedBy('nasdaq100',
+  () => fetchNasdaqOfficial().catch(e => {
+    console.warn(`[usUniverses] nasdaq official API failed (${e.message}); trying Wikipedia`);
+    return fetchWikiConstituents('https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies');
+  }), NASDAQ100_FALLBACK);
 
 module.exports = { getSP500, getNasdaq100 };

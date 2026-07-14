@@ -927,15 +927,16 @@ router.get('/global-indices', async (req, res) => {
   }
 });
 
-// ─── GET /api/us/breadth — S&P 500 % above 50/200-day SMA ───────────────────
-// Heavy on cold start (~10-15 Alpaca requests for 500 symbols × ~210 bars),
-// so cached for 30 min with in-flight coalescing.
+// ─── GET /api/us/breadth — % of index members above 50/200-day SMA ──────────
+// ?universe=sp500 (default, ~10-15 Alpaca requests cold) | ndx100 (1-2).
+// Cached 30 min per universe with in-flight coalescing.
 const BREADTH_TTL = 30 * 60 * 1000;
-let breadthCache = null; // { data, ts }
-let breadthInflight = null;
+const BREADTH_UNIVERSES = { sp500: getSP500, ndx100: getNasdaq100 };
+const breadthCache = {};    // universe -> { data, ts }
+const breadthInflight = {}; // universe -> Promise
 
-async function computeBreadth() {
-  const symbols = (await getSP500()).map(x => x.symbol);
+async function computeBreadth(universe) {
+  const symbols = (await BREADTH_UNIVERSES[universe]()).map(x => x.symbol);
   const start = new Date(Date.now() - 310 * 24 * 60 * 60 * 1000);
   const bars = await fetchBarsMulti(symbols, start);
   let above50 = 0, above200 = 0, total = 0, asOf = '';
@@ -951,7 +952,7 @@ async function computeBreadth() {
     const d = String(candles[candles.length - 1].date).slice(0, 10);
     if (d > asOf) asOf = d;
   }
-  if (!total) throw new Error('breadth: no symbols with enough history');
+  if (!total) throw new Error(`breadth(${universe}): no symbols with enough history`);
   return {
     pctAbove50: +(above50 / total * 100).toFixed(1),
     pctAbove200: +(above200 / total * 100).toFixed(1),
@@ -961,15 +962,20 @@ async function computeBreadth() {
 
 router.get('/breadth', async (req, res) => {
   try {
-    if (breadthCache && Date.now() - breadthCache.ts < BREADTH_TTL) {
-      return res.json({ ...breadthCache.data, cached: true });
+    const universe = req.query.universe || 'sp500';
+    if (!BREADTH_UNIVERSES[universe]) {
+      return res.status(400).json({ error: `unknown universe "${universe}" — use ${Object.keys(BREADTH_UNIVERSES).join(' | ')}` });
     }
-    if (!breadthInflight) {
-      breadthInflight = computeBreadth()
-        .then(data => { breadthCache = { data, ts: Date.now() }; return data; })
-        .finally(() => { breadthInflight = null; });
+    const hit = breadthCache[universe];
+    if (hit && Date.now() - hit.ts < BREADTH_TTL) {
+      return res.json({ ...hit.data, cached: true });
     }
-    const data = await breadthInflight;
+    if (!breadthInflight[universe]) {
+      breadthInflight[universe] = computeBreadth(universe)
+        .then(data => { breadthCache[universe] = { data, ts: Date.now() }; return data; })
+        .finally(() => { delete breadthInflight[universe]; });
+    }
+    const data = await breadthInflight[universe];
     res.json({ ...data, cached: false });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
