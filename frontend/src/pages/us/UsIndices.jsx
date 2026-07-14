@@ -187,6 +187,42 @@ function EndLabelsOverlay({
   );
 }
 
+// Market-regime strip: S&P 500 internals (from /api/us/breadth) + sector-ETF
+// breadth chips computed from rows already loaded for the table.
+const breadthColor = (pct) => pct >= 70 ? '#22c55e' : pct < 40 ? '#ef4444' : '#f5c344';
+
+function BreadthStrip({ breadth, rows }) {
+  const sectorRows = rows.filter(r => r.category === 'sector' && r.aboveSma50 !== null);
+  const above = sectorRows.filter(r => r.aboveSma50).length;
+  const advRows = rows.filter(r => r.category === 'sector' && r['1D'] !== null);
+  const adv = advRows.filter(r => r['1D'] > 0).length;
+  if (!breadth && sectorRows.length === 0) return null;
+
+  const stat = (label, pct, count, total) => (
+    <div style={{ padding: '0.6rem 1rem', background: 'var(--card-bg, rgba(255,255,255,0.03))', border: '1px solid var(--border)', borderRadius: '8px', minWidth: '150px' }}>
+      <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+      <div style={{ fontSize: '1.35rem', fontWeight: 700, color: breadthColor(pct) }}>{pct.toFixed(1)}%</div>
+      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{count} of {total}</div>
+    </div>
+  );
+
+  const chip = (text, good) => (
+    <span style={{ padding: '0.25rem 0.6rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid var(--border)', color: good ? '#22c55e' : '#ef4444', background: good ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)' }}>{text}</span>
+  );
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap', margin: '0.8rem 0' }}>
+      {breadth && stat('S&P 500 above 50DMA', breadth.pctAbove50, breadth.above50, breadth.total)}
+      {breadth && stat('S&P 500 above 200DMA', breadth.pctAbove200, breadth.above200, breadth.total)}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+        {sectorRows.length > 0 && chip(`Sectors above 50DMA: ${above}/${sectorRows.length}`, above >= sectorRows.length / 2)}
+        {advRows.length > 0 && chip(`Advancing today: ${adv}/${advRows.length}`, adv >= advRows.length / 2)}
+      </div>
+      {breadth && <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginLeft: 'auto' }}>internals as of {breadth.asOf}</span>}
+    </div>
+  );
+}
+
 function UsIndices() {
   const navigate = useNavigate();
   const [data, setData] = useState(() => loadIndicesSnapshot() || INDICES.map(emptyRowFor));
@@ -205,6 +241,7 @@ function UsIndices() {
   const [showColumnMenu, setShowColumnMenu] = useState(false);
   const [momentumPopover, setMomentumPopover] = useState(null); // { rowId, x, y }
   const searchInputRef = useRef(null);
+  const [breadth, setBreadth] = useState(null); // { pctAbove50, ... } | null
 
   // Sorting state
   const [sortConfig, setSortConfig] = useState({ key: 'momentumScore', direction: 'desc' });
@@ -273,6 +310,21 @@ function UsIndices() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // S&P 500 breadth internals (% above 50/200 DMA) — refreshed every 30 min.
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetchWithAbort('/api/us/breadth', { timeoutMs: 90_000 });
+        const j = await res.json();
+        if (alive && res.ok && j.pctAbove50 != null) setBreadth(j);
+      } catch { /* card stays hidden */ }
+    };
+    load();
+    const t = setInterval(load, 30 * 60 * 1000);
+    return () => { alive = false; clearInterval(t); };
   }, []);
 
   useEffect(() => {
@@ -1203,6 +1255,8 @@ function UsIndices() {
           </button>
         </div>
       </div>
+
+      {activeTab !== 'global' && <BreadthStrip breadth={breadth} rows={data} />}
 
       {/* Momentum Score Bar Chart */}
       <style>{`
