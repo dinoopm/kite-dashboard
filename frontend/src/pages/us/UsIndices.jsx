@@ -191,34 +191,80 @@ function EndLabelsOverlay({
 // breadth chips computed from rows already loaded for the table.
 const breadthColor = (pct) => pct >= 70 ? '#22c55e' : pct < 40 ? '#ef4444' : '#f5c344';
 
+// Plain-language verdicts so the strip reads without knowing the thresholds.
+const verdict50 = (pct) =>
+  pct >= 70 ? 'Strong rally — most stocks rising'
+  : pct < 40 ? 'Weak — most stocks falling'
+  : 'Healthy but selective';
+const verdict200 = (pct) =>
+  pct >= 60 ? 'Bull market intact'
+  : pct < 40 ? 'Bear territory'
+  : 'Transition zone';
+
+const TIP_50 = 'Of the 500 S&P stocks, how many trade above their own 50-day average price (short-term pulse). Above 70% = broad rally. 40–70% = mixed, be picky. Below 40% = most stocks weak.';
+const TIP_200 = 'How many of the 500 trade above their 200-day average (big-picture regime). Above 60% = bull market intact. Below 40% = bear territory.';
+const TIP_SECTORS = 'How many of the sector ETFs in this table are above their 50-day average. Broad participation = healthy rally; only a few = narrow, fragile market.';
+const TIP_ADV = 'How many sector ETFs are up today. If the index is up but most sectors are red, a few big names are carrying the move.';
+
+const BREADTH_HELP_KEY = 'us-breadth-help-open-v1';
+
 function BreadthStrip({ breadth, rows }) {
+  const [helpOpen, setHelpOpen] = useState(() => {
+    try { return localStorage.getItem(BREADTH_HELP_KEY) !== 'closed'; } catch { return true; }
+  });
+  const toggleHelp = () => {
+    setHelpOpen(o => {
+      try { localStorage.setItem(BREADTH_HELP_KEY, o ? 'closed' : 'open'); } catch { /* non-fatal */ }
+      return !o;
+    });
+  };
+
   const sectorRows = rows.filter(r => r.category === 'sector' && r.aboveSma50 !== null);
   const above = sectorRows.filter(r => r.aboveSma50).length;
   const advRows = rows.filter(r => r.category === 'sector' && r['1D'] !== null);
   const adv = advRows.filter(r => r['1D'] > 0).length;
   if (!breadth && sectorRows.length === 0) return null;
 
-  const stat = (label, pct, count, total) => (
-    <div style={{ padding: '0.6rem 1rem', background: 'var(--card-bg, rgba(255,255,255,0.03))', border: '1px solid var(--border)', borderRadius: '8px', minWidth: '150px' }}>
-      <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
+  const stat = (label, pct, count, total, verdict, tip) => (
+    <div title={tip} style={{ padding: '0.6rem 1rem', background: 'var(--card-bg, rgba(255,255,255,0.03))', border: '1px solid var(--border)', borderRadius: '8px', minWidth: '150px', cursor: 'help' }}>
+      <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label} ⓘ</div>
       <div style={{ fontSize: '1.35rem', fontWeight: 700, color: breadthColor(pct) }}>{pct.toFixed(1)}%</div>
+      <div style={{ fontSize: '0.72rem', color: breadthColor(pct) }}>{verdict}</div>
       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{count} of {total}</div>
     </div>
   );
 
-  const chip = (text, good) => (
-    <span style={{ padding: '0.25rem 0.6rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid var(--border)', color: good ? '#22c55e' : '#ef4444', background: good ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)' }}>{text}</span>
+  const chip = (text, good, tip) => (
+    <span title={tip} style={{ padding: '0.25rem 0.6rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid var(--border)', color: good ? '#22c55e' : '#ef4444', background: good ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)', cursor: 'help' }}>{text}</span>
   );
 
+  const sectorPct = sectorRows.length ? above / sectorRows.length : 0;
+  const sectorWord = sectorPct >= 0.7 ? 'broad participation' : sectorPct >= 0.4 ? 'mixed participation' : 'narrow — few sectors lead';
+  const advWord = advRows.length ? (adv >= advRows.length / 2 ? 'most sectors up today' : 'most sectors down today') : '';
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap', margin: '0.8rem 0' }}>
-      {breadth && stat('S&P 500 above 50DMA', breadth.pctAbove50, breadth.above50, breadth.total)}
-      {breadth && stat('S&P 500 above 200DMA', breadth.pctAbove200, breadth.above200, breadth.total)}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-        {sectorRows.length > 0 && chip(`Sectors above 50DMA: ${above}/${sectorRows.length}`, above >= sectorRows.length / 2)}
-        {advRows.length > 0 && chip(`Advancing today: ${adv}/${advRows.length}`, adv >= advRows.length / 2)}
+    <div style={{ margin: '0.8rem 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap' }}>
+        {breadth && stat('S&P 500 above 50DMA', breadth.pctAbove50, breadth.above50, breadth.total, verdict50(breadth.pctAbove50), TIP_50)}
+        {breadth && stat('S&P 500 above 200DMA', breadth.pctAbove200, breadth.above200, breadth.total, verdict200(breadth.pctAbove200), TIP_200)}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+          {sectorRows.length > 0 && chip(`Sectors above 50DMA: ${above}/${sectorRows.length} — ${sectorWord}`, above >= sectorRows.length / 2, TIP_SECTORS)}
+          {advRows.length > 0 && chip(`Advancing today: ${adv}/${advRows.length} — ${advWord}`, adv >= advRows.length / 2, TIP_ADV)}
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.3rem' }}>
+          <button onClick={toggleHelp} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-secondary)', fontSize: '0.7rem', padding: '0.2rem 0.55rem', cursor: 'pointer' }}>
+            ⓘ How to read this {helpOpen ? '▴' : '▾'}
+          </button>
+          {breadth && <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>internals as of {breadth.asOf}</span>}
+        </div>
       </div>
-      {breadth && <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginLeft: 'auto' }}>internals as of {breadth.asOf}</span>}
+      {helpOpen && (
+        <div style={{ marginTop: '0.6rem', padding: '0.7rem 1rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--card-bg, rgba(255,255,255,0.03))', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          <div><strong style={{ color: 'var(--text-primary)' }}>Breadth</strong> counts how many stocks join the move — the index can be carried by a few giants. Green ≥70% = broad rally · amber 40–70% = selective market · red &lt;40% = broad weakness.</div>
+          <div><strong style={{ color: 'var(--text-primary)' }}>Watch for divergence:</strong> index at highs while breadth falls = narrow, fragile rally. Index falling while breadth rises = bottom may be forming.</div>
+          <div><strong style={{ color: 'var(--text-primary)' }}>ADX column</strong> measures trend <em>strength</em>, not direction: ≥25 = real trend (green up / red down) · 20–25 = building · &lt;20 = chop, breakouts unreliable. A sector pausing after a big run drops to low ADX — resting, not broken.</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1777,7 +1823,7 @@ function UsIndices() {
               <th onClick={() => requestSort('rsi14')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
                 RSI {renderSortIndicator('rsi14')}
               </th>
-              <th onClick={() => requestSort('adx14')} title="ADX(14) — trend strength. ≥25 trending (green up / red down via 50DMA), <20 choppy." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
+              <th onClick={() => requestSort('adx14')} title="ADX(14) measures how strongly a sector is trending — not which way. 25+ = real trend worth trading (green = up, red = down). 20–25 = trend building. Under 20 = choppy sideways noise where breakouts usually fail. A sector pausing after a big run drops to low ADX — resting, not broken." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
                 ADX{renderSortIndicator('adx14')}
               </th>
               <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. Hover the score for a breakdown." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
@@ -1875,8 +1921,12 @@ function UsIndices() {
                            : row.adx14 < 20 ? 'var(--text-secondary)' : 'var(--text-primary)',
                       border: `1px solid ${row.adx14 >= 25 ? (row.aboveSma50 ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)') : 'rgba(255,255,255,0.1)'}`,
                       opacity: row.adx14 < 20 ? 0.7 : 1,
+                      whiteSpace: 'nowrap',
                     }}>
                       {row.adx14.toFixed(1)}
+                      <span style={{ fontSize: '0.68rem', fontWeight: 500, marginLeft: '0.3rem', opacity: 0.9 }}>
+                        {row.adx14 >= 25 ? (row.aboveSma50 ? 'Strong ↑' : 'Strong ↓') : row.adx14 >= 20 ? 'Building' : 'Chop'}
+                      </span>
                     </span>
                   )}
                 </td>
