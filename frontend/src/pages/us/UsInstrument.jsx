@@ -13,6 +13,7 @@ import NewsPanel from '../../components/NewsPanel';
 import VolatilityPanel from '../../components/VolatilityPanel';
 import EventBadge from '../../components/EventBadge';
 import { realizedVol } from '../../lib/vixAnalytics';
+import { adx14 } from '../../lib/indicators';
 import AnalystsPanel from '../../components/AnalystsPanel';
 
 // US ETF/equity detail: company name, snapshot, price chart with MA overlays,
@@ -85,32 +86,6 @@ const atr14 = (bars, p = 14) => {
   let a = tr.slice(1, p + 1).reduce((s, v) => s + v, 0) / p;
   for (let i = p + 1; i < bars.length; i++) a = (a * (p - 1) + tr[i]) / p;
   return a;
-};
-
-const adx14 = (bars, p = 14) => {
-  if (bars.length < 2 * p + 1) return null;
-  const tr = [], pDM = [], mDM = [];
-  for (let i = 1; i < bars.length; i++) {
-    const up = bars[i].high - bars[i - 1].high;
-    const dn = bars[i - 1].low - bars[i].low;
-    pDM.push(up > dn && up > 0 ? up : 0);
-    mDM.push(dn > up && dn > 0 ? dn : 0);
-    const pc = bars[i - 1].close;
-    tr.push(Math.max(bars[i].high - bars[i].low, Math.abs(bars[i].high - pc), Math.abs(bars[i].low - pc)));
-  }
-  const wilder = (arr) => { let s = arr.slice(0, p).reduce((a, b) => a + b, 0); const o = [s]; for (let i = p; i < arr.length; i++) { s = s - s / p + arr[i]; o.push(s); } return o; };
-  const trS = wilder(tr), pS = wilder(pDM), mS = wilder(mDM);
-  const dx = [];
-  for (let i = 0; i < trS.length; i++) {
-    if (!trS[i]) { dx.push(0); continue; }
-    const pdi = 100 * pS[i] / trS[i], mdi = 100 * mS[i] / trS[i];
-    const sum = pdi + mdi;
-    dx.push(sum === 0 ? 0 : 100 * Math.abs(pdi - mdi) / sum);
-  }
-  if (dx.length < p) return null;
-  let adx = dx.slice(0, p).reduce((a, b) => a + b, 0) / p;
-  for (let i = p; i < dx.length; i++) adx = (adx * (p - 1) + dx[i]) / p;
-  return adx;
 };
 
 const superTrend = (bars, period = 10, mult = 3) => {
