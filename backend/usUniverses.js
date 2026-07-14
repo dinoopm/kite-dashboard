@@ -96,6 +96,8 @@ async function getCached(key, url, fallback) {
 }
 
 const getSP500 = () => getCached('sp500', 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies', SP500_FALLBACK);
-const getNasdaq100 = () => getCached('nasdaq100', 'https://en.wikipedia.org/wiki/Nasdaq-100', NASDAQ100_FALLBACK);
+// Components live on the dedicated list article — the main Nasdaq-100 page
+// dropped its constituents table (mid-2026 restructure).
+const getNasdaq100 = () => getCached('nasdaq100', 'https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies', NASDAQ100_FALLBACK);
 
 module.exports = { getSP500, getNasdaq100 };
