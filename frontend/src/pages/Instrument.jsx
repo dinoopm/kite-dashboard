@@ -416,7 +416,11 @@ function detectBreakoutsAdvanced(data, { volMult = 1.5, confirmPeriods = 3, stri
       heldPeriods: failedAt != null ? failedAt - 1 : avail,
       confirmPeriods,
     });
-    last = i;
+    // Cooldown throttles marker spam, but only a breakout that HELD should
+    // start it: a failed poke followed by an immediate reclaim (trap → real
+    // move, e.g. a pre-earnings fake-out) is the strongest breakout pattern,
+    // and suppressing the reclaim hides the one signal that matters.
+    if (status !== 'failed') last = i;
   }
   return out;
 }
