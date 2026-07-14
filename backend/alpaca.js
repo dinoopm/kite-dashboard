@@ -927,6 +927,55 @@ router.get('/global-indices', async (req, res) => {
   }
 });
 
+// ─── GET /api/us/breadth — S&P 500 % above 50/200-day SMA ───────────────────
+// Heavy on cold start (~10-15 Alpaca requests for 500 symbols × ~210 bars),
+// so cached for 30 min with in-flight coalescing.
+const BREADTH_TTL = 30 * 60 * 1000;
+let breadthCache = null; // { data, ts }
+let breadthInflight = null;
+
+async function computeBreadth() {
+  const symbols = (await getSP500()).map(x => x.symbol);
+  const start = new Date(Date.now() - 310 * 24 * 60 * 60 * 1000);
+  const bars = await fetchBarsMulti(symbols, start);
+  let above50 = 0, above200 = 0, total = 0, asOf = '';
+  for (const sym of symbols) {
+    const candles = bars[sym];
+    if (!candles || candles.length < 200) continue;
+    const closes = candles.map(c => c.close);
+    const last = closes[closes.length - 1];
+    const sma = (p) => closes.slice(-p).reduce((a, b) => a + b, 0) / p;
+    total++;
+    if (last > sma(50)) above50++;
+    if (last > sma(200)) above200++;
+    const d = String(candles[candles.length - 1].date).slice(0, 10);
+    if (d > asOf) asOf = d;
+  }
+  if (!total) throw new Error('breadth: no symbols with enough history');
+  return {
+    pctAbove50: +(above50 / total * 100).toFixed(1),
+    pctAbove200: +(above200 / total * 100).toFixed(1),
+    above50, above200, total, asOf,
+  };
+}
+
+router.get('/breadth', async (req, res) => {
+  try {
+    if (breadthCache && Date.now() - breadthCache.ts < BREADTH_TTL) {
+      return res.json({ ...breadthCache.data, cached: true });
+    }
+    if (!breadthInflight) {
+      breadthInflight = computeBreadth()
+        .then(data => { breadthCache = { data, ts: Date.now() }; return data; })
+        .finally(() => { breadthInflight = null; });
+    }
+    const data = await breadthInflight;
+    res.json({ ...data, cached: false });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 // ─── GET /api/us/events/:symbol — next earnings + ex-dividend (Yahoo) ───────
 const usEventsCache = {}; // sym -> { data, ts }
 const US_EVENTS_TTL = 12 * 60 * 60 * 1000;
