@@ -4,6 +4,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Cell as Recharts
 import RRGChart from '../../components/RRGChart';
 import UsGlobalIndices from './UsGlobalIndices';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
+import { adx14 as computeAdx14 } from '../../lib/indicators';
 
 // ─── RRG Color Palette ─────────────────────────────────────────
 const RRG_COLORS = [
@@ -86,6 +87,7 @@ const emptyRowFor = (entry) => ({
   price: 0, '1D': null,
   '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null,
   sparkline: null, aboveSma50: null, rsi14: null, dist52WHigh: null, rs1M: null,
+  adx14: null,
 });
 
 // ─── localStorage snapshot for instant paint on revisit ────────
@@ -185,6 +187,88 @@ function EndLabelsOverlay({
   );
 }
 
+// Market-regime strip: S&P 500 internals (from /api/us/breadth) + sector-ETF
+// breadth chips computed from rows already loaded for the table.
+const breadthColor = (pct) => pct >= 70 ? '#22c55e' : pct < 40 ? '#ef4444' : '#f5c344';
+
+// Plain-language verdicts so the strip reads without knowing the thresholds.
+const verdict50 = (pct) =>
+  pct >= 70 ? 'Strong rally — most stocks rising'
+  : pct < 40 ? 'Weak — most stocks falling'
+  : 'Healthy but selective';
+const verdict200 = (pct) =>
+  pct >= 60 ? 'Bull market intact'
+  : pct < 40 ? 'Bear territory'
+  : 'Transition zone';
+
+const TIP_50 = 'Of the 500 S&P stocks, how many trade above their own 50-day average price (short-term pulse). Above 70% = broad rally. 40–70% = mixed, be picky. Below 40% = most stocks weak.';
+const TIP_200 = 'How many of the 500 trade above their 200-day average (big-picture regime). Above 60% = bull market intact. Below 40% = bear territory.';
+const TIP_SECTORS = 'How many of the sector ETFs in this table are above their 50-day average. Broad participation = healthy rally; only a few = narrow, fragile market.';
+const TIP_ADV = 'How many sector ETFs are up today. If the index is up but most sectors are red, a few big names are carrying the move.';
+
+const BREADTH_HELP_KEY = 'us-breadth-help-open-v1';
+
+function BreadthStrip({ breadth, rows }) {
+  const [helpOpen, setHelpOpen] = useState(() => {
+    try { return localStorage.getItem(BREADTH_HELP_KEY) !== 'closed'; } catch { return true; }
+  });
+  const toggleHelp = () => {
+    setHelpOpen(o => {
+      try { localStorage.setItem(BREADTH_HELP_KEY, o ? 'closed' : 'open'); } catch { /* non-fatal */ }
+      return !o;
+    });
+  };
+
+  const sectorRows = rows.filter(r => r.category === 'sector' && r.aboveSma50 !== null);
+  const above = sectorRows.filter(r => r.aboveSma50).length;
+  const advRows = rows.filter(r => r.category === 'sector' && r['1D'] !== null);
+  const adv = advRows.filter(r => r['1D'] > 0).length;
+  if (!breadth && sectorRows.length === 0) return null;
+
+  const stat = (label, pct, count, total, verdict, tip) => (
+    <div title={tip} style={{ padding: '0.6rem 1rem', background: 'var(--card-bg, rgba(255,255,255,0.03))', border: '1px solid var(--border)', borderRadius: '8px', minWidth: '150px', cursor: 'help' }}>
+      <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label} ⓘ</div>
+      <div style={{ fontSize: '1.35rem', fontWeight: 700, color: breadthColor(pct) }}>{pct.toFixed(1)}%</div>
+      <div style={{ fontSize: '0.72rem', color: breadthColor(pct) }}>{verdict}</div>
+      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{count} of {total}</div>
+    </div>
+  );
+
+  const chip = (text, good, tip) => (
+    <span title={tip} style={{ padding: '0.25rem 0.6rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid var(--border)', color: good ? '#22c55e' : '#ef4444', background: good ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)', cursor: 'help' }}>{text}</span>
+  );
+
+  const sectorPct = sectorRows.length ? above / sectorRows.length : 0;
+  const sectorWord = sectorPct >= 0.7 ? 'broad participation' : sectorPct >= 0.4 ? 'mixed participation' : 'narrow — few sectors lead';
+  const advWord = advRows.length ? (adv >= advRows.length / 2 ? 'most sectors up today' : 'most sectors down today') : '';
+
+  return (
+    <div style={{ margin: '0.8rem 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap' }}>
+        {breadth && stat('S&P 500 above 50DMA', breadth.pctAbove50, breadth.above50, breadth.total, verdict50(breadth.pctAbove50), TIP_50)}
+        {breadth && stat('S&P 500 above 200DMA', breadth.pctAbove200, breadth.above200, breadth.total, verdict200(breadth.pctAbove200), TIP_200)}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+          {sectorRows.length > 0 && chip(`Sectors above 50DMA: ${above}/${sectorRows.length} — ${sectorWord}`, above >= sectorRows.length / 2, TIP_SECTORS)}
+          {advRows.length > 0 && chip(`Advancing today: ${adv}/${advRows.length} — ${advWord}`, adv >= advRows.length / 2, TIP_ADV)}
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.3rem' }}>
+          <button onClick={toggleHelp} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-secondary)', fontSize: '0.7rem', padding: '0.2rem 0.55rem', cursor: 'pointer' }}>
+            ⓘ How to read this {helpOpen ? '▴' : '▾'}
+          </button>
+          {breadth && <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>internals as of {breadth.asOf}</span>}
+        </div>
+      </div>
+      {helpOpen && (
+        <div style={{ marginTop: '0.6rem', padding: '0.7rem 1rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--card-bg, rgba(255,255,255,0.03))', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          <div><strong style={{ color: 'var(--text-primary)' }}>Breadth</strong> counts how many stocks join the move — the index can be carried by a few giants. Green ≥70% = broad rally · amber 40–70% = selective market · red &lt;40% = broad weakness.</div>
+          <div><strong style={{ color: 'var(--text-primary)' }}>Watch for divergence:</strong> index at highs while breadth falls = narrow, fragile rally. Index falling while breadth rises = bottom may be forming.</div>
+          <div><strong style={{ color: 'var(--text-primary)' }}>ADX column</strong> measures trend <em>strength</em>, not direction: ≥25 = real trend (green up / red down) · 20–25 = building · &lt;20 = chop, breakouts unreliable. A sector pausing after a big run drops to low ADX — resting, not broken.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function UsIndices() {
   const navigate = useNavigate();
   const [data, setData] = useState(() => loadIndicesSnapshot() || INDICES.map(emptyRowFor));
@@ -203,6 +287,7 @@ function UsIndices() {
   const [showColumnMenu, setShowColumnMenu] = useState(false);
   const [momentumPopover, setMomentumPopover] = useState(null); // { rowId, x, y }
   const searchInputRef = useRef(null);
+  const [breadth, setBreadth] = useState(null); // { pctAbove50, ... } | null
 
   // Sorting state
   const [sortConfig, setSortConfig] = useState({ key: 'momentumScore', direction: 'desc' });
@@ -271,6 +356,21 @@ function UsIndices() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // S&P 500 breadth internals (% above 50/200 DMA) — refreshed every 30 min.
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetchWithAbort('/api/us/breadth', { timeoutMs: 90_000 });
+        const j = await res.json();
+        if (alive && res.ok && j.pctAbove50 != null) setBreadth(j);
+      } catch { /* card stays hidden */ }
+    };
+    load();
+    const t = setInterval(load, 30 * 60 * 1000);
+    return () => { alive = false; clearInterval(t); };
   }, []);
 
   useEffect(() => {
@@ -396,7 +496,10 @@ function UsIndices() {
       const rsi14 = rsi14At(sorted, sorted.length - 1);
       const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
       const history = sorted.slice(-120).map(c => ({ date: c.date, close: c.close }));
-      return { ...historyObj, sparkline, aboveSma50, rsi14, history };
+      // `sorted` here is the synthetic equal-weight composite series (close only,
+      // no true high/low for an index composite), so ADX can't be computed.
+      const adx14 = null;
+      return { ...historyObj, sparkline, aboveSma50, rsi14, adx14, history };
     };
 
     const loadComposites = async () => {
@@ -547,6 +650,11 @@ function UsIndices() {
 
       const sparkline = sorted.slice(-30).map(c => ({ v: c.close }));
 
+      // ADX(14) needs true high/low, which only the full `sorted` bars carry —
+      // the `history` tail built below is close-only. Compute it here, while
+      // the full OHLC bars are still in scope.
+      const adx14 = sorted.length >= 29 ? +computeAdx14(sorted).toFixed(1) : null;
+
       // Commodity rows + NIFTY 50 (commodity-chart benchmark) retain the full
       // daily series for the normalized performance line chart. All other rows
       // keep a compact 120-bar tail — enough for the momentum ranking's
@@ -559,7 +667,7 @@ function UsIndices() {
 
       setData(prevData => prevData.map(item =>
         item.id === index.id
-          ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14, history }
+          ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14, adx14, history }
           : item
       ));
     } else {
@@ -920,6 +1028,7 @@ function UsIndices() {
         momentumBreakdown: breakdownById[r.id] || null,
         rs1M: r['1M'] !== null && benchmark1M !== null ? r['1M'] - benchmark1M : null,
         rs1MBenchmark: benchmarkShort,
+        adx14: r.adx14 ?? null,
         rrgRatio: latestRrg ? latestRrg.rsRatio : null,
         rrgMomentum: latestRrg ? latestRrg.rsMomentum : null,
         rrgQuadrant: quadrant,
@@ -958,7 +1067,7 @@ function UsIndices() {
     if (!rows.length) return;
     const headers = [
       'Name', 'Category', 'Price', '1D%', '1W%', '1M%', '3M%', '6M%', '1Y%', '2Y%', '3Y%',
-      'RS-Ratio', 'RS-Momentum', 'Quadrant', 'RSI14', 'MomentumScore', '1M-RS',
+      'RS-Ratio', 'RS-Momentum', 'Quadrant', 'RSI14', 'ADX14', 'MomentumScore', '1M-RS',
       '%52W-High', 'Signal'
     ];
     const fmt = (v) => (v === null || v === undefined) ? '' : (typeof v === 'number' ? v.toFixed(2) : String(v));
@@ -971,7 +1080,7 @@ function UsIndices() {
       lines.push([
         r.name, r.category, r.price,
         r['1D'], r['1W'], r['1M'], r['3M'], r['6M'], r['1Y'], r['2Y'], r['3Y'],
-        r.rrgRatio, r.rrgMomentum, r.rrgQuadrant, r.rsi14, r.momentumScore, r.rs1M,
+        r.rrgRatio, r.rrgMomentum, r.rrgQuadrant, r.rsi14, r.adx14, r.momentumScore, r.rs1M,
         r.dist52WHigh, r.marketSignal?.label || ''
       ].map(esc).join(','));
     }
@@ -1200,6 +1309,8 @@ function UsIndices() {
           </button>
         </div>
       </div>
+
+      {activeTab !== 'global' && <BreadthStrip breadth={breadth} rows={data} />}
 
       {/* Momentum Score Bar Chart */}
       <style>{`
@@ -1712,6 +1823,9 @@ function UsIndices() {
               <th onClick={() => requestSort('rsi14')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
                 RSI {renderSortIndicator('rsi14')}
               </th>
+              <th onClick={() => requestSort('adx14')} title="ADX(14) measures how strongly a sector is trending — not which way. 25+ = real trend worth trading (green = up, red = down). 20–25 = trend building. Under 20 = choppy sideways noise where breakouts usually fail. A sector pausing after a big run drops to low ADX — resting, not broken." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
+                ADX{renderSortIndicator('adx14')}
+              </th>
               <th onClick={() => requestSort('momentumScore')} title="Ranks sectors by recent trend strength (1-100). Higher = stronger momentum. Hover the score for a breakdown." style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', textAlign: 'right', background: '#0f0f1e' }}>
                 Momentum {renderSortIndicator('momentumScore')}
               </th>
@@ -1792,6 +1906,27 @@ function UsIndices() {
                       border: `1px solid ${row.rsi14 >= 70 ? 'rgba(239,68,68,0.3)' : row.rsi14 <= 30 ? 'rgba(34,197,94,0.3)' : 'rgba(255,255,255,0.1)'}`
                     }}>
                       {row.rsi14}
+                    </span>
+                  )}
+                </td>
+                <td style={{ padding: '0.5rem', textAlign: 'right' }}>
+                  {row.adx14 === null ? (
+                    <span style={{ color: 'var(--text-secondary)' }}>–</span>
+                  ) : (
+                    <span style={{
+                      display: 'inline-block', padding: '0.2rem 0.5rem', borderRadius: '6px',
+                      fontSize: '0.85rem', fontWeight: '600',
+                      background: row.adx14 >= 25 ? (row.aboveSma50 ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)') : 'rgba(255,255,255,0.07)',
+                      color: row.adx14 >= 25 ? (row.aboveSma50 ? '#22c55e' : '#ef4444')
+                           : row.adx14 < 20 ? 'var(--text-secondary)' : 'var(--text-primary)',
+                      border: `1px solid ${row.adx14 >= 25 ? (row.aboveSma50 ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)') : 'rgba(255,255,255,0.1)'}`,
+                      opacity: row.adx14 < 20 ? 0.7 : 1,
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {row.adx14.toFixed(1)}
+                      <span style={{ fontSize: '0.68rem', fontWeight: 500, marginLeft: '0.3rem', opacity: 0.9 }}>
+                        {row.adx14 >= 25 ? (row.aboveSma50 ? 'Strong ↑' : 'Strong ↓') : row.adx14 >= 20 ? 'Building' : 'Chop'}
+                      </span>
                     </span>
                   )}
                 </td>
@@ -1928,7 +2063,7 @@ function UsIndices() {
             );
             }) : (
               <tr>
-                <td colSpan="16" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
+                <td colSpan="17" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>No indices match your search.</td>
               </tr>
             )}
           </tbody>
