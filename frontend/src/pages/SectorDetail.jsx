@@ -8,6 +8,8 @@ import TradePlanModal from '../components/alerts/TradePlanModal';
 import { biasClass } from '../components/alerts/biasClass';
 import { breakoutRank, breakoutLabel } from '../lib/breakout';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
+import { computeSectorBreadth } from '../lib/sectorBreadth';
+import SectorBreadthPanel from '../components/SectorBreadthPanel';
 
 const ALERTS_REFRESH_MS = 60_000;
 
@@ -142,49 +144,6 @@ const fmtPct = (v) => {
   if (v == null) return '–';
   return `${v > 0 ? '+' : ''}${v.toFixed(2)}%`;
 };
-
-// ─── MA Breadth Card ─────────────────────────────────────────────────
-function MaBreadthCard({ title, subtitle, pct, aboveNames, belowNames }) {
-  const color = pct >= 60 ? '#10b981' : pct >= 40 ? '#eab308' : '#ef4444';
-  const bg = pct >= 60 ? '#10b98118' : pct >= 40 ? '#eab30818' : '#ef444418';
-  return (
-    <div style={{ flex: '1 1 320px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '10px', padding: '1rem 1.25rem' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-        <div>
-          <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginTop: '0.1rem' }}>{subtitle}</div>
-        </div>
-        <span style={{ fontSize: '1.4rem', fontWeight: 800, color, background: bg, padding: '0.2rem 0.6rem', borderRadius: '6px' }}>
-          {Math.round(pct)}%
-        </span>
-      </div>
-      {/* Progress bar */}
-      <div style={{ height: '5px', borderRadius: '3px', background: 'rgba(255,255,255,0.08)', marginBottom: '1rem', overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${Math.round(pct)}%`, background: color, borderRadius: '3px', transition: 'width 0.6s ease' }} />
-      </div>
-      {/* Above / Below columns */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-        <div>
-          <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.4rem' }}>
-            Above ({aboveNames.length})
-          </div>
-          {aboveNames.map(n => (
-            <div key={n} style={{ fontSize: '0.72rem', color: 'var(--text-primary)', padding: '0.15rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n}</div>
-          ))}
-        </div>
-        <div>
-          <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.4rem' }}>
-            Below ({belowNames.length})
-          </div>
-          {belowNames.map(n => (
-            <div key={n} style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', padding: '0.15rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n}</div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── Sortable column header ──────────────────────────────────────────
 function SortTh({ label, sortKey, sortConfig, onSort, style }) {
@@ -586,20 +545,7 @@ export default function SectorDetail() {
     });
   }, [stockData, constituents.length, sectorReturns, nifty50Returns]);
 
-  const maGaugeData = useMemo(() => {
-    const loaded = enrichedStockData.filter(s => s.aboveSma20 !== null);
-    if (loaded.length === 0) return null;
-    const above20 = loaded.filter(s => s.aboveSma20);
-    const above200 = loaded.filter(s => s.aboveSma200);
-    return {
-      pct20: (above20.length / loaded.length) * 100,
-      pct200: (above200.length / loaded.length) * 100,
-      above20names: above20.map(s => s.name),
-      below20names: loaded.filter(s => !s.aboveSma20).map(s => s.name),
-      above200names: above200.map(s => s.name),
-      below200names: loaded.filter(s => !s.aboveSma200).map(s => s.name),
-    };
-  }, [enrichedStockData]);
+  const sectorBreadth = useMemo(() => computeSectorBreadth(enrichedStockData), [enrichedStockData]);
 
   const hiddenLeaders = useMemo(() => {
     if (!sectorHistory || sectorHistory.length < 8) return null;
@@ -720,28 +666,8 @@ export default function SectorDetail() {
         </div>
       )}
 
-      {/* MA Breadth */}
-      <div style={{ marginBottom: '1rem' }}>
-        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.6rem' }}>Moving Average Breadth</div>
-        {!maGaugeData ? (
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading SMA data…</p>
-        ) : (
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <MaBreadthCard
-              title="SMA-20" subtitle="Short-term trend"
-              pct={maGaugeData.pct20}
-              aboveNames={maGaugeData.above20names}
-              belowNames={maGaugeData.below20names}
-            />
-            <MaBreadthCard
-              title="SMA-200" subtitle="Long-term trend"
-              pct={maGaugeData.pct200}
-              aboveNames={maGaugeData.above200names}
-              belowNames={maGaugeData.below200names}
-            />
-          </div>
-        )}
-      </div>
+      {/* Sector breadth analyser */}
+      <SectorBreadthPanel breadth={sectorBreadth} />
     </div>
   );
 
