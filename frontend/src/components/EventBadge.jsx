@@ -50,12 +50,12 @@ export default function EventBadge({ url }) {
         const d = daysUntil(it.date)
         const soon = d != null && d >= 0 && d <= 7
         return (
-          <span key={i} title={`${it.title || ''}${d >= 0 ? ` · in ${d} day${d === 1 ? '' : 's'}` : ''}`} style={{
+          <span key={i} title={`${it.title || ''}${d === 0 ? ' · today' : d > 0 ? ` · in ${d} day${d === 1 ? '' : 's'}` : ''}`} style={{
             fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.3px',
             color: soon ? '#fbbf24' : 'var(--text-secondary)',
             border: `1px solid ${soon ? 'rgba(251,191,36,0.45)' : 'var(--border)'}`,
             borderRadius: '4px', padding: '0.15rem 0.45rem',
-          }}>📅 {it.label}{d != null && d >= 0 ? ` (${d}d)` : ''}</span>
+          }}>📅 {it.label}{d === 0 ? ' · today' : d != null && d > 0 ? ` (${d}d)` : ''}</span>
         )
       })}
     </div>
