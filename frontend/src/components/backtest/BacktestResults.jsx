@@ -1,5 +1,6 @@
 import EquityCurveChart from './EquityCurveChart'
 import TradesTable from './TradesTable'
+import { fmtDate } from '../../lib/formatDate'
 
 const fmtPct = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v}%`)
 const pnlClass = (v) => (v == null ? '' : v > 0 ? 'positive' : v < 0 ? 'negative' : '')
@@ -39,7 +40,7 @@ export default function BacktestResults({ metrics, equityCurve, buyHoldCurve, tr
 
       {(fromDate || toDate) && (
         <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>
-          Period: {fromDate} → {toDate} · fills at next-day open · intrabar stops are pessimistic (stop beats target) · costs split across both legs
+          Period: {fmtDate(fromDate)} → {fmtDate(toDate)} · fills at next-day open · intrabar stops are pessimistic (stop beats target) · costs split across both legs
         </p>
       )}
 
@@ -48,7 +49,7 @@ export default function BacktestResults({ metrics, equityCurve, buyHoldCurve, tr
       {openPosition && (
         <div className="glass-panel" style={{ padding: '0.8rem 1.1rem', fontSize: '0.85rem', borderLeft: '3px solid var(--accent)' }}>
           <strong style={{ color: 'var(--accent)' }}>Open position at data end:</strong>{' '}
-          entered {openPosition.entryDate} @ ₹{openPosition.entryPrice} ·
+          entered {fmtDate(openPosition.entryDate)} @ ₹{openPosition.entryPrice} ·
           last close ₹{openPosition.lastClose} ·{' '}
           <span className={pnlClass(openPosition.unrealizedPct)}>
             {openPosition.unrealizedPct > 0 ? '+' : ''}{openPosition.unrealizedPct}% unrealized

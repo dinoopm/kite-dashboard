@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { fmtDate } from '../../lib/formatDate'
 
 const REASON_COLOR = {
   STOP: '#ef4444',
@@ -61,9 +62,9 @@ export default function TradesTable({ trades }) {
         <tbody>
           {sorted.map((t, i) => (
             <tr key={`${t.entryDate}-${i}`}>
-              <td style={{ ...td, textAlign: 'left' }}>{t.entryDate}</td>
+              <td style={{ ...td, textAlign: 'left' }}>{fmtDate(t.entryDate)}</td>
               <td style={td}>{t.entryPrice.toFixed(1)}</td>
-              <td style={{ ...td, textAlign: 'left' }}>{t.exitDate}</td>
+              <td style={{ ...td, textAlign: 'left' }}>{fmtDate(t.exitDate)}</td>
               <td style={td}>{t.exitPrice.toFixed(1)}</td>
               <td style={td}>{t.holdDays}</td>
               <td style={td} className={pnlClass(t.rMultiple)}>{t.rMultiple != null ? `${t.rMultiple}R` : '—'}</td>

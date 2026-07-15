@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
+import { fmtDate } from '../lib/formatDate'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell, ReferenceLine } from 'recharts'
 
 // Trade journal: round trips and performance stats reconstructed (FIFO) from
@@ -190,8 +191,8 @@ export default function Journal() {
                   {data.trips.map((t, i) => (
                     <tr key={i} style={{ fontSize: '0.83rem' }}>
                       <td><Link to={`/instrument/0?symbol=${encodeURIComponent(t.symbol)}`} style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{t.symbol}</Link></td>
-                      <td>{t.entryDate}</td>
-                      <td>{t.exitDate}</td>
+                      <td>{fmtDate(t.entryDate)}</td>
+                      <td>{fmtDate(t.exitDate)}</td>
                       <td>{t.holdingDays}</td>
                       <td>{t.qty}</td>
                       <td>₹{t.entryAvg} → ₹{t.exitAvg}</td>

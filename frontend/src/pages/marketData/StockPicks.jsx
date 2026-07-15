@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
+import { fmtDate } from '../../lib/formatDate'
 
 // ─── Quant Stock Picks ───────────────────────────────────────────────────────
 // Deterministic factor ranking over the six market-data feeds for a chosen
@@ -415,7 +416,7 @@ export default function StockPicks() {
         <div className="glass-panel" style={{ padding: '0.85rem 1.25rem', marginBottom: '1rem', fontSize: '0.8rem', display: 'flex', gap: '1.25rem', flexWrap: 'wrap', alignItems: 'baseline' }}>
           <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}
             title="Daily default-weight top-25 snapshots — independent of your slider settings">
-            Snapshot {hist.latest.date} vs {hist.prev.date}
+            Snapshot {fmtDate(hist.latest.date)} vs {fmtDate(hist.prev.date)}
           </span>
           <span>
             New:{' '}
@@ -489,7 +490,7 @@ export default function StockPicks() {
                     <td style={{ padding: '0.5rem 0.7rem' }}>
                       <span onClick={() => openInstrument(r.symbol)} style={{ color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}>{r.symbol}</span>
                       {held.has(r.symbol) && <span title="In your Kite holdings" style={{ marginLeft: '0.4rem', fontSize: '0.65rem', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.4)', borderRadius: '4px', padding: '0 0.3rem' }}>held</span>}
-                      {hist?.newTop10.has(r.symbol) && <span title={`Entered the daily default-weight top 10 on ${hist.latest.date}`} style={{ marginLeft: '0.4rem', fontSize: '0.65rem', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.4)', borderRadius: '4px', padding: '0 0.3rem' }}>new↑10</span>}
+                      {hist?.newTop10.has(r.symbol) && <span title={`Entered the daily default-weight top 10 on ${fmtDate(hist.latest.date)}`} style={{ marginLeft: '0.4rem', fontSize: '0.65rem', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.4)', borderRadius: '4px', padding: '0 0.3rem' }}>new↑10</span>}
                       {r.factors.trapRisk && <span title={r.factors.trapReason} style={{ marginLeft: '0.4rem', fontSize: '0.65rem', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.4)', borderRadius: '4px', padding: '0 0.3rem' }}>⚠ trap</span>}
                       {(() => { const nm = metaMap[r.symbol]?.name || (r.name !== r.symbol ? r.name : null); return nm ? <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nm}</div> : null })()}
                     </td>

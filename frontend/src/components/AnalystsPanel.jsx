@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { fmtDate } from '../lib/formatDate';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
@@ -228,7 +229,7 @@ export default function AnalystsPanel({ fetchUrl, money, bigMoney, emptyNote }) 
               return (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0', borderBottom: '1px solid var(--border)', fontSize: '0.84rem' }}>
                   <span style={{ color: mark.c, width: '14px', fontWeight: 700 }}>{mark.t}</span>
-                  <span style={{ color: GREY, width: '88px', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{r.date}</span>
+                  <span style={{ color: GREY, width: '88px', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{fmtDate(r.date)}</span>
                   <span style={{ fontWeight: 600, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.firm}</span>
                   <span style={{ color: GREY }}>{r.fromGrade && r.fromGrade !== r.toGrade ? `${r.fromGrade} → ` : ''}<strong style={{ color: 'var(--text-primary)' }}>{r.toGrade}</strong></span>
                 </div>

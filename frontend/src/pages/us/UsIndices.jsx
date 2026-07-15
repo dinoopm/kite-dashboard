@@ -5,6 +5,7 @@ import RRGChart from '../../components/RRGChart';
 import UsGlobalIndices from './UsGlobalIndices';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 import { adx14 as computeAdx14 } from '../../lib/indicators';
+import { fmtDate as fmtDisplayDate } from '../../lib/formatDate';
 
 // ─── RRG Color Palette ─────────────────────────────────────────
 const RRG_COLORS = [
@@ -275,7 +276,7 @@ function BreadthStrip({ breadth, ndxBreadth, rows }) {
           <button onClick={toggleHelp} style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-secondary)', fontSize: '0.7rem', padding: '0.2rem 0.55rem', cursor: 'pointer' }}>
             ⓘ How to read this {helpOpen ? '▴' : '▾'}
           </button>
-          {breadth && <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>internals as of {breadth.asOf}</span>}
+          {breadth && <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>internals as of {fmtDisplayDate(breadth.asOf)}</span>}
         </div>
       </div>
       {helpOpen && (

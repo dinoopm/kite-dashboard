@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { fmtDate as fmtDisplayDate } from '../lib/formatDate'
 
 // ─── Formatters ──────────────────────────────────────────────────
 function fmtNumber(v) {
@@ -23,7 +24,7 @@ function fmtPercent(v, withSign = true) {
   return v > 0 ? `+${abs}%` : v < 0 ? `−${abs}%` : `0.00%`
 }
 function fmtDate(v) {
-  return v || '—'
+  return v ? fmtDisplayDate(v) : '—'
 }
 
 function formatCell(value, fmt) {

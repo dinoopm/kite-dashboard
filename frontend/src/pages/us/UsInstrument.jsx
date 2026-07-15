@@ -6,6 +6,7 @@ import {
   BarChart, Bar, Cell, LineChart, Line,
 } from 'recharts';
 import { breakoutRank, breakoutLabel } from '../../lib/breakout';
+import { fmtDate } from '../../lib/formatDate';
 import { generateSignals } from '../../lib/signalEngine';
 import SignalChart from '../../components/SignalChart';
 import RedFlagsPanel from '../../components/RedFlagsPanel';
@@ -453,7 +454,7 @@ function Holders({ sym }) {
       </div>
 
       <p style={{ margin: '0.9rem 0 0', fontSize: '0.7rem', color: GREY, fontStyle: 'italic' }}>
-        {d.source}{d.asOf ? ` · positions as of ${d.asOf}` : ''} — 13F filings disclose quarter-end positions up to 45 days later; this is as fresh as US holdings data legally gets.
+        {d.source}{d.asOf ? ` · positions as of ${fmtDate(d.asOf)}` : ''} — 13F filings disclose quarter-end positions up to 45 days later; this is as fresh as US holdings data legally gets.
       </p>
     </div>
   );

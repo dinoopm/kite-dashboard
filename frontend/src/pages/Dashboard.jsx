@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import VixWidget from '../components/VixWidget'
+import { fmtDate } from '../lib/formatDate'
 import MacroWidget from '../components/MacroWidget'
 import RiskRegimePanel from '../components/RiskRegimePanel'
 import EyeIcon from '../components/EyeIcon'
@@ -506,7 +507,7 @@ function Dashboard() {
                 const isTotalPos = totalNet >= 0;
                 return (
                   <div key={idx} style={{ background: 'rgba(0,0,0,0.2)', padding: '0.8rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>{day.trade_date}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>{fmtDate(day.trade_date)}</div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
                       <span style={{ fontSize: '0.85rem' }}>FII Net:</span>
                       <span className={isFIIPos ? 'positive' : 'negative'} style={{ fontSize: '0.85rem', fontWeight: 600 }}>{isFIIPos ? '+' : ''}₹{fmt(day.fii_net)} Cr</span>

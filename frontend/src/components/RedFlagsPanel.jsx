@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { fmtDate } from '../lib/formatDate'
 
 // Manipulation red-flag banner shared by the India and US instrument pages.
 // Each market has its own endpoint and data source — India:
@@ -44,7 +45,7 @@ export default function RedFlagsPanel({ url }) {
           ⚠ {flags.length} red flag{flags.length > 1 ? 's' : ''} detected
         </span>
         <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginLeft: 'auto' }} title={`Checks run: ${(data.checks || []).join(', ')}`}>
-          {data.source}{data.asOf ? ` · as of ${data.asOf}` : ''}
+          {data.source}{data.asOf ? ` · as of ${fmtDate(data.asOf)}` : ''}
         </span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>

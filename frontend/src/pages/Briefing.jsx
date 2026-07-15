@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { fmtDate } from '../lib/formatDate'
 
 // Morning briefing — deterministic "what changed since yesterday" composed by
 // /api/briefing (backend/briefing.js): market flows + VIX, per-holding
@@ -49,7 +50,7 @@ export default function Briefing() {
       <div style={{ marginBottom: '1.5rem' }}>
         <h1 style={{ margin: 0 }}>Morning Briefing</h1>
         <p style={{ margin: '0.3rem 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-          {data.date} · what changed since the last session — deterministic rules over your own data, not commentary
+          {fmtDate(data.date)} · what changed since the last session — deterministic rules over your own data, not commentary
         </p>
       </div>
 

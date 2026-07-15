@@ -5,6 +5,7 @@ import {
   ReferenceLine, ReferenceArea,
 } from 'recharts'
 import { useFetchWithAbort } from '../../hooks/useFetchWithAbort'
+import { fmtDate } from '../../lib/formatDate'
 
 const TOOLTIP_PROPS = {
   contentStyle: { background: '#1e293b', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '0.8rem' },
@@ -92,7 +93,7 @@ export default function MacroEconomics() {
         <p style={{ color: 'var(--text-secondary)', margin: 0, fontSize: '0.85rem' }}>
           India's macro backdrop for market analysis — rates, inflation, growth, fiscal &amp; external balances.
           {' '}Data: indiandataproject.org (Govt Open Data License) · FY {macro.fy}
-          {summary?.lastUpdated ? ` · Updated ${summary.lastUpdated}` : ''} · Annual/quarterly series — not live.
+          {summary?.lastUpdated ? ` · Updated ${fmtDate(summary.lastUpdated)}` : ''} · Annual/quarterly series — not live.
         </p>
         {macro.stale && (
           <p style={{ color: '#fbbf24', fontSize: '0.8rem', margin: '0.4rem 0 0' }}>

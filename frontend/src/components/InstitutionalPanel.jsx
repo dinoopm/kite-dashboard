@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { fmtDate } from '../lib/formatDate'
 
 // Institutional-activity header for the India instrument page's Institutional
 // tab, rendered above the existing quarterly ShareholdingPanel chart. Fetches
@@ -83,7 +84,7 @@ export default function InstitutionalPanel({ symbol }) {
           </div>
           {d.deals.recent.slice(0, 8).map((dl, i) => (
             <div key={i} style={{ display: 'flex', gap: '0.8rem', padding: '0.35rem 0', borderBottom: '1px solid var(--border)', fontSize: '0.8rem', fontVariantNumeric: 'tabular-nums', alignItems: 'baseline' }}>
-              <span style={{ flex: '0 0 5.5rem', color: 'var(--text-secondary)' }}>{dl.date}</span>
+              <span style={{ flex: '0 0 5.5rem', color: 'var(--text-secondary)' }}>{fmtDate(dl.date)}</span>
               <span style={{ flex: '0 0 3rem', fontWeight: 700, color: dl.type === 'BUY' ? GREEN : RED }}>{dl.type}</span>
               <span style={{ flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dl.client}</span>
               <span style={{ flex: '0 0 auto', color: 'var(--text-secondary)' }}>{dl.qty?.toLocaleString('en-IN')} @ ₹{dl.price}</span>
