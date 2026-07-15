@@ -272,6 +272,44 @@ export default function UsBasketDetail() {
     return () => controller.abort();
   }, [constituents]);
 
+  // Keep Price/1D live: re-poll quotes every 60s (backend caches snapshots for
+  // 60s, so tighter polling returns the same data) and on tab refocus. Only
+  // price and 1D are patched — the historical columns don't move intraday.
+  useEffect(() => {
+    if (!constituents || constituents.length === 0) return;
+    const instruments = constituents.filter(c => c.token).map(c => c.key);
+    if (instruments.length === 0) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    const refresh = async () => {
+      if (document.hidden) return;
+      try {
+        const qRes = await fetchWithAbort(`${API}/api/us/quotes`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instruments }), signal,
+        });
+        const qRaw = await qRes.json();
+        const quotes = qRaw?.content?.[0]?.text ? JSON.parse(qRaw.content[0].text) : {};
+        if (signal.aborted) return;
+        setStockData(prev => prev.map(s => {
+          const q = quotes[s.key];
+          const price = q?.last_price;
+          if (price == null) return s;
+          const prevClose = q?.ohlc?.close;
+          return { ...s, price, '1D': prevClose ? ((price - prevClose) / prevClose) * 100 : s['1D'] };
+        }));
+      } catch { /* transient poll failure — keep the last values */ }
+    };
+    const id = setInterval(refresh, 60_000);
+    const onVis = () => { if (!document.hidden) refresh(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      controller.abort();
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [constituents]);
+
   // Instrument search (debounced) for the add box.
   useEffect(() => {
     if (query.trim().length < 2) { setResults([]); return; }
