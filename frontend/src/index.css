@@ -194,6 +194,12 @@ tbody tr:hover {
   100% { transform: rotate(360deg); }
 }
 
+/* Pulsing glow for an event happening today (EventBadge) */
+@keyframes eventTodayPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.0); }
+  50% { box-shadow: 0 0 7px 1px rgba(251, 191, 36, 0.65); }
+}
+
 /* Custom tooltip for raw return */
 .raw-return-tooltip::after {
   content: 'Blended short-term return used to calculate the momentum score';
