@@ -750,6 +750,49 @@ const LIVE_HOLDINGS_FUNDS = new Set(['SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', '
 // sectors. Each resolves to its ETF's live holdings (see resolveUsUniverse).
 const US_INDUSTRY_ETFS = ['SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GDX', 'IGV'];
 
+// ─── Software index members (widens the IGV drilldown) ──────────────────────
+// IGV's live holdings come from StockAnalysis, whose free tier caps at the top
+// ~25 by weight (see etfHoldings.js), so the Software drilldown was a weight
+// cutoff rather than a sector view. Union those holdings with the software
+// members of the S&P 500 and Nasdaq 100.
+//
+// S&P 500 rows carry a GICS sub-industry from the Wikipedia scrape, which is
+// exact — GICS has no "Software" sector, only these two sub-industries.
+// Nasdaq-100-only names have no sub-industry, so they fall back to Yahoo's
+// industry label ("Software - Infrastructure" / "Software - Application").
+// Only ~15 names take that path, and each is cached for 7 days.
+const GICS_SOFTWARE_SUB = new Set(['application software', 'systems software']);
+const SOFTWARE_TTL = 24 * 60 * 60 * 1000;
+let softwareCache = null;    // { data: Map<symbol, name>, ts }
+let softwareInflight = null; // Promise (coalesce concurrent rebuilds)
+
+async function computeSoftwareIndexMembers() {
+  const [sp, ndx] = await Promise.all([getSP500().catch(() => []), getNasdaq100().catch(() => [])]);
+  const out = new Map();
+  for (const m of sp) {
+    if (GICS_SOFTWARE_SUB.has((m.subIndustry || '').toLowerCase())) out.set(m.symbol, m.name);
+  }
+  const spSet = new Set(sp.map(m => m.symbol));
+  const ndxOnly = ndx.filter(m => !spSet.has(m.symbol));
+  for (let i = 0; i < ndxOnly.length; i += 10) {
+    const chunk = ndxOnly.slice(i, i + 10);
+    const inds = await Promise.all(chunk.map(m => fetchAssetSector(m.symbol).catch(() => null)));
+    chunk.forEach((m, j) => {
+      if (/^software/i.test(inds[j]?.industry || '')) out.set(m.symbol, m.name);
+    });
+  }
+  return out;
+}
+
+function getSoftwareIndexMembers() {
+  if (softwareCache && Date.now() - softwareCache.ts < SOFTWARE_TTL) return Promise.resolve(softwareCache.data);
+  if (softwareInflight) return softwareInflight;
+  softwareInflight = computeSoftwareIndexMembers()
+    .then(data => { softwareCache = { data, ts: Date.now() }; return data; })
+    .finally(() => { softwareInflight = null; });
+  return softwareInflight;
+}
+
 router.get('/sector-constituents/:symbol', async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
   try {
@@ -776,9 +819,16 @@ router.get('/sector-constituents/:symbol', async (req, res) => {
     if (LIVE_HOLDINGS_FUNDS.has(sym)) {
       const live = await getEtfHoldings(sym).catch(() => null);
       if (live?.length) {
+        const merged = new Map(live.map(h => [h.symbol, h.name]));
+        // Software is capped at the top ~25 by weight upstream; widen it with
+        // the S&P 500 / Nasdaq 100 software members the cap left out.
+        if (sym === 'IGV') {
+          const extra = await getSoftwareIndexMembers().catch(() => new Map());
+          for (const [s, n] of extra) if (!merged.has(s)) merged.set(s, n);
+        }
         return res.json({
           sector: { key: sym, name: labelFor(sym) },
-          constituents: live.map(h => mkConstituent(h.symbol, h.name)),
+          constituents: [...merged].map(([s, n]) => mkConstituent(s, n)),
         });
       }
     }

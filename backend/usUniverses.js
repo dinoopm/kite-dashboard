@@ -64,6 +64,7 @@ async function fetchWikiConstituents(url) {
   const headers = table.find('tr').first().find('th').map((_, el) => $(el).text().trim().toLowerCase()).get();
   const symIdx = headers.findIndex(h => h.includes('symbol') || h.includes('ticker'));
   const secIdx = headers.findIndex(h => h.includes('gics sector'));
+  const subIdx = headers.findIndex(h => h.includes('sub-industry') || h.includes('sub industry'));
   const nameIdx = headers.findIndex(h => h.includes('security') || h.includes('company'));
 
   const rows = [];
@@ -75,6 +76,9 @@ async function fetchWikiConstituents(url) {
     rows.push({
       symbol,
       sector: secIdx >= 0 ? ($(tds[secIdx]).text().trim() || null) : null,
+      // GICS sub-industry ("Systems Software", "Application Software", …) — the
+      // industry-level granularity the GICS sector column can't express.
+      subIndustry: subIdx >= 0 ? ($(tds[subIdx]).text().trim() || null) : null,
       name: nameIdx >= 0 ? ($(tds[nameIdx]).text().trim() || symbol) : symbol,
     });
   });
