@@ -17,7 +17,30 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-async function syncSurveillance() {
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+const NAV_TIMEOUT = 60000;
+const XHR_TIMEOUT = 20000;               // wait for the report XHR after the page loads
+const MAX_ATTEMPTS = 3;
+const RETRY_BACKOFF_MS = [10000, 30000]; // waits between attempts 1→2 and 2→3
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Poll until `get()` returns something truthy, or the timeout expires. Used to
+// wait on the intercepted XHR rather than for the page to go network-idle: NSE
+// keeps background polling open, so `networkidle2` can time out even when the
+// report call already came back.
+async function waitForValue(get, timeoutMs, pollMs = 250) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (get()) return get();
+    await sleep(pollMs);
+  }
+  return get();
+}
+
+// One full scrape attempt. Returns the rows collected (possibly empty). Network
+// failures are contained per-report, so a block on ASM doesn't also lose GSM.
+async function scrapeOnce() {
   let browser;
   try {
     console.log("[Surveillance] Launching headless browser...");
@@ -27,28 +50,35 @@ async function syncSurveillance() {
     });
 
     const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+    await page.setUserAgent(UA);
 
-    let affectedStocks = [];
+    const affectedStocks = [];
 
     // ─── 1. Scrape ASM ─────────────────────────────────────────
-    // Intercept the JSON API call that the page makes internally
+    // Intercept the JSON API call the page makes internally. Both the camelCase
+    // and kebab-case spellings are matched — NSE has served each.
     let asmData = null;
     page.on('response', async response => {
-      const url = response.url();
-      if (url.includes('/api/reportASM') && response.status() === 200) {
-        try { asmData = await response.json(); } catch(e) {}
+      if (/\/api\/report-?asm/i.test(response.url()) && response.status() === 200) {
+        try { asmData = await response.json(); } catch (e) { /* not JSON */ }
       }
     });
 
     console.log("[Surveillance] Loading ASM report page...");
-    await page.goto('https://www.nseindia.com/reports/asm', { waitUntil: 'networkidle2', timeout: 60000 });
-    await new Promise(r => setTimeout(r, 2000));
+    try {
+      await page.goto('https://www.nseindia.com/reports/asm', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+      await waitForValue(() => asmData, XHR_TIMEOUT);
+    } catch (e) {
+      // NSE blocks datacenter IPs intermittently. Treat it as a failed report,
+      // not a failed run, so GSM below still gets its chance.
+      console.warn("[Surveillance] ASM page load failed:", e.message);
+    }
 
     if (asmData) {
-      // Process Long Term ASM
-      if (asmData.longterm?.data) {
-        asmData.longterm.data.forEach(row => {
+      for (const key of ['longterm', 'shortterm']) {
+        const rows = asmData[key]?.data;
+        if (!rows) continue;
+        rows.forEach(row => {
           if (row.symbol) {
             affectedStocks.push({
               symbol: row.symbol.trim(),
@@ -57,21 +87,7 @@ async function syncSurveillance() {
             });
           }
         });
-        console.log(`[Surveillance] Parsed ${asmData.longterm.data.length} Long Term ASM stocks.`);
-      }
-
-      // Process Short Term ASM
-      if (asmData.shortterm?.data) {
-        asmData.shortterm.data.forEach(row => {
-          if (row.symbol) {
-            affectedStocks.push({
-              symbol: row.symbol.trim(),
-              measure: 'ASM',
-              stage: row.asmSurvIndicator || 'Unknown'
-            });
-          }
-        });
-        console.log(`[Surveillance] Parsed ${asmData.shortterm.data.length} Short Term ASM stocks.`);
+        console.log(`[Surveillance] Parsed ${rows.length} ${key === 'longterm' ? 'Long' : 'Short'} Term ASM stocks.`);
       }
     } else {
       console.warn("[Surveillance] Could not intercept ASM API response.");
@@ -79,26 +95,29 @@ async function syncSurveillance() {
 
     // ─── 2. Scrape GSM ─────────────────────────────────────────
     let gsmData = null;
-    const gsmHandler = async response => {
+    page.on('response', async response => {
       const url = response.url();
-      // GSM endpoint may differ — intercept any JSON from the GSM page
-      if ((url.includes('/api/reportGSM') || url.includes('/api/gsm')) && response.status() === 200) {
-        try { gsmData = await response.json(); } catch(e) {}
+      if ((/\/api\/report-?gsm/i.test(url) || url.includes('/api/gsm')) && response.status() === 200) {
+        try { gsmData = await response.json(); } catch (e) { /* not JSON */ }
       }
-    };
-    page.on('response', gsmHandler);
+    });
 
-    console.log("[Surveillance] Loading GSM report page...");
-    try {
-      await page.goto('https://www.nseindia.com/reports/gsm', { waitUntil: 'networkidle2', timeout: 60000 });
-      await new Promise(r => setTimeout(r, 2000));
-    } catch(e) {
-      console.warn("[Surveillance] GSM page navigation failed, trying alternative URL...");
+    // The regulations page is what actually calls /api/reportGSM; /reports/gsm
+    // loads fine but never fires the API, so it's only a fallback.
+    let gsmPageLoaded = false;
+    for (const url of [
+      'https://www.nseindia.com/regulations/graded-surveillance-measure',
+      'https://www.nseindia.com/reports/gsm',
+    ]) {
+      console.log(`[Surveillance] Loading GSM page: ${url}`);
       try {
-        await page.goto('https://www.nseindia.com/regulations/graded-surveillance-measure', { waitUntil: 'networkidle2', timeout: 60000 });
-        await new Promise(r => setTimeout(r, 2000));
-      } catch(e2) {
-        console.warn("[Surveillance] GSM alternative page also failed:", e2.message);
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+        await waitForValue(() => gsmData, XHR_TIMEOUT);
+        gsmPageLoaded = true;
+        if (gsmData) break;
+        console.warn("[Surveillance] No GSM API response from this page.");
+      } catch (e) {
+        console.warn(`[Surveillance] GSM navigation failed (${url}):`, e.message);
       }
     }
 
@@ -115,8 +134,8 @@ async function syncSurveillance() {
         }
       });
       console.log(`[Surveillance] Parsed ${gsmEntries.length} GSM stocks.`);
-    } else {
-      // Fallback: try to extract GSM data from the DOM table (only if page loaded)
+    } else if (gsmPageLoaded) {
+      // Fallback: extract GSM data from the DOM table (only if a page loaded)
       try {
         console.log("[Surveillance] No GSM API intercepted. Trying DOM extraction...");
         const gsmFromDom = await page.evaluate(() => {
@@ -143,16 +162,43 @@ async function syncSurveillance() {
         if (gsmFromDom.length > 0) {
           console.log(`[Surveillance] Extracted ${gsmFromDom.length} GSM stocks from DOM.`);
         }
-      } catch(domErr) {
-        console.warn("[Surveillance] GSM DOM extraction failed (page may not have loaded):", domErr.message);
+      } catch (domErr) {
+        console.warn("[Surveillance] GSM DOM extraction failed:", domErr.message);
       }
     }
 
-    await browser.close();
-    browser = null;
+    return affectedStocks;
+  } finally {
+    if (browser) await browser.close().catch(() => { });
+  }
+}
+
+// Retry the whole scrape. NSE blocks datacenter IPs intermittently, and a fresh
+// browser (new session and cookies) is usually what gets through on a later try.
+async function scrapeWithRetry() {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const stocks = await scrapeOnce();
+      if (stocks.length > 0) return stocks;
+      console.warn(`[Surveillance] Attempt ${attempt}/${MAX_ATTEMPTS} returned no stocks.`);
+    } catch (err) {
+      console.warn(`[Surveillance] Attempt ${attempt}/${MAX_ATTEMPTS} failed:`, err.message);
+    }
+    if (attempt < MAX_ATTEMPTS) {
+      const wait = RETRY_BACKOFF_MS[attempt - 1] ?? 30000;
+      console.log(`[Surveillance] Retrying in ${wait / 1000}s...`);
+      await sleep(wait);
+    }
+  }
+  return [];
+}
+
+async function syncSurveillance() {
+  try {
+    const affectedStocks = await scrapeWithRetry();
 
     if (affectedStocks.length === 0) {
-      console.warn("[Surveillance] No stocks found from any source.");
+      console.warn(`[Surveillance] No stocks found after ${MAX_ATTEMPTS} attempts; leaving existing data untouched.`);
       return;
     }
 
@@ -176,8 +222,6 @@ async function syncSurveillance() {
   } catch (err) {
     console.error("[Surveillance] Fatal Error:", err);
     process.exit(1);
-  } finally {
-    if (browser) await browser.close();
   }
 }
 
