@@ -562,7 +562,13 @@ export default function SectorDetail() {
       if (!s.weeklyHighs || s.weeklyHighs.length < 8) return false;
       const recentStock = Math.max(...s.weeklyHighs.slice(-4).map(w => w.high));
       const priorStock = Math.max(...s.weeklyHighs.slice(-8, -4).map(w => w.high));
-      return recentStock > priorStock;
+      const isHigherHigh = recentStock > priorStock;
+      // Higher High alone can be a single 4-week-old spike that has since
+      // rolled over (e.g. MAHABANK: -10% 1M yet a stale weekly high). Require
+      // the stock to actually be outperforming the sector for it to count as
+      // a relative-strength divergence.
+      const outperformsSector = s.rsVsSector != null && s.rsVsSector > 0;
+      return isHigherHigh && outperformsSector;
     });
 
     return { active: true, leaders };
@@ -1068,7 +1074,7 @@ export default function SectorDetail() {
       <div className="glass-panel" style={{ padding: '1.5rem', textAlign: 'center' }}>
         <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>🔍</div>
         <p style={{ color: '#eab308', fontWeight: 600 }}>Sector making a Lower High</p>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No individual stocks are making Higher Highs at this time.</p>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No individual stocks are making Higher Highs while outperforming the sector at this time.</p>
       </div>
     );
 
