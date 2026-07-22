@@ -532,7 +532,7 @@ function UsIndices() {
           // Cold cache means the backend fetches ~50 constituent histories
           // sequentially (250ms-spaced to respect Kite's rate limit), which
           // overruns fetchWithAbort's 60s default and leaves the row stuck on
-          // its ₹0 placeholder. Give it a wide window; warm loads return in ms.
+          // its $0 placeholder. Give it a wide window; warm loads return in ms.
           const res = await fetchWithAbort(`/api/us/sector-composite/${encodeURIComponent(idx.key)}`, { signal, timeoutMs: 180_000 });
           const cdata = await res.json();
           if (signal.aborted || !mountedRef.current) return;
@@ -1165,7 +1165,7 @@ function UsIndices() {
                   if (!active || !payload || !payload.length) return null;
                   return (
                     <div style={{ background: '#1a1a2e', padding: '0.3rem 0.6rem', borderRadius: '4px', border: '1px solid var(--border)', fontSize: '0.75rem', color: '#fff', zIndex: 1000, position: 'relative' }}>
-                      ₹{payload[0].value.toFixed(2)}
+                      ${payload[0].value.toFixed(2)}
                     </div>
                   );
                 }}
@@ -1362,7 +1362,7 @@ function UsIndices() {
 
         // ── Commodities tab: normalized performance line chart ─────────────
         // Rebase both series to 100 at the start of the selected range so a
-        // ₹65 ETF and an ₹85 ETF can be compared on the same y-axis.
+        // $65 ETF and an $85 ETF can be compared on the same y-axis.
         if (activeTab === 'commodity') {
           const COMMODITY_COLORS = {
             'NSE:GOLDBEES':   '#f59e0b', // gold
@@ -1890,7 +1890,7 @@ function UsIndices() {
                     <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', background: '#ef4444', color: '#fff', padding: '0.1rem 0.3rem', borderRadius: '4px', fontWeight: 'bold', verticalAlign: 'middle', animation: 'pulse-glow 2s infinite' }}>NEW</span>
                   )}
                 </td>
-                <td style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>₹{row.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                <td style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>${row.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
                 <Cell value={row['1D']} />
                 {!hiddenColumns['1W'] && <Cell value={row['1W']} />}
                 <Cell value={row['1M']} />
