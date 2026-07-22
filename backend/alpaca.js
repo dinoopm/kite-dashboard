@@ -1085,6 +1085,7 @@ router.get('/treasury-10y', async (req, res) => {
       '6M': { period1: back(186), interval: '1d' },
       '1Y': { period1: back(370), interval: '1d' },
       '5Y': { period1: back(5 * 366), interval: '1wk' },
+      '10Y': { period1: back(10 * 366), interval: '1wk' },
     }[range] || { period1: back(186), interval: '1d' };
 
     // History from Yahoo; live value from CNBC (independent — either can fail).
