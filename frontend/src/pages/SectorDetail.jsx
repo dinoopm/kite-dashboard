@@ -312,6 +312,12 @@ export default function SectorDetail() {
     return () => controller.abort();
   }, [sectorKey]);
 
+  // Constituents we can actually load history for. A row with no resolvable
+  // token (delisted / merged-away name Kite no longer quotes) can never load,
+  // so it must not count toward the loading total or the RRG-ready gate —
+  // otherwise the loader hangs at N-1/N indefinitely.
+  const loadableCount = useMemo(() => constituents.filter(c => c.token).length, [constituents]);
+
   // ─── Phase 2: progressive stock history ──────────────────────────
   useEffect(() => {
     if (constituents.length === 0) return;
@@ -414,12 +420,17 @@ export default function SectorDetail() {
                 ? { ...s, ...returns, price: s.price || price, '1D': (!s.price && prevDayClose) ? ((price - prevDayClose) / prevDayClose) * 100 : s['1D'], rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, breakout: breakoutRank(sorted), weeklyHighs, pastRawMomentum, histLoaded: true }
                 : s
             ));
-            setHistLoadedCount(n => n + 1);
           }
         } catch (e) {
           if (e.name === 'AbortError' || signal.aborted) break;
           console.warn('history failed for', c.symbol, e.message);
         }
+
+        // Count every constituent we actually attempted — success OR empty/failed
+        // history — so the loader can reach 100%. A stock that returns no data
+        // (e.g. delisted mid-index like JBCHEPHARM after the Torrent merger)
+        // must not leave the progress bar stuck one short forever.
+        if (!signal.aborted) setHistLoadedCount(n => n + 1);
 
         if (signal.aborted) break;
         await new Promise(r => setTimeout(r, hitCache ? HIST_CACHE_DELAY_MS : HIST_FETCH_DELAY_MS));
@@ -486,13 +497,13 @@ export default function SectorDetail() {
   // One-shot: re-fetch RRG once ALL stock histories are warm so the chart
   // reflects complete data, not just the partial snapshot from the first poll.
   useEffect(() => {
-    if (constituents.length === 0 || histLoadedCount < constituents.length) return;
+    if (loadableCount === 0 || histLoadedCount < loadableCount) return;
     if (rrgRefreshedAfterLoad.current) return;
     rrgRefreshedAfterLoad.current = true;
     const controller = new AbortController();
     fetchRRG(controller.signal);
     return () => controller.abort();
-  }, [histLoadedCount, constituents.length, fetchRRG]);
+  }, [histLoadedCount, loadableCount, fetchRRG]);
 
   // ─── Derived / computed ───────────────────────────────────────────
   const enrichedStockData = useMemo(() => {
@@ -678,7 +689,7 @@ export default function SectorDetail() {
   );
 
   const renderStocks = () => {
-    const totalStocks = constituents.length;
+    const totalStocks = loadableCount;
     const pct = totalStocks > 0 ? Math.round((histLoadedCount / totalStocks) * 100) : 0;
     const stillLoading = histLoadedCount < totalStocks;
     return (
@@ -1036,7 +1047,7 @@ export default function SectorDetail() {
 
   const renderHiddenLeaders = () => {
     if (!hiddenLeaders) {
-      const total = constituents.length;
+      const total = loadableCount;
       const pct = total > 0 ? Math.round((histLoadedCount / total) * 100) : 0;
       return (
         <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center' }}>
