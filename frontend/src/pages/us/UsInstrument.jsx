@@ -1021,6 +1021,7 @@ export default function UsInstrument() {
   const [showBreakouts, setShowBreakouts] = useState(true);
   const [showSR, setShowSR] = useState(true);
   const [showSignals, setShowSignals] = useState(false); // 10/50 MA-crossover Buy/Sell markers (off by default)
+  const [showExtended, setShowExtended] = useState(false); // pre/post-market bars on the 1D chart (off by default)
 
   const loadSnap = useCallback(async () => {
     try { const r = await fetch(`/api/us/snapshot/${sym}`); const j = await r.json(); if (r.ok) setSnap(j); } catch { /* */ }
@@ -1028,12 +1029,14 @@ export default function UsInstrument() {
   const loadBars = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/us/bars/${sym}?range=${range}`);
+      // Extended hours only exists intraday; the flag is a no-op on daily ranges.
+      const ext = range === '1D' && showExtended ? '&extended=1' : '';
+      const r = await fetch(`/api/us/bars/${sym}?range=${range}${ext}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setBars(j.bars || []); setError(null);
     } catch (e) { setError(e.message); } finally { setLoading(false); }
-  }, [sym, range]);
+  }, [sym, range, showExtended]);
   const loadDaily = useCallback(async () => {
     try { const r = await fetch(`/api/us/bars/${sym}?range=2Y`); const j = await r.json(); if (r.ok) setDailyBars(j.bars || []); } catch { /* */ }
   }, [sym]);
@@ -1075,19 +1078,40 @@ export default function UsInstrument() {
   const nPending = breakouts.filter(b => b.status === 'pending').length;
   const hasVolume = bars.some(d => d.volume > 0);
 
-  // Period stats from the visible range.
+  // Period stats from the visible range. When extended hours are shown, the
+  // stats stay on the regular-session bars so Period High/Low/Return keep
+  // matching the header's regular-session change — the pre/post prints only
+  // extend the chart line, not the numbers.
   const period = useMemo(() => {
     if (bars.length === 0) return null;
-    const high = Math.max(...bars.map(b => b.high));
-    const low = Math.min(...bars.map(b => b.low));
-    const last = bars[bars.length - 1].close;
+    const statBars = intraday && showExtended ? bars.filter(b => !b.ext) : bars;
+    if (statBars.length === 0) return null;
+    const high = Math.max(...statBars.map(b => b.high));
+    const low = Math.min(...statBars.map(b => b.low));
+    const last = statBars[statBars.length - 1].close;
     // For the 1D (intraday) view, measure the return from the previous close so
     // it matches the headline daily change; other ranges compare first→last bar.
-    const base = intraday && q.prevClose != null ? q.prevClose : bars[0].close;
+    const base = intraday && q.prevClose != null ? q.prevClose : statBars[0].close;
     const ret = base ? ((last - base) / base) * 100 : null;
     const retAbs = last - base;
     return { high, low, ret, retAbs };
-  }, [bars, intraday, q.prevClose]);
+  }, [bars, intraday, showExtended, q.prevClose]);
+
+  // Extended bars bracket the regular session on BOTH sides (pre-market before,
+  // post-market after), so mark the two boundaries — the regular open and close
+  // — rather than a single divider. Each is the date of the first regular bar
+  // and the first post-market bar respectively.
+  const sessionBounds = useMemo(() => {
+    if (!intraday || !showExtended) return null;
+    const firstReg = bars.findIndex(b => !b.ext);
+    if (firstReg === -1) return null;
+    let lastReg = firstReg;
+    for (let i = bars.length - 1; i >= 0; i--) { if (!bars[i].ext) { lastReg = i; break; } }
+    return {
+      open: firstReg > 0 ? bars[firstReg].date : null,          // only if pre-market exists
+      close: lastReg < bars.length - 1 ? bars[lastReg + 1].date : null, // only if post-market exists
+    };
+  }, [bars, intraday, showExtended]);
 
   // Full indicator suite from the stable daily series.
   const ind = useMemo(() => {
@@ -1329,6 +1353,16 @@ export default function UsInstrument() {
             color: showSignals ? '#22c55e' : GREY, border: `1px solid ${showSignals ? '#22c55e' : 'var(--border)'}`,
             fontWeight: showSignals ? 700 : 400,
           }}>▲▼ Signals (10/50)</button>
+          {intraday && (
+            <button onClick={() => setShowExtended(v => !v)}
+              title="Include pre-market and after-hours prints on the 1D chart. Period stats stay on the regular session."
+              style={{
+              padding: '0.35rem 0.8rem', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem',
+              background: showExtended ? 'rgba(168,85,247,0.14)' : 'transparent',
+              color: showExtended ? '#a855f7' : GREY, border: `1px solid ${showExtended ? '#a855f7' : 'var(--border)'}`,
+              fontWeight: showExtended ? 700 : 400,
+            }}>◔ Extended hours</button>
+          )}
         </div>
       </div>
 
@@ -1381,6 +1415,14 @@ export default function UsInstrument() {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                    {sessionBounds?.open && (
+                      <ReferenceLine x={sessionBounds.open} stroke="#a855f7" strokeDasharray="4 4" strokeOpacity={0.7}
+                        label={{ value: 'Open', position: 'insideTopLeft', fill: '#a855f7', fontSize: 10, fontWeight: 700 }} />
+                    )}
+                    {sessionBounds?.close && (
+                      <ReferenceLine x={sessionBounds.close} stroke="#a855f7" strokeDasharray="4 4" strokeOpacity={0.7}
+                        label={{ value: 'After hours', position: 'insideTopRight', fill: '#a855f7', fontSize: 10, fontWeight: 700 }} />
+                    )}
                     <XAxis dataKey="date" tickFormatter={fmtAxis} tick={{ fill: GREY, fontSize: 11 }} minTickGap={40} />
                     <YAxis domain={['auto', 'auto']} tick={{ fill: GREY, fontSize: 11 }} width={55} tickFormatter={(v) => v.toFixed(0)} />
                     <Tooltip contentStyle={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '8px' }}

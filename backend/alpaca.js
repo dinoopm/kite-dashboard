@@ -276,10 +276,17 @@ const isRegularHours = (iso) => {
   return mins >= 570 && mins < 960; // 09:30 → 16:00 ET (bar start times)
 };
 
+// Calendar date (YYYY-MM-DD) of a bar in ET. Used to group one trading
+// session: extended-hours prints run to 8 PM ET, and 8 PM EDT is past UTC
+// midnight, so a UTC-date key would split the post-market off from its own
+// session. The ET-date key keeps regular + pre/post on one day.
+const etDateKey = (iso) => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
 // Historical bars for charting, normalised to the app's {date,open,high,low,close,volume} shape.
 router.get('/bars/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const range = req.query.range || '6M';
+  const extended = req.query.extended === '1' || req.query.extended === 'true';
   const { timeframe, start } = rangeToQuery(range);
   // Daily/weekly bars are cheap to cache for a while; intraday should be fresher.
   const ttl = timeframe.includes('Min') || timeframe.includes('Hour') ? 60_000 : 10 * 60_000;
@@ -303,18 +310,26 @@ router.get('/bars/:symbol', async (req, res) => {
       close: b.c,
       volume: b.v,
     }));
-    // Drop extended-hours prints from intraday charts so the 1D view and its
+    // Intraday: by default drop extended-hours prints so the 1D view and its
     // Period Return track the regular session (matching the header change).
-    if (timeframe.includes('Min') || timeframe.includes('Hour')) {
-      bars = bars.filter(b => isRegularHours(b.date));
+    // With ?extended=1 keep them, tagging each bar so the client can show a
+    // session divider and still base its period stats on regular-hours bars.
+    const intraday = timeframe.includes('Min') || timeframe.includes('Hour');
+    if (intraday) {
+      if (extended) {
+        bars = bars.map(b => ({ ...b, ext: !isRegularHours(b.date) }));
+      } else {
+        bars = bars.filter(b => isRegularHours(b.date));
+      }
     }
     // "1D" fetches a 4-day window of 15-min bars only to be sure the latest
     // session is present (weekends/holidays). Trim to that latest session so the
-    // chart and the "(1D)" period stats reflect a single day — not 3–4. US
-    // trading days don't cross UTC midnight, so the UTC date keys one session.
+    // chart and the "(1D)" period stats reflect a single day — not 3–4. Key by
+    // the ET calendar date so post-market prints (which cross UTC midnight)
+    // stay with their own session.
     if (range === '1D' && bars.length) {
-      const lastDay = bars[bars.length - 1].date.slice(0, 10);
-      bars = bars.filter(b => b.date.slice(0, 10) === lastDay);
+      const lastDay = etDateKey(bars[bars.length - 1].date);
+      bars = bars.filter(b => etDateKey(b.date) === lastDay);
     }
     res.json({ symbol, range, timeframe, bars });
   } catch (err) {
