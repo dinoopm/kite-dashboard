@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
+    "dev": "nodemon --watch . --ext js,json --ignore '*.log' --ignore 'data/**' server.js",
     "test": "node --test 'screener/**/*.test.js' 'backtest/**/*.test.js'"
   },
   "keywords": [],
@@ -24,5 +25,8 @@
     "puppeteer": "^24.42.0",
     "technicalindicators": "^3.1.0",
     "yahoo-finance2": "^3.14.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
   }
 }
