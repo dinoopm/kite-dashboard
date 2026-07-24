@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   calculateHistoricalReturns,
   computeRsi14,
+  rsi14At,
+  computeScoreMap,
   computeSMA,
   rsiMultiplierFor,
   resampleToWeeklyHighs,
@@ -143,6 +145,72 @@ describe('computeRsi14', () => {
     const choppy = Array.from({ length: 40 }, (_, i) => ({ close: 100 + (i % 5) * 3 - (i % 3) }));
     const rsi = computeRsi14(choppy);
     assert.ok(rsi >= 0 && rsi <= 100, `out of range: ${rsi}`);
+  });
+});
+
+describe('rsi14At', () => {
+  const falling = Array.from({ length: 40 }, (_, i) => ({ close: 200 - i }));
+
+  test('returns null before there are enough candles to seed', () => {
+    assert.equal(rsi14At(falling, 13), null);
+    assert.equal(rsi14At(null, 30), null);
+  });
+
+  test('at the final index it agrees with computeRsi14', () => {
+    assert.equal(rsi14At(falling, falling.length - 1), computeRsi14(falling));
+  });
+
+  // The point of the explicit index: scoring "as of N days ago".
+  test('ignores candles after endIdx', () => {
+    const base = Array.from({ length: 30 }, (_, i) => ({ close: 100 + i }));  // rising
+    const asOf = rsi14At(base, 29);
+    const withCrash = [...base, ...Array.from({ length: 5 }, (_, i) => ({ close: 50 - i }))];
+    assert.equal(rsi14At(withCrash, 29), asOf, 'later candles must not affect an earlier anchor');
+  });
+});
+
+describe('computeScoreMap', () => {
+  // 80 candles is enough for the 66-day (3M) window plus an anchor.
+  const series = (fn) => ({ history: Array.from({ length: 80 }, (_, i) => ({ close: fn(i) })) });
+  const strong = { id: 'STRONG', ...series(i => 100 + i * 2) };   // steep uptrend
+  const mild   = { id: 'MILD',   ...series(i => 100 + i * 0.2) }; // gentle uptrend
+  const weak   = { id: 'WEAK',   ...series(i => 200 - i) };       // downtrend
+
+  test('returns an empty map when no row has enough history', () => {
+    assert.deepEqual(computeScoreMap([{ id: 'X', history: [{ close: 1 }] }]), {});
+    assert.deepEqual(computeScoreMap([]), {});
+  });
+
+  test('scores a lone qualifying row at the midpoint', () => {
+    assert.deepEqual(computeScoreMap([strong]), { STRONG: 50 });
+  });
+
+  test('ranks stronger momentum above weaker', () => {
+    const m = computeScoreMap([weak, strong, mild]);
+    assert.ok(m.STRONG > m.MILD, `STRONG ${m.STRONG} should beat MILD ${m.MILD}`);
+    assert.ok(m.MILD > m.WEAK, `MILD ${m.MILD} should beat WEAK ${m.WEAK}`);
+  });
+
+  test('spans the full 1..100 percentile range', () => {
+    const m = computeScoreMap([weak, strong, mild]);
+    assert.equal(Math.min(...Object.values(m)), 1);
+    assert.equal(Math.max(...Object.values(m)), 100);
+  });
+
+  test('skips rows too short for the 3M window plus the shift', () => {
+    const shortRow = { id: 'SHORT', history: Array.from({ length: 70 }, (_, i) => ({ close: 100 + i })) };
+    assert.ok('SHORT' in computeScoreMap([shortRow, strong]), 'fits at shift 0');
+    assert.ok(!('SHORT' in computeScoreMap([shortRow, strong], 10)), 'too short once shifted back 10');
+  });
+
+  test('an as-of shift scores against the earlier anchor', () => {
+    // Flat for the first 70 candles, then a spike: today looks strong,
+    // but anchored 10 candles back it should not.
+    const late = { id: 'LATE', history: Array.from({ length: 80 }, (_, i) => ({ close: i < 70 ? 100 : 100 + (i - 69) * 10 })) };
+    const now = computeScoreMap([late, mild]);
+    const past = computeScoreMap([late, mild], 12);
+    assert.ok(now.LATE > now.MILD, 'spike should lead today');
+    assert.ok(past.LATE < past.MILD, 'before the spike it should lag');
   });
 });
 

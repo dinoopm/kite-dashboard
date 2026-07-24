@@ -5,6 +5,7 @@ import RRGChart from '../../components/RRGChart';
 import BreadthStrip from '../../components/BreadthStrip';
 import UsGlobalIndices from './UsGlobalIndices';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
+import { W_1W, W_1M, W_3M, rsiMultiplierFor, rsi14At, computeScoreMap } from '../../lib/sectorAnalytics';
 import { adx14 as computeAdx14 } from '../../lib/indicators';
 
 // ─── RRG Color Palette ─────────────────────────────────────────
@@ -19,14 +20,9 @@ const RRG_COLORS = [
 // Momentum score component weights. Must sum to 1.0. 1M is weighted heaviest
 // because it best reflects current trend while 1W catches breakouts and 3M
 // trims noise.
-const W_1W = 0.20, W_1M = 0.50, W_3M = 0.30;
 
 // RSI multipliers applied to the raw weighted return before percentile ranking.
 // Penalize overbought (stretched) sectors, boost oversold (rebound candidates).
-const RSI_MULT_SEVERE_OVERBOUGHT = 0.85;
-const RSI_MULT_OVERBOUGHT = 0.92;
-const RSI_MULT_OVERSOLD = 1.08;
-const RSI_MULT_SEVERE_OVERSOLD = 1.15;
 
 // Refresh intervals (ms)
 const QUOTES_REFRESH_MS = 60_000;   // Live prices / 1D change
@@ -728,73 +724,6 @@ function UsIndices() {
     return 'Lagging';
   };
 
-  const rsiMultiplierFor = (rsi14) => {
-    if (rsi14 == null) return 1.0;
-    if (rsi14 >= 80) return RSI_MULT_SEVERE_OVERBOUGHT;
-    if (rsi14 >= 70) return RSI_MULT_OVERBOUGHT;
-    if (rsi14 <= 20) return RSI_MULT_SEVERE_OVERSOLD;
-    if (rsi14 <= 30) return RSI_MULT_OVERSOLD;
-    return 1.0;
-  };
-
-  // RSI(14) computed through `endIdx` of the history array (Wilder's smoothed
-  // method, same as the fetch-path block at lines 362-378). Returns null when
-  // there aren't enough candles. Used for both today's RSI and the as-of-N-
-  // days-ago RSI consumed by computeScoreMap below.
-  const rsi14At = (history, endIdx) => {
-    if (!history || endIdx < 14) return null;
-    const closes = history.slice(0, endIdx + 1).map(c => c.close);
-    if (closes.length < 15) return null;
-    const changes = closes.slice(1).map((v, i) => v - closes[i]);
-    let avgGain = 0, avgLoss = 0;
-    for (let i = 0; i < 14; i++) {
-      if (changes[i] > 0) avgGain += changes[i];
-      else avgLoss += Math.abs(changes[i]);
-    }
-    avgGain /= 14;
-    avgLoss /= 14;
-    for (let i = 14; i < changes.length; i++) {
-      avgGain = (avgGain * 13 + (changes[i] > 0 ? changes[i] : 0)) / 14;
-      avgLoss = (avgLoss * 13 + (changes[i] < 0 ? Math.abs(changes[i]) : 0)) / 14;
-    }
-    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-    return parseFloat((100 - 100 / (1 + rs)).toFixed(1));
-  };
-
-  // Pure scoring helper — re-runs the full momentum-score percentile pipeline
-  // (same as the inline block inside enrichedData) anchored at `latest - asOfShift`
-  // candles back. Used twice: once for "today" (asOfShift=0) and once for the
-  // user-chosen lookback period to produce the rank-change chips on the
-  // Momentum Ranking chart. Returns { [id]: percentileScore }.
-  const computeScoreMap = (rows, asOfShift = 0) => {
-    const W = [5, 22, 66]; // 1W, 1M, 3M in trading days
-    const items = [];
-    for (const r of rows) {
-      const h = r.history;
-      // Need 3M return + the lookback shift + 1 anchor candle of history.
-      if (!h || h.length < 66 + asOfShift + 1) continue;
-      const anchorIdx = h.length - 1 - asOfShift;
-      const anchor = h[anchorIdx]?.close;
-      if (anchor == null) continue;
-      const returns = W.map(w => {
-        const past = h[anchorIdx - w]?.close;
-        return past ? ((anchor - past) / past) * 100 : null;
-      });
-      if (returns.some(v => v === null)) continue;
-      const [r1w, r1m, r3m] = returns;
-      const raw = r1w * W_1W + r1m * W_1M + r3m * W_3M;
-      const adjusted = raw * rsiMultiplierFor(rsi14At(h, anchorIdx));
-      items.push({ id: r.id, adjusted });
-    }
-    if (items.length === 0) return {};
-    const sortedAsc = [...items].sort((a, b) => a.adjusted - b.adjusted);
-    const n = sortedAsc.length;
-    const out = {};
-    sortedAsc.forEach((s, rank) => {
-      out[s.id] = n === 1 ? 50 : Math.round(1 + (rank / (n - 1)) * 99);
-    });
-    return out;
-  };
 
   // Trading-days lookbacks for the rank-change toggle.
   const LOOKBACK_DAYS = { '1D': 1, '1W': 5 };

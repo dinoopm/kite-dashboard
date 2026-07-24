@@ -72,10 +72,14 @@ export function calculateHistoricalReturns(series, currentPrice, timeZone = 'Asi
   };
 }
 
-// Wilder-smoothed RSI(14). Needs 15 closes to seed; returns null below that.
-export function computeRsi14(sorted) {
-  if (!sorted || sorted.length < 15) return null;
-  const closes = sorted.map(c => c.close);
+// Wilder-smoothed RSI(14) through `endIdx` of the series. Returns null when
+// there aren't enough candles to seed it. Taking an explicit end index is what
+// lets the ranking pipeline ask for "RSI as of N days ago" without slicing a
+// copy at every call site.
+export function rsi14At(history, endIdx) {
+  if (!history || endIdx < 14) return null;
+  const closes = history.slice(0, endIdx + 1).map(c => c.close);
+  if (closes.length < 15) return null;
   const changes = closes.slice(1).map((v, i) => v - closes[i]);
   let avgGain = 0, avgLoss = 0;
   for (let i = 0; i < 14; i++) {
@@ -88,8 +92,15 @@ export function computeRsi14(sorted) {
     avgGain = (avgGain * 13 + (changes[i] > 0 ? changes[i] : 0)) / 14;
     avgLoss = (avgLoss * 13 + (changes[i] < 0 ? Math.abs(changes[i]) : 0)) / 14;
   }
+  // With no down-closes the ratio would be infinite; cap it so RSI reads 99.
   const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
   return parseFloat((100 - 100 / (1 + rs)).toFixed(1));
+}
+
+// RSI(14) at the latest candle.
+export function computeRsi14(sorted) {
+  if (!sorted || sorted.length < 15) return null;
+  return rsi14At(sorted, sorted.length - 1);
 }
 
 // Momentum haircut/boost by RSI — overbought names are discounted, oversold
@@ -131,6 +142,47 @@ export function resampleToWeeklyHighs(sortedDailyData) {
     }
   }
   return Object.values(weeks).sort((a, b) => a.weekKey.localeCompare(b.weekKey));
+}
+
+// Percentile momentum score (1..99) for a set of rows carrying a `history`
+// array, anchored `asOfShift` candles back from the latest close. Blends the
+// 1W/1M/3M returns, applies the RSI haircut, then ranks the survivors against
+// each other — so the score is relative to the cohort, not absolute.
+//
+// Called twice by the indices pages: once for today (asOfShift = 0) and once
+// for a past anchor, and the difference between the two ranks is the
+// rank-change chip on the Momentum Ranking chart.
+//
+// Rows without enough history to cover 3M + the shift are skipped rather than
+// scored against a shorter window, which would flatter them.
+export function computeScoreMap(rows, asOfShift = 0) {
+  const W = [5, 22, 66]; // 1W, 1M, 3M in trading days
+  const items = [];
+  for (const r of rows) {
+    const h = r.history;
+    // Need 3M return + the lookback shift + 1 anchor candle of history.
+    if (!h || h.length < 66 + asOfShift + 1) continue;
+    const anchorIdx = h.length - 1 - asOfShift;
+    const anchor = h[anchorIdx]?.close;
+    if (anchor == null) continue;
+    const returns = W.map(w => {
+      const past = h[anchorIdx - w]?.close;
+      return past ? ((anchor - past) / past) * 100 : null;
+    });
+    if (returns.some(v => v === null)) continue;
+    const [r1w, r1m, r3m] = returns;
+    const raw = r1w * W_1W + r1m * W_1M + r3m * W_3M;
+    const adjusted = raw * rsiMultiplierFor(rsi14At(h, anchorIdx));
+    items.push({ id: r.id, adjusted });
+  }
+  if (items.length === 0) return {};
+  const sortedAsc = [...items].sort((a, b) => a.adjusted - b.adjusted);
+  const n = sortedAsc.length;
+  const out = {};
+  sortedAsc.forEach((s, rank) => {
+    out[s.id] = n === 1 ? 50 : Math.round(1 + (rank / (n - 1)) * 99);
+  });
+  return out;
 }
 
 // Stocks making Higher Highs while their sector makes a Lower High — a
