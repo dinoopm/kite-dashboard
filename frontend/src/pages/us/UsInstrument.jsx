@@ -1078,24 +1078,24 @@ export default function UsInstrument() {
   const nPending = breakouts.filter(b => b.status === 'pending').length;
   const hasVolume = bars.some(d => d.volume > 0);
 
-  // Period stats from the visible range. When extended hours are shown, the
-  // stats stay on the regular-session bars so Period High/Low/Return keep
-  // matching the header's regular-session change — the pre/post prints only
-  // extend the chart line, not the numbers.
+  // Period stats from the visible bars. These follow whatever is on the chart:
+  // with the Extended-hours toggle ON, `bars` already includes the pre/post
+  // prints, so Period High/Low/Return reflect them too (last = last extended
+  // bar). With the toggle OFF the backend already stripped them, so the stats
+  // are regular-session. This means the 1D Period Return intentionally diverges
+  // from the regular-session header change while extended hours are shown.
   const period = useMemo(() => {
     if (bars.length === 0) return null;
-    const statBars = intraday && showExtended ? bars.filter(b => !b.ext) : bars;
-    if (statBars.length === 0) return null;
-    const high = Math.max(...statBars.map(b => b.high));
-    const low = Math.min(...statBars.map(b => b.low));
-    const last = statBars[statBars.length - 1].close;
-    // For the 1D (intraday) view, measure the return from the previous close so
-    // it matches the headline daily change; other ranges compare first→last bar.
-    const base = intraday && q.prevClose != null ? q.prevClose : statBars[0].close;
+    const high = Math.max(...bars.map(b => b.high));
+    const low = Math.min(...bars.map(b => b.low));
+    const last = bars[bars.length - 1].close;
+    // For the 1D (intraday) view, measure the return from the previous close;
+    // other ranges compare first→last bar.
+    const base = intraday && q.prevClose != null ? q.prevClose : bars[0].close;
     const ret = base ? ((last - base) / base) * 100 : null;
     const retAbs = last - base;
     return { high, low, ret, retAbs };
-  }, [bars, intraday, showExtended, q.prevClose]);
+  }, [bars, intraday, q.prevClose]);
 
   // Extended bars bracket the regular session on BOTH sides (pre-market before,
   // post-market after), so mark the two boundaries — the regular open and close
