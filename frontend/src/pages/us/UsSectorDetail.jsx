@@ -9,6 +9,11 @@ import { biasClass } from '../../components/alerts/biasClass';
 import { breakoutRank, breakoutLabel } from '../../lib/breakout';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 import { computeSectorBreadth } from '../../lib/sectorBreadth';
+import {
+  W_1W, W_1M, W_3M,
+  calculateHistoricalReturns, computeRsi14, rsiMultiplierFor,
+  computeSMA, resampleToWeeklyHighs, findHiddenLeaders,
+} from '../../lib/sectorAnalytics';
 import SectorBreadthPanel from '../../components/SectorBreadthPanel';
 
 const ALERTS_REFRESH_MS = 60_000;
@@ -28,122 +33,10 @@ const US_LABELS = {
   XRT: 'Retail', IYT: 'Transports', GDX: 'Gold Miners', IGV: 'Software',
 };
 
-const W_1W = 0.20, W_1M = 0.50, W_3M = 0.30;
-const RSI_MULT_SEVERE_OVERBOUGHT = 0.85;
-const RSI_MULT_OVERBOUGHT = 0.92;
-const RSI_MULT_OVERSOLD = 1.08;
-const RSI_MULT_SEVERE_OVERSOLD = 1.15;
-
 const HIST_FETCH_DELAY_MS = 1500;
 const HIST_CACHE_DELAY_MS = 50;
 const RRG_POLL_MS = 10_000;
 const RRG_MAX_WARMUP_POLLS = 18;
-
-// ─── Utility ─────────────────────────────────────────────────────────
-function calculateHistoricalReturns(series, currentPrice) {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(new Date());
-  const y = parts.find(p => p.type === 'year').value;
-  const m = parts.find(p => p.type === 'month').value;
-  const d = parts.find(p => p.type === 'day').value;
-  const nowIST = new Date(`${y}-${m}-${d}T00:00:00Z`);
-
-  const dates = series.map(c => new Date(c.date).getTime());
-
-  const getPriceAtDate = (targetDate) => {
-    if (dates.length === 0) return 0;
-    const target = targetDate.getTime();
-    let lo = 0, hi = dates.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (dates[mid] < target) lo = mid + 1;
-      else hi = mid;
-    }
-    if (lo > 0 && Math.abs(dates[lo - 1] - target) <= Math.abs(dates[lo] - target)) {
-      return series[lo - 1].close;
-    }
-    return series[lo].close;
-  };
-
-  const d1W = new Date(nowIST); d1W.setDate(nowIST.getDate() - 7);
-  const d1M = new Date(nowIST); d1M.setMonth(nowIST.getMonth() - 1);
-  const d3M = new Date(nowIST); d3M.setMonth(nowIST.getMonth() - 3);
-  const d6M = new Date(nowIST); d6M.setMonth(nowIST.getMonth() - 6);
-  const d1Y = new Date(nowIST); d1Y.setFullYear(nowIST.getFullYear() - 1);
-  const d2Y = new Date(nowIST); d2Y.setFullYear(nowIST.getFullYear() - 2);
-  const d3Y = new Date(nowIST); d3Y.setFullYear(nowIST.getFullYear() - 3);
-
-  const calcPct = (oldPrice) => {
-    if (!oldPrice || oldPrice === 0) return 0;
-    return ((currentPrice - oldPrice) / oldPrice) * 100;
-  };
-
-  return {
-    '1W': calcPct(getPriceAtDate(d1W)),
-    '1M': calcPct(getPriceAtDate(d1M)),
-    '3M': calcPct(getPriceAtDate(d3M)),
-    '6M': calcPct(getPriceAtDate(d6M)),
-    '1Y': calcPct(getPriceAtDate(d1Y)),
-    '2Y': calcPct(getPriceAtDate(d2Y)),
-    '3Y': calcPct(getPriceAtDate(d3Y)),
-  };
-}
-
-function computeRsi14(sorted) {
-  if (!sorted || sorted.length < 15) return null;
-  const closes = sorted.map(c => c.close);
-  const changes = closes.slice(1).map((v, i) => v - closes[i]);
-  let avgGain = 0, avgLoss = 0;
-  for (let i = 0; i < 14; i++) {
-    if (changes[i] > 0) avgGain += changes[i];
-    else avgLoss += Math.abs(changes[i]);
-  }
-  avgGain /= 14;
-  avgLoss /= 14;
-  for (let i = 14; i < changes.length; i++) {
-    avgGain = (avgGain * 13 + (changes[i] > 0 ? changes[i] : 0)) / 14;
-    avgLoss = (avgLoss * 13 + (changes[i] < 0 ? Math.abs(changes[i]) : 0)) / 14;
-  }
-  const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-  return parseFloat((100 - 100 / (1 + rs)).toFixed(1));
-}
-
-function rsiMultiplierFor(rsi14) {
-  if (rsi14 == null) return 1.0;
-  if (rsi14 >= 80) return RSI_MULT_SEVERE_OVERBOUGHT;
-  if (rsi14 >= 70) return RSI_MULT_OVERBOUGHT;
-  if (rsi14 <= 20) return RSI_MULT_SEVERE_OVERSOLD;
-  if (rsi14 <= 30) return RSI_MULT_OVERSOLD;
-  return 1.0;
-}
-
-function computeSMA(closes, period) {
-  if (closes.length < period) return null;
-  const slice = closes.slice(-period);
-  return slice.reduce((a, b) => a + b, 0) / period;
-}
-
-function resampleToWeeklyHighs(sortedDailyData) {
-  if (!sortedDailyData || sortedDailyData.length === 0) return [];
-  const weeks = {};
-  for (const c of sortedDailyData) {
-    const d = new Date(c.date);
-    const day = d.getDay();
-    const diff = 5 - day;
-    const friday = new Date(d);
-    friday.setDate(d.getDate() + diff);
-    const weekKey = friday.toISOString().split('T')[0];
-    if (!weeks[weekKey]) weeks[weekKey] = { weekKey, high: c.high ?? c.close, close: c.close, date: c.date };
-    else {
-      const h = c.high ?? c.close;
-      if (h > weeks[weekKey].high) weeks[weekKey].high = h;
-      weeks[weekKey].close = c.close;
-      weeks[weekKey].date = c.date;
-    }
-  }
-  return Object.values(weeks).sort((a, b) => a.weekKey.localeCompare(b.weekKey));
-}
 
 // ─── Colour helpers ──────────────────────────────────────────────────
 const pctColor = (v) => {
@@ -572,32 +465,10 @@ export default function UsSectorDetail() {
 
   const sectorBreadth = useMemo(() => computeSectorBreadth(enrichedStockData), [enrichedStockData]);
 
-  const hiddenLeaders = useMemo(() => {
-    if (!sectorHistory || sectorHistory.length < 8) return null;
-    const sectorWeekly = resampleToWeeklyHighs(sectorHistory);
-    if (sectorWeekly.length < 8) return null;
-
-    const recentSector = Math.max(...sectorWeekly.slice(-4).map(w => w.high));
-    const priorSector = Math.max(...sectorWeekly.slice(-8, -4).map(w => w.high));
-    const sectorIsLowerHigh = recentSector < priorSector;
-
-    if (!sectorIsLowerHigh) return { active: false, leaders: [] };
-
-    const leaders = enrichedStockData.filter(s => {
-      if (!s.weeklyHighs || s.weeklyHighs.length < 8) return false;
-      const recentStock = Math.max(...s.weeklyHighs.slice(-4).map(w => w.high));
-      const priorStock = Math.max(...s.weeklyHighs.slice(-8, -4).map(w => w.high));
-      const isHigherHigh = recentStock > priorStock;
-      // Higher High alone can be a single 4-week-old spike that has since
-      // rolled over (a stock down 10% on the month can still hold a stale
-      // weekly high). Require actual outperformance for it to count as a
-      // relative-strength divergence.
-      const outperformsSector = s.rsVsSector != null && s.rsVsSector > 0;
-      return isHigherHigh && outperformsSector;
-    });
-
-    return { active: true, leaders };
-  }, [sectorHistory, enrichedStockData]);
+  const hiddenLeaders = useMemo(
+    () => findHiddenLeaders(sectorHistory, enrichedStockData),
+    [sectorHistory, enrichedStockData]
+  );
 
   // ─── Sort & filter for Stocks table ──────────────────────────────
   const sortedStocks = useMemo(() => {
