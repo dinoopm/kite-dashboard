@@ -42,6 +42,15 @@ const TRADING_BASE = process.env.ALPACA_TRADING_BASE || 'https://paper-api.alpac
 const FEED = process.env.ALPACA_DATA_FEED || 'sip';                 // historical bars
 const SNAPSHOT_FEED = process.env.ALPACA_SNAPSHOT_FEED || 'delayed_sip'; // live snapshots
 
+const { compareCloses, describeDisagreement } = require('./feedAgreement');
+// Symbol used to probe feed agreement: mega-cap liquidity means every
+// full-volume feed sees essentially the whole tape, so a disagreement here is
+// about the feed, not about thin trading.
+// A spread of price levels and liquidity: divergence on a partial-volume feed
+// shows up more clearly on mid-priced, less-frenetic names than on mega-caps.
+const FEED_PROBE_SYMBOLS = (process.env.ALPACA_FEED_PROBE || 'AAPL,MSFT,INTC,KO,F').split(',').map(s => s.trim()).filter(Boolean);
+let feedHealth = { checked: false, agrees: null, detail: null, at: null };
+
 const API_KEY = process.env.ALPACA_API_KEY || process.env.APCA_API_KEY_ID;
 const API_SECRET = process.env.ALPACA_API_SECRET || process.env.APCA_API_SECRET_KEY;
 const isConfigured = () => Boolean(API_KEY && API_SECRET);
@@ -2082,4 +2091,92 @@ router.delete('/screens/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-module.exports = { alpacaRouter: router, isAlpacaConfigured: isConfigured };
+// ─── Feed agreement ─────────────────────────────────────────────────────────
+// Ask both configured feeds for the same settled daily closes and check they
+// answer identically. See feedAgreement.js for why: a partial-volume feed
+// (e.g. "iex") reports its own prints rather than the official consolidated
+// close, which silently makes every price we render wrong.
+//
+// Fails soft in every direction — this is a diagnostic, never a gate on
+// serving traffic.
+async function checkFeedAgreement() {
+  if (!isConfigured()) return { checked: false, reason: 'alpaca not configured' };
+  if (FEED === SNAPSHOT_FEED) {
+    // Nothing to compare; a single feed is self-consistent by definition.
+    feedHealth = { checked: true, agrees: true, detail: null, at: new Date().toISOString(), note: 'single feed' };
+    return feedHealth;
+  }
+
+  const symbols = FEED_PROBE_SYMBOLS;
+  const start = new Date();
+  start.setDate(start.getDate() - 21); // enough to clear a long weekend
+
+  try {
+    // The snapshot feed's settled close: prevDailyBar is by definition a
+    // completed session, and it is the exact field summariseSnapshot() serves
+    // as prevClose — so this probes the real production path.
+    const snaps = await alpacaGet('/stocks/snapshots', { symbols: symbols.join(','), feed: SNAPSHOT_FEED }, 60_000);
+    const snapRows = [];
+    const wantDates = new Map();
+    for (const sym of symbols) {
+      const prev = snaps?.[sym]?.prevDailyBar;
+      if (!prev || !Number.isFinite(prev.c)) continue;
+      snapRows.push({ key: sym, close: prev.c });
+      wantDates.set(sym, String(prev.t).slice(0, 10));
+    }
+
+    // The bars feed's close for those same sessions. Compared per symbol
+    // rather than per date because delayed_sip does not serve the bars
+    // endpoint, so a multi-session probe of one symbol is impossible.
+    const barRows = [];
+    await Promise.all(symbols.map(async (sym) => {
+      const want = wantDates.get(sym);
+      if (!want) return;
+      const data = await alpacaGet(
+        `/stocks/${encodeURIComponent(sym)}/bars`,
+        { timeframe: '1Day', start: start.toISOString(), limit: 40, adjustment: 'all', feed: FEED },
+        10 * 60_000,
+      );
+      const match = (data?.bars || []).find(b => String(b.t).slice(0, 10) === want);
+      if (match && Number.isFinite(match.c)) barRows.push({ key: sym, close: match.c });
+    }));
+
+    const result = compareCloses(barRows, snapRows);
+    const scope = `${result.compared} symbol(s)`;
+    const detail = describeDisagreement(result, { feedA: FEED, feedB: SNAPSHOT_FEED, symbol: scope });
+
+    feedHealth = {
+      checked: true,
+      agrees: result.agrees,
+      comparedSessions: result.compared,
+      detail,
+      at: new Date().toISOString(),
+    };
+
+    if (detail) {
+      console.error(`\n⚠️  ALPACA FEED MISMATCH\n   ${detail.message}`);
+      if (detail.example) console.error(`   e.g. ${JSON.stringify(detail.example)}\n`);
+    } else if (result.compared > 0) {
+      console.log(`✓ Alpaca feeds agree ("${FEED}" vs "${SNAPSHOT_FEED}") across ${result.compared} symbols`);
+    } else {
+      console.warn('Feed agreement check found nothing comparable — feeds unverified.');
+    }
+    return feedHealth;
+  } catch (err) {
+    // A probe failure says nothing about the feeds — don't claim agreement.
+    feedHealth = { checked: false, agrees: null, detail: null, at: new Date().toISOString(), error: err.message };
+    console.warn(`Feed agreement check skipped: ${err.message}`);
+    return feedHealth;
+  }
+}
+
+// Surfaced so the mismatch is visible without reading server logs.
+router.get('/feed-health', (req, res) => {
+  res.json({ feeds: { bars: FEED, snapshot: SNAPSHOT_FEED }, probeSymbols: FEED_PROBE_SYMBOLS, ...feedHealth });
+});
+
+module.exports = {
+  alpacaRouter: router,
+  isAlpacaConfigured: isConfigured,
+  checkFeedAgreement,
+};

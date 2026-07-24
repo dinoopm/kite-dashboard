@@ -12,7 +12,7 @@ const axios = require('axios');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const { createClient } = require('@supabase/supabase-js');
 // Alpaca US market-data router (required after dotenv so it sees the keys).
-const { alpacaRouter } = require('./alpaca');
+const { alpacaRouter, checkFeedAgreement } = require('./alpaca');
 let supabase = null;
 if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
   supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -5803,5 +5803,9 @@ app.get(/^.*$/, (req, res) => {
 
 app.listen(PORT, async () => {
   console.log(`Backend server running on http://localhost:${PORT}`);
+  // Diagnostic only — verifies the two Alpaca feeds report the same settled
+  // closes. A mismatch means prices are being rendered from a partial-volume
+  // feed. Never blocks startup; see backend/feedAgreement.js.
+  checkFeedAgreement().catch(() => {});
   await connectToKiteMcp();
 });
