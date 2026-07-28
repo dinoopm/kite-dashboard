@@ -1136,13 +1136,32 @@ export default function UsInstrument() {
       hv20: realizedVol(closes, 20),
       breakout: breakoutRank(dailyBars),
     };
-    // Directional bias across the trend-following indicators.
-    const checks = [
-      v.sma5, v.sma20, v.sma50, v.sma200, v.ema12, v.ema26, v.bbMid,
-    ].map(m => m != null && price >= m);
-    checks.push(v.macd > 0, v.macd >= v.signal, v.hist >= 0);
-    const bull = checks.filter(Boolean).length;
-    v.biasPct = Math.round((bull / checks.length) * 100);
+    // Directional bias, averaged across factor FAMILIES rather than across raw
+    // checks. The previous version counted ten booleans equally, but seven of
+    // them were "price is above some moving average" — one fact wearing seven
+    // hats — and bbMid is literally sma(20), the same number counted twice. A
+    // stock a fraction above every average scored 100% "bullish" off what is
+    // really a single observation. Averaging families keeps each independent
+    // dimension to one vote.
+    const maRefs = [v.sma5, v.sma20, v.sma50, v.sma200, v.ema12, v.ema26].filter(m => m != null);
+    // 1. Location: where price sits relative to its averages.
+    const fLocation = maRefs.length ? maRefs.filter(m => price >= m).length / maRefs.length : null;
+    // 2. Alignment: whether the averages are stacked in trend order. Distinct
+    //    from location — price can be above all of them in a rolling-over stack.
+    const fAlignment = (v.sma20 != null && v.sma50 != null && v.sma200 != null)
+      ? ((v.sma20 > v.sma50 ? 1 : 0) + (v.sma50 > v.sma200 ? 1 : 0)) / 2
+      : null;
+    // 3. Momentum: MACD. Derived from ema12/ema26, so it is only partly
+    //    independent of location — kept as its own family, not three votes.
+    const fMomentum = (v.macd != null && v.signal != null)
+      ? ([v.macd > 0, v.macd >= v.signal, v.hist >= 0].filter(Boolean).length) / 3
+      : null;
+
+    const families = [fLocation, fAlignment, fMomentum].filter(f => f != null);
+    v.biasPct = families.length
+      ? Math.round((families.reduce((a, b) => a + b, 0) / families.length) * 100)
+      : null;
+    v.biasFactors = { location: fLocation, alignment: fAlignment, momentum: fMomentum };
     // Trend label from SMA alignment.
     if (v.sma20 && v.sma50 && v.sma200 && price > v.sma20 && v.sma20 > v.sma50 && v.sma50 > v.sma200) v.trend = cls('STRONG UPTREND', GREEN);
     else if (v.sma20 && v.sma50 && v.sma200 && price < v.sma20 && v.sma20 < v.sma50 && v.sma50 < v.sma200) v.trend = cls('DOWNTREND', RED);
@@ -1239,10 +1258,33 @@ export default function UsInstrument() {
           <div style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: '0.15rem' }}>Technical Snapshot</div>
           <div style={{ fontSize: '0.72rem', color: GREY, marginBottom: '1rem' }}>Signal stack · trend, RSI, ADX, SuperTrend, breakout (daily)</div>
           <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontSize: '0.7rem', color: GREY, textTransform: 'uppercase' }}>Bias</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: ind.biasPct >= 50 ? GREEN : RED }}>{ind.biasPct}%</div>
-              <div style={{ fontSize: '0.7rem', fontWeight: 600, color: ind.biasPct >= 50 ? GREEN : RED }}>{ind.biasPct >= 50 ? 'BULLISH' : 'BEARISH'}</div>
+            <div title={ind.biasFactors
+              ? 'Average of three factor families, not of individual indicators — '
+                + 'price-vs-averages, average alignment, and MACD momentum. These families '
+                + 'are themselves correlated (all derive from the same close series), so treat '
+                + 'this as one directional read, not independent confirmation.\n'
+                + Object.entries(ind.biasFactors)
+                    .map(([k, val]) => `${k}: ${val == null ? 'n/a' : Math.round(val * 100) + '%'}`)
+                    .join('\n')
+              : undefined}>
+              <div style={{ fontSize: '0.7rem', color: GREY, textTransform: 'uppercase' }}>
+                Bias {ind.biasFactors && <span className="info-icon">ⓘ</span>}
+              </div>
+              {ind.biasPct == null ? (
+                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: GREY }}>–</div>
+              ) : (
+                <>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 800, color: ind.biasPct >= 50 ? GREEN : RED }}>{ind.biasPct}%</div>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 600, color: ind.biasPct >= 50 ? GREEN : RED }}>{ind.biasPct >= 50 ? 'BULLISH' : 'BEARISH'}</div>
+                </>
+              )}
+              {ind.biasFactors && (
+                <div style={{ fontSize: '0.62rem', color: GREY, marginTop: '0.3rem', lineHeight: 1.5 }}>
+                  {[['loc', ind.biasFactors.location], ['align', ind.biasFactors.alignment], ['mom', ind.biasFactors.momentum]]
+                    .map(([label, val]) => `${label} ${val == null ? '–' : Math.round(val * 100)}`)
+                    .join(' · ')}
+                </div>
+              )}
             </div>
             <div>
               <div style={{ fontSize: '0.7rem', color: GREY, textTransform: 'uppercase' }}>Trend</div>
