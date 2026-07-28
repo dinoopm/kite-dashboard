@@ -6,6 +6,12 @@
 // Usage:
 //   node bhavcopy.js        — sync today (falls back to yesterday if not published)
 //   node bhavcopy.js 90     — backfill the last 90 calendar days (404s = holidays, skipped)
+//   node bhavcopy.js 2026-07-03,2026-07-06   — re-sync specific sessions
+//
+// The explicit-date form exists because the ingest silently dropped 2026-07-03,
+// 07-06 and 07-07 — sessions NSE traded and this table never got. backend/
+// dataHealth.js now detects that and names the dates; this is how you repair
+// them without re-fetching every day since.
 const axios = require('axios');
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
@@ -58,8 +64,18 @@ const parseFileDate = (s) => {
     return `${m[3]}-${MONTHS[m[2].toUpperCase()]}-${m[1].padStart(2, '0')}`;
 };
 
-async function fetchAndSync(session, cookies, offsetDays) {
-    const { dateStr, dbDate } = getISTDateString(offsetDays);
+// '2026-07-03' → { dateStr: '03072026', dbDate: '2026-07-03' }. No clock
+// involved, so an explicit date means that exact session regardless of the
+// machine's timezone.
+function fromISODate(iso) {
+    const m = String(iso).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return null;
+    return { dateStr: `${m[3]}${m[2]}${m[1]}`, dbDate: `${m[1]}-${m[2]}-${m[3]}` };
+}
+
+// `target` is either an offset in days from today (number) or a { dateStr, dbDate }.
+async function fetchAndSync(session, cookies, target) {
+    const { dateStr, dbDate } = typeof target === 'number' ? getISTDateString(target) : target;
     const url = `https://archives.nseindia.com/products/content/sec_bhavdata_full_${dateStr}.csv`;
 
     let res;
@@ -138,7 +154,13 @@ async function fetchAndSync(session, cookies, offsetDays) {
 }
 
 async function run() {
-    const backfillDays = parseInt(process.argv[2], 10) || 0;
+    const arg = (process.argv[2] || '').trim();
+    const explicitDates = arg.includes('-') ? arg.split(',').map(s => fromISODate(s)) : null;
+    if (explicitDates && explicitDates.some(d => !d)) {
+        console.error(`[Bhavcopy] Bad date list "${arg}" — expected YYYY-MM-DD[,YYYY-MM-DD...]`);
+        process.exit(1);
+    }
+    const backfillDays = explicitDates ? 0 : (parseInt(arg, 10) || 0);
 
     const session = axios.create({ headers, withCredentials: true });
     console.log('[Bhavcopy] Connecting to NSE...');
@@ -150,6 +172,18 @@ async function run() {
         console.log('[Bhavcopy] Handshake failed, proceeding anyway...');
     }
     await new Promise(r => setTimeout(r, 1000));
+
+    if (explicitDates) {
+        let ok = 0, missing = 0, errors = 0;
+        for (const d of explicitDates) {
+            const r = await fetchAndSync(session, cookies, d);
+            if (r === 'ok') ok++; else if (r === 'missing') missing++; else errors++;
+            await new Promise(r2 => setTimeout(r2, 400));
+        }
+        console.log(`[Bhavcopy] Repair done: ${ok} synced, ${missing} not available, ${errors} errors.`);
+        if (errors || missing) process.exit(1);
+        return;
+    }
 
     if (backfillDays > 0) {
         let ok = 0, missing = 0, errors = 0;
