@@ -6,6 +6,7 @@ import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 import AlertRow from '../components/alerts/AlertRow'
 import SignalChart from '../components/SignalChart'
 import { generateSignals } from '../lib/signalEngine'
+import { growthPill, expensePill, marginPill, cashflowPill } from '../lib/growthPill'
 import ConvictionModal from '../components/alerts/ConvictionModal'
 import TradePlanModal from '../components/alerts/TradePlanModal'
 import ValuationPanel from '../components/ValuationPanel'
@@ -2278,6 +2279,11 @@ function Instrument() {
         const activeData = isYearly ? screenerAnnual : screenerQuarterly;
         const activeRows = isYearly ? activeData?.years : activeData?.quarters;
         const activeError = isYearly ? screenerAnnualError : screenerError;
+        // Which set of books these numbers came from. It has to be visible:
+        // standalone and consolidated can differ by 3x for a holding company,
+        // and screener.in's own page defaults to consolidated, so an unlabelled
+        // table invites a comparison that looks like a bug in one of them.
+        const activeBasis = activeData?.basis || 'standalone';
         const periodNoun = isYearly ? 'years' : 'quarters';
         // Yearly gets a slightly longer window (5 FYs) than quarterly (4 Qs).
         const windowSize = isYearly ? 5 : 4;
@@ -2332,53 +2338,8 @@ function Instrument() {
         const fmtPct = (v) => v == null ? '—' : `${v.toFixed(1)}%`;
 
         // Pair growth = computed once per cell, colour-graded by magnitude.
-        const growthPill = (curr, prev) => {
-          if (curr == null || prev == null || prev === 0) return null;
-          const pct = ((curr - prev) / Math.abs(prev)) * 100;
-          const positive = pct >= 0;
-          const abs = Math.abs(pct);
-          let color;
-          if (abs < 5)        color = positive ? '#34d399' : '#fca5a5';
-          else if (abs < 15)  color = positive ? '#10b981' : '#ef4444';
-          else                color = positive ? '#059669' : '#dc2626';
-          return {
-            label: `${positive ? '↑' : '↓'}${abs.toFixed(1)}%`,
-            color,
-            weight: abs >= 15 ? 800 : 700,
-          };
-        };
-        // Expenses use inverted polarity — rising is bad, falling is good.
-        // Expense pill uses sign + colour (no arrow). Rising expenses are bad,
-        // and an upward arrow next to a red number reads as a contradiction
-        // because every other row treats ↑ as good. Sign carries direction,
-        // colour carries sentiment — no visual conflict.
-        const expensePill = (curr, prev) => {
-          const p = growthPill(curr, prev);
-          if (!p) return null;
-          const rising = p.label.startsWith('↑');
-          const abs = parseFloat(p.label.slice(1));
-          let color;
-          if (abs < 5)        color = rising ? '#fca5a5' : '#34d399';
-          else if (abs < 15)  color = rising ? '#ef4444' : '#10b981';
-          else                color = rising ? '#dc2626' : '#059669';
-          return { ...p, label: `${rising ? '+' : '−'}${abs.toFixed(1)}%`, color };
-        };
-        // Margin uses a percentage-points pill instead of relative growth.
-        const marginPill = (curr, prev) => {
-          if (curr == null || prev == null) return null;
-          const diff = curr - prev;
-          const positive = diff >= 0;
-          const abs = Math.abs(diff);
-          let color;
-          if (abs < 1)        color = positive ? '#34d399' : '#fca5a5';
-          else if (abs < 5)   color = positive ? '#10b981' : '#ef4444';
-          else                color = positive ? '#059669' : '#dc2626';
-          return {
-            label: `${positive ? '+' : '−'}${abs.toFixed(1)} pp`,
-            color,
-            weight: abs >= 5 ? 800 : 700,
-          };
-        };
+        // growthPill / expensePill / marginPill live in lib/growthPill.js —
+        // see growthPill.test.js for the negative-base rules they enforce.
 
         // Row spec mapped to screener.in field names.
         const hasInterest = columns.some(c => {
@@ -2559,8 +2520,8 @@ function Instrument() {
                 <h2 style={{ margin: 0 }}>{isYearly ? 'Annual Results' : 'Quarterly Results'}</h2>
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                   {isYearly
-                    ? `Last ${windowSize} fiscal years · YoY · Screener.in (standalone)`
-                    : `Last ${windowSize} consecutive quarters · YoY · QoQ · Screener.in (standalone)`}
+                    ? `Last ${windowSize} fiscal years · YoY · Screener.in (${activeBasis})`
+                    : `Last ${windowSize} consecutive quarters · YoY · QoQ · Screener.in (${activeBasis})`}
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -2777,7 +2738,7 @@ function Instrument() {
                   </tbody>
                 </table>
                 <div style={{ marginTop: '0.75rem', fontSize: '0.7rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                  Source: screener.in (standalone, ₹ Cr). Operating Margin uses percentage-point change. {isYearly ? 'Annual figures show completed fiscal years (TTM column excluded).' : ''} Results refresh once every 12 hours.
+                  Source: screener.in ({activeBasis}, ₹ Cr). Operating Margin uses percentage-point change. {isYearly ? 'Annual figures show completed fiscal years (TTM column excluded).' : ''} Results refresh once every 12 hours.
                 </div>
               </div>
             )}
@@ -2787,11 +2748,13 @@ function Instrument() {
 
       {activeTab === 'cashflow' && (() => {
         // ── Annual cashflow — screener.in-backed (CFO/CFI/CFF/Net + FCF) ──
-        // Indian companies file only annual standalone cashflow, so this is a
-        // yearly series. Two sub-views (toggled like a tab): a grouped bar
+        // Cash flow is only filed annually, so this is a yearly series.
+        // Consolidated by default like the P&L and balance-sheet tabs — see the
+        // basis note there. Two sub-views (toggled like a tab): a grouped bar
         // chart and a full data table with YoY, trend sparklines, and a
         // programmatic quality snapshot.
         const years = Array.isArray(screenerCashflow?.years) ? screenerCashflow.years : [];
+        const cfBasis = screenerCashflow?.basis || 'standalone';
         const visible = years.slice(-8); // chart/table window (older years get unreadable)
 
         // Series metadata drives the legend help, chart bars, and table rows so
@@ -2813,17 +2776,9 @@ function Instrument() {
           return `${sign}₹${Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: Math.abs(v) < 1000 ? 1 : 0 })} Cr`;
         };
         const cfColor = (v) => v == null ? 'var(--text-secondary)' : v > 0 ? '#10b981' : v < 0 ? '#ef4444' : 'var(--text-primary)';
-        const growthPill = (curr, prev) => {
-          if (curr == null || prev == null || prev === 0) return null;
-          const pct = ((curr - prev) / Math.abs(prev)) * 100;
-          const positive = pct >= 0;
-          const abs = Math.abs(pct);
-          let color;
-          if (abs < 5)        color = positive ? '#34d399' : '#fca5a5';
-          else if (abs < 15)  color = positive ? '#10b981' : '#ef4444';
-          else                color = positive ? '#059669' : '#dc2626';
-          return { label: `${positive ? '↑' : '↓'}${abs.toFixed(1)}%`, color, weight: abs >= 15 ? 800 : 700 };
-        };
+        // Cash-flow lines are negative far more often than P&L lines, so the
+        // shared pill is used with outflow/inflow wording.
+        const growthPill = cashflowPill;
         const trendColor = (v, band = 0) => v == null ? 'var(--text-secondary)' : Math.abs(v) <= band ? 'var(--text-secondary)' : v > 0 ? '#10b981' : '#ef4444';
         const arrow = (v, band = 0) => v == null ? '·' : Math.abs(v) <= band ? '→' : v > 0 ? '↑' : '↓';
         const Sparkline = ({ points }) => {
@@ -2851,12 +2806,22 @@ function Instrument() {
           const fcfPos = years.filter(y => (y.freeCashFlow ?? 0) > 0).length;
           // CFO "covered" investing when CFO + CFI >= 0 (operating cash absorbed the investing outflow).
           const capexCov = years.filter(y => y.operatingCashFlow != null && y.investingCashFlow != null && (y.operatingCashFlow + y.investingCashFlow) >= 0).length;
-          const cfoTrendPct = (earliest.operatingCashFlow != null && earliest.operatingCashFlow !== 0 && latest.operatingCashFlow != null)
-            ? ((latest.operatingCashFlow - earliest.operatingCashFlow) / Math.abs(earliest.operatingCashFlow)) * 100 : null;
+          // Same rule as the growth pills: a percentage across a sign change is
+          // not a trend. Tata Power's standalone CFO ran ₹1,688 Cr → −₹1,712 Cr
+          // and this rendered "−201%", a number whose size depends only on how
+          // small the starting year happened to be. When either end is negative
+          // the card shows the direction in words instead.
+          const cfoFirst = earliest.operatingCashFlow;
+          const cfoLast = latest.operatingCashFlow;
+          const cfoSignChange = (cfoFirst != null && cfoLast != null && (cfoFirst < 0 || cfoLast < 0))
+            ? cashflowPill(cfoLast, cfoFirst)?.label ?? null
+            : null;
+          const cfoTrendPct = (!cfoSignChange && cfoFirst != null && cfoFirst > 0 && cfoLast != null)
+            ? ((cfoLast - cfoFirst) / cfoFirst) * 100 : null;
           let caution = null;
           if ((latest.operatingCashFlow ?? 0) < 0) caution = `Operating cash flow was negative in ${latest.fyLabel}`;
           else if ((latest.freeCashFlow ?? 0) < 0) caution = `Free cash flow was negative in ${latest.fyLabel}`;
-          return { n, fcfPos, capexCov, cfoTrendPct, range: `${earliest.fyLabel}–${latest.fyLabel}`, caution };
+          return { n, fcfPos, capexCov, cfoTrendPct, cfoSignChange, range: `${earliest.fyLabel}–${latest.fyLabel}`, caution };
         })();
 
         const empty = visible.length === 0;
@@ -2871,7 +2836,7 @@ function Instrument() {
               <div>
                 <h2 style={{ margin: 0 }}>Cashflow Analysis</h2>
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  Annual cashflow statement · Screener.in (standalone, ₹ Cr)
+                  Annual cashflow statement · Screener.in ({cfBasis}, ₹ Cr)
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -2952,9 +2917,16 @@ function Instrument() {
                     </div>
                     <div style={cardStyle}>
                       <div style={cardLabel}>CFO Trend</div>
-                      <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snap.cfoTrendPct, 1), marginTop: '0.2rem' }}>
-                        {arrow(snap.cfoTrendPct, 1)} {snap.cfoTrendPct == null ? '—' : `${snap.cfoTrendPct >= 0 ? '+' : ''}${snap.cfoTrendPct.toFixed(0)}%`}
-                      </div>
+                      {snap.cfoSignChange ? (
+                        <div style={{ fontSize: '0.95rem', fontWeight: 700, color: /wider|→ outflow/.test(snap.cfoSignChange) ? '#dc2626' : '#10b981', marginTop: '0.2rem' }}
+                          title="Operating cash flow changed sign over this window, so a percentage change would be meaningless — its size would depend only on how small the starting year was.">
+                          {snap.cfoSignChange}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snap.cfoTrendPct, 1), marginTop: '0.2rem' }}>
+                          {arrow(snap.cfoTrendPct, 1)} {snap.cfoTrendPct == null ? '—' : `${snap.cfoTrendPct >= 0 ? '+' : ''}${snap.cfoTrendPct.toFixed(0)}%`}
+                        </div>
+                      )}
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Operating cash · {snap.range}</div>
                     </div>
                     <div style={cardStyle}>
@@ -3029,7 +3001,7 @@ function Instrument() {
                     </tbody>
                   </table>
                   <div style={{ marginTop: '0.75rem', fontSize: '0.7rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                    Source: screener.in (standalone, ₹ Cr). Net = CFO + CFI + CFF. Free Cash Flow = CFO − capex. Refreshes every 12h.
+                    Source: screener.in ({cfBasis}, ₹ Cr). Net = CFO + CFI + CFF. Free Cash Flow is screener's own figure (CFO − capex); in years where capex is not disclosed it equals CFO. Refreshes every 12h.
                   </div>
                 </div>
               </>
@@ -3059,7 +3031,7 @@ function Instrument() {
                     ))}
                   </div>
                   <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--border)', fontSize: '0.72rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                    Net = CFO + CFI + CFF · Free Cash Flow = CFO − capex · Annual, standalone (₹ Cr).
+                    Net = CFO + CFI + CFF · Free Cash Flow = CFO − capex · Annual, {cfBasis} (₹ Cr).
                   </div>
                 </div>
               </div>
