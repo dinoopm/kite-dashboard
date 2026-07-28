@@ -1096,21 +1096,36 @@ router.get('/events/:symbol', async (req, res) => {
 const { cnbcUs10y } = require('./cnbcQuote');
 const tnxCache = {}; // range -> { data, ts }
 
+// Lookback in days per range button, and the bar size to fetch it at. Daily
+// holds up to 2Y (~500 points); beyond that the line is denser than the 200px
+// chart can resolve, so it goes weekly — the threshold 5Y/10Y already used.
+//
+// Named and exported rather than inlined because an unknown range silently
+// falls back to 6M while the response still echoes the range asked for, so a
+// missing entry renders six months of data captioned "over 3Y". The test
+// asserts every button the UI offers has an entry here.
+const TNX_RANGES = {
+  '1M':  { days: 31,       interval: '1d' },
+  '3M':  { days: 93,       interval: '1d' },
+  '6M':  { days: 186,      interval: '1d' },
+  '1Y':  { days: 370,      interval: '1d' },
+  '2Y':  { days: 2 * 366,  interval: '1d' },
+  '3Y':  { days: 3 * 366,  interval: '1wk' },
+  '4Y':  { days: 4 * 366,  interval: '1wk' },
+  '5Y':  { days: 5 * 366,  interval: '1wk' },
+  '10Y': { days: 10 * 366, interval: '1wk' },
+};
+const TNX_DEFAULT_RANGE = '6M';
+const tnxRangeConfig = (range) => TNX_RANGES[range] || TNX_RANGES[TNX_DEFAULT_RANGE];
+
 router.get('/treasury-10y', async (req, res) => {
-  const range = (req.query.range || '6M').toUpperCase();
+  const range = (req.query.range || TNX_DEFAULT_RANGE).toUpperCase();
   const hit = tnxCache[range];
   if (hit && Date.now() - hit.ts < 5 * 60 * 1000) return res.json({ ...hit.data, cached: true });
   try {
     const now = new Date();
-    const back = (days) => new Date(now.getTime() - days * 864e5);
-    const cfg = {
-      '1M': { period1: back(31), interval: '1d' },
-      '3M': { period1: back(93), interval: '1d' },
-      '6M': { period1: back(186), interval: '1d' },
-      '1Y': { period1: back(370), interval: '1d' },
-      '5Y': { period1: back(5 * 366), interval: '1wk' },
-      '10Y': { period1: back(10 * 366), interval: '1wk' },
-    }[range] || { period1: back(186), interval: '1d' };
+    const spec = tnxRangeConfig(range);
+    const cfg = { period1: new Date(now.getTime() - spec.days * 864e5), interval: spec.interval };
 
     // History from Yahoo; live value from CNBC (independent — either can fail).
     const [chartR, liveR] = await Promise.allSettled([
@@ -2179,4 +2194,6 @@ module.exports = {
   alpacaRouter: router,
   isAlpacaConfigured: isConfigured,
   checkFeedAgreement,
+  // Exported for the range-coverage test — see TNX_RANGES.
+  TNX_RANGES, TNX_DEFAULT_RANGE, tnxRangeConfig,
 };

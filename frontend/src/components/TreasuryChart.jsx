@@ -5,12 +5,15 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianG
 // equity valuations and FII flows into/out of India. Range-selectable; feeds
 // from /api/us/treasury-10y (Yahoo). Pairs with the RiskRegimePanel, which
 // reads the same yield as one of its gauges.
-const RANGES = ['1M', '3M', '6M', '1Y', '5Y', '10Y']
+const RANGES = ['1M', '3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y', '10Y']
+// Ranges spanning more than one calendar year need the year on the tick, or
+// "13 May" appears several times along the axis meaning different years.
+const MULTI_YEAR = new Set(['2Y', '3Y', '4Y', '5Y', '10Y'])
 const GREY = 'var(--text-secondary)'
 
 const fmtTick = (t, range) => {
   const d = new Date(t)
-  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: (range === '5Y' || range === '10Y') ? '2-digit' : undefined })
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: MULTI_YEAR.has(range) ? '2-digit' : undefined })
 }
 const asOfClock = (iso) => { try { return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' }) + ' ET' } catch { return null } }
 
