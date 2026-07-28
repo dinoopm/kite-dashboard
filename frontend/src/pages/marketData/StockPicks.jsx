@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import { fmtDate } from '../../lib/formatDate'
+import SignalScore from '../../components/SignalScore'
+import DataHealthBanner from '../../components/DataHealthBanner'
 
 // ─── Quant Stock Picks ───────────────────────────────────────────────────────
 // Deterministic factor ranking over the six market-data feeds for a chosen
@@ -300,6 +302,21 @@ export default function StockPicks() {
     } catch (e) { setBtError(e.message) } finally { setBtLoading(false) }
   }
 
+  // Published track record — scores the snapshots the server actually wrote,
+  // as opposed to the backtest above which re-derives what it would have
+  // picked. Cheap (no engine re-runs) and cached server-side, so it loads on
+  // mount instead of hiding behind a button.
+  const [scorecard, setScorecard] = useState(null)
+  const [scError, setScError] = useState(null)
+  useEffect(() => {
+    let on = true
+    fetch('/api/stock-picks/scorecard')
+      .then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`); return j })
+      .then(j => { if (on) setScorecard(j) })
+      .catch(e => { if (on) setScError(e.message) })
+    return () => { on = false }
+  }, [])
+
   const genSummary = async () => {
     setSummarizing(true); setSummary(null)
     try {
@@ -338,6 +355,8 @@ export default function StockPicks() {
         Surveillance (ASM/GSM) names are excluded; likely fake/HFT-inflated volume is down-weighted and flagged. Adjust the factor
         weights to re-rank instantly. <strong>For research only — not investment advice.</strong>
       </p>
+
+      <DataHealthBanner />
 
       {/* Period controls */}
       <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem', display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -466,6 +485,14 @@ export default function StockPicks() {
               <ReactMarkdown>{summary}</ReactMarkdown>
             </div>
           )}
+
+          {/* The list's own track record, directly above the list. A ranking
+              this confident-looking should have to state whether it has ever
+              been right, in the same glance as the ranking itself. */}
+          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
+            <SignalScore signal="picks_top25" label="Top 25" />
+            <SignalScore signal="picks_top10" label="Top 10" />
+          </div>
 
           {/* Ranked table */}
           <div className="glass-panel" style={{ padding: '0.4rem', overflowX: 'auto' }}>
@@ -638,6 +665,61 @@ export default function StockPicks() {
               </div>
               <ul style={{ margin: '0.85rem 0 0', paddingLeft: '1.1rem', fontSize: '0.7rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
                 {bt.caveats.map((c, i) => <li key={i}>{c}</li>)}
+              </ul>
+            </>
+          )
+        })()}
+      </div>
+
+      {/* Published track record — the picks a user actually saw, scored. */}
+      <div className="glass-panel" style={{ marginTop: '1.5rem', padding: '1rem 1.25rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-secondary)' }}>Published Track Record</span>
+          {scorecard?.period && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              {scorecard.period.snapshotDays} snapshot days · {scorecard.period.first} → {scorecard.period.last} · {scorecard.period.emissions} picks{scorecard.cached ? ' · cached' : ''}
+            </span>
+          )}
+          {scError && <span style={{ color: '#ef4444', fontSize: '0.8rem' }}>{scError}</span>}
+          {!scorecard && !scError && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Loading…</span>}
+        </div>
+        {scorecard && (() => {
+          const sign = (v, suffix = '%') => (v == null ? '—' : <span style={{ color: v > 0 ? '#34d399' : v < 0 ? '#fca5a5' : 'var(--text-secondary)' }}>{v > 0 ? '+' : ''}{v}{suffix}</span>)
+          const cell = { padding: '0.35rem 0.6rem', fontSize: '0.8rem' }
+          const th = { ...cell, color: 'var(--text-secondary)', textAlign: 'left', fontWeight: 600 }
+          const table = (rows, label, hint) => (
+            <div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }} title={hint}>{label}</div>
+              <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+                <thead><tr>
+                  <th style={th}>Horizon</th>
+                  <th style={th} title="median pick return minus NIFTY 50 over the same window — the headline, because raw return mostly measures the market">Median excess</th>
+                  <th style={th} title="share of picks that beat NIFTY 50 over the window">Beat index</th>
+                  <th style={th} title="median raw return">Median</th>
+                  <th style={th} title="picks scored / picks whose window has not resolved yet">n / unresolved</th>
+                </tr></thead>
+                <tbody>
+                  {rows.map(s => (
+                    <tr key={s.horizon} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                      <td style={cell}>{s.horizon}</td>
+                      <td style={cell}>{sign(s.medianExcessPct)}</td>
+                      <td style={cell}>{s.hitRateExcessPct == null ? '—' : `${s.hitRateExcessPct}%`}</td>
+                      <td style={cell}>{sign(s.medianPct)}</td>
+                      <td style={{ ...cell, color: 'var(--text-secondary)', fontSize: '0.72rem' }}>{s.n} / {s.unresolved}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+          return (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem', marginTop: '1rem' }}>
+                {table(scorecard.overall, 'All published picks vs NIFTY 50', 'Every row written to the daily snapshot, scored from that day’s close forward.')}
+                {table(scorecard.top10, 'Top 10 only', 'If rank carries information the top 10 should beat the full 25; if it does not, the ordering inside the list is noise.')}
+              </div>
+              <ul style={{ margin: '0.85rem 0 0', paddingLeft: '1.1rem', fontSize: '0.7rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                {scorecard.caveats.map((c, i) => <li key={i}>{c}</li>)}
               </ul>
             </>
           )

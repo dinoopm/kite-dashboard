@@ -2,6 +2,7 @@ import { useState } from 'react';
 import AlertRow from './AlertRow';
 import ConvictionModal from './ConvictionModal';
 import TradePlanModal from './TradePlanModal';
+import SignalScore from '../SignalScore';
 import { biasClass } from './biasClass';
 
 // Full technical-alerts panel: bias / breakout / super-flip / early filters,
@@ -111,6 +112,13 @@ export default function TechnicalAlertsPanel({ alerts = [], summary, lastUpdated
           onChange={e => setAlertSearch(e.target.value)}
           style={{ padding: '0.4rem 0.8rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-dark)', color: 'var(--text-primary)', width: '180px', fontSize: '0.85rem', outline: 'none', marginLeft: 'auto' }}
         />
+      </div>
+
+      {/* What these two filters have actually been worth, next to the filters
+          themselves rather than buried on a validation page. */}
+      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+        <SignalScore signal="breakout_20d" label="🚀 20d breakouts" />
+        <SignalScore signal="supertrend_flip_up" label="⚡ Super-flips" />
       </div>
 
       {/* Column Headers */}
