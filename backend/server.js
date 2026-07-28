@@ -2521,96 +2521,43 @@ async function fetchScreenerHTML(symbol, { consolidated = false } = {}) {
   return p;
 }
 
-// Convert "Mar 2023" cell header to an Indian-FY label + sortable key.
-function parseScreenerHeader(text) {
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const [monthStr, yearStr] = text.trim().split(/\s+/);
-  const m = months.indexOf(monthStr) + 1;
-  const y = parseInt(yearStr, 10);
-  if (!m || !y) return null;
-  // Apr–Jun=Q1, Jul–Sep=Q2, Oct–Dec=Q3, Jan–Mar=Q4
-  const q = m <= 3 ? 4 : m <= 6 ? 1 : m <= 9 ? 2 : 3;
-  const fy = m >= 4 ? y + 1 : y;
-  // YYYYMM sort key works because columns are in chronological order regardless.
-  return {
-    q, fy, month: m, year: y,
-    label: `Q${q} FY${String(fy).slice(-2)}`,
-    sortKey: y * 100 + m,
-  };
-}
+// Table parsing and the consolidated-vs-standalone rules live in
+// screener/screenerParse.js so they can be tested against saved HTML without
+// booting the server — see screener/screenerParse.test.js.
+const {
+  parseScreenerHeader, parseNumberCell, SCREENER_ROW_MAP,
+  parseScreenerQuarterly, parseScreenerAnnualPL, parseScreenerCashflow,
+  pickScreenerBasis: pickBasis,
+} = require('./screener/screenerParse');
 
-// Maps screener's row label to our internal field name. Banks/NBFCs sometimes
-// use "Revenue" or "Financing Profit" — we accept both.
-const SCREENER_ROW_MAP = {
-  'Sales': 'totalIncome',
-  'Revenue': 'totalIncome',
-  'Operating Profit': 'operatingProfit',
-  'Financing Profit': 'operatingProfit', // NBFCs
-  'OPM %': 'opm',
-  'Financing Margin %': 'opm',
-  'Net Profit': 'netProfit',
-  'EPS in Rs': 'eps',
-  'Expenses': 'expenses',
-  'Other Income': 'otherIncome',
-  'Interest': 'interest',
-  'Depreciation': 'depreciation',
-  'Profit before tax': 'pbt',
-  'Tax %': 'taxPct',
-};
+// Bind the app's cached/aliased fetcher to the pure picker.
+const pickScreenerBasis = (symbol, opts) =>
+  pickBasis(symbol, { ...opts, fetchHtml: fetchScreenerHTML });
 
-function parseNumberCell(text) {
-  if (!text) return null;
-  const cleaned = text.trim().replace(/,/g, '').replace(/%/g, '').replace(/\s/g, '');
-  if (cleaned === '' || cleaned === '-') return null;
-  const num = parseFloat(cleaned);
-  return Number.isNaN(num) ? null : num;
-}
-
-function parseScreenerQuarterly(html) {
-  const $ = cheerio.load(html);
-  const section = $('section#quarters');
-  if (section.length === 0) throw new Error('Quarterly section not found on screener page');
-  const table = section.find('table.data-table').first();
-  if (table.length === 0) throw new Error('Quarterly table not found');
-
-  // First header cell is empty (the "metric" column). Rest are month headers.
-  const headerCells = table.find('thead th').toArray();
-  const columns = headerCells.slice(1)
-    .map(el => parseScreenerHeader($(el).text()))
-    .filter(Boolean);
-  if (columns.length === 0) throw new Error('No quarter columns parsed');
-
-  // Each row's first cell is a metric label (with trailing " +" sometimes —
-  // those are screener's "expand for breakdown" hints we strip).
-  table.find('tbody tr').each((_, tr) => {
-    const tds = $(tr).find('td').toArray();
-    if (tds.length === 0) return;
-    const rawLabel = $(tds[0]).text().trim().replace(/\s*\+\s*$/, '').replace(/\s+/g, ' ');
-    const field = SCREENER_ROW_MAP[rawLabel];
-    if (!field) return;
-    tds.slice(1).forEach((td, i) => {
-      if (i >= columns.length) return;
-      columns[i][field] = parseNumberCell($(td).text());
-    });
-  });
-
-  return columns;
-}
+// ?consolidated=0 forces standalone; anything else means consolidated.
+const wantsConsolidated = (req) =>
+  req.query.consolidated !== '0' && req.query.consolidated !== 'false';
 
 app.get('/api/screener-quarterly/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
-  const cached = screenerCache[symbol];
+  const consolidated = wantsConsolidated(req);
+  const cacheKey = `${symbol}::${consolidated ? 'consolidated' : 'standalone'}`;
+  const cached = screenerCache[cacheKey];
   if (cached && Date.now() - cached.ts < SCREENER_TTL) {
     return res.json({ ...cached.data, cached: true });
   }
   try {
-    const { html } = await fetchScreenerHTML(symbol);
-    const quarters = parseScreenerQuarterly(html);
+    const { rows: quarters, basis } = await pickScreenerBasis(symbol, {
+      consolidated,
+      parse: parseScreenerQuarterly,
+      latestOf: (qs) => Math.max(...qs.map(q => q.sortKey)),
+      tag: 'screener-quarterly',
+    });
     if (quarters.length === 0) {
       return res.status(502).json({ error: 'No quarterly data parsed', fallback: 'yahoo' });
     }
-    const payload = { source: 'screener.in', symbol, quarters };
-    screenerCache[symbol] = { data: payload, ts: Date.now() };
+    const payload = { source: 'screener.in', symbol, basis, quarters };
+    screenerCache[cacheKey] = { data: payload, ts: Date.now() };
     res.json({ ...payload, cached: false });
   } catch (err) {
     console.error(`[screener-quarterly] ${symbol}:`, err.message);
@@ -2620,59 +2567,28 @@ app.get('/api/screener-quarterly/:symbol', async (req, res) => {
 });
 
 // ─── Screener annual P&L (yearly results) ────────────────────────
-// Same row labels as the quarterly table (Sales / Expenses / Operating Profit /
-// OPM % / Net Profit / EPS), but `section#profit-loss` carries one column per
-// fiscal year. Standalone, to match the quarterly view. Screener's rightmost
-// "TTM" column has no parseable month header, so parseScreenerHeader returns
-// null for it and it's filtered out — the yearly view shows completed fiscal
-// years only (cleaner than mixing a trailing-12m column into a per-FY series).
-function parseScreenerAnnualPL(html) {
-  const $ = cheerio.load(html);
-  const section = $('section#profit-loss');
-  if (section.length === 0) throw new Error('Profit & Loss section not found on screener page');
-  const table = section.find('table.data-table').first();
-  if (table.length === 0) throw new Error('Profit & Loss table not found');
-
-  const headerCells = table.find('thead th').toArray();
-  const columns = headerCells.slice(1).map(el => {
-    const parsed = parseScreenerHeader($(el).text());
-    if (!parsed) return null;
-    // Annual columns are fiscal-year ends — relabel FYxx and sort by year.
-    return { ...parsed, label: `FY${String(parsed.fy).slice(-2)}`, sortKey: parsed.fy };
-  }).filter(Boolean);
-  if (columns.length === 0) throw new Error('No P&L year columns parsed');
-
-  table.find('tbody tr').each((_, tr) => {
-    const tds = $(tr).find('td').toArray();
-    if (tds.length === 0) return;
-    const rawLabel = $(tds[0]).text().trim().replace(/\s*\+\s*$/, '').replace(/\s+/g, ' ');
-    const field = SCREENER_ROW_MAP[rawLabel];
-    if (!field) return;
-    tds.slice(1).forEach((td, i) => {
-      if (i >= columns.length) return;
-      columns[i][field] = parseNumberCell($(td).text());
-    });
-  });
-
-  return columns;
-}
-
 const screenerAnnualCache = {};
 
 app.get('/api/screener-annual/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
-  const cached = screenerAnnualCache[symbol];
+  const consolidated = wantsConsolidated(req);
+  const cacheKey = `${symbol}::${consolidated ? 'consolidated' : 'standalone'}`;
+  const cached = screenerAnnualCache[cacheKey];
   if (cached && Date.now() - cached.ts < SCREENER_TTL) {
     return res.json({ ...cached.data, cached: true });
   }
   try {
-    const { html } = await fetchScreenerHTML(symbol);
-    const years = parseScreenerAnnualPL(html);
+    const { rows: years, basis } = await pickScreenerBasis(symbol, {
+      consolidated,
+      parse: parseScreenerAnnualPL,
+      latestOf: (ys) => Math.max(...ys.map(y => y.fy)),
+      tag: 'screener-annual',
+    });
     if (years.length === 0) {
       return res.status(502).json({ error: 'No annual P&L data parsed', fallback: 'yahoo' });
     }
-    const payload = { source: 'screener.in', symbol, period: 'annual', years };
-    screenerAnnualCache[symbol] = { data: payload, ts: Date.now() };
+    const payload = { source: 'screener.in', symbol, period: 'annual', basis, years };
+    screenerAnnualCache[cacheKey] = { data: payload, ts: Date.now() };
     res.json({ ...payload, cached: false });
   } catch (err) {
     console.error(`[screener-annual] ${symbol}:`, err.message);
@@ -2686,66 +2602,33 @@ app.get('/api/screener-annual/:symbol', async (req, res) => {
 // standalone disclosures, so screener only carries annual cashflow. Returns
 // up to 12 fiscal years with CFO/CFI/CFF/Net + Free Cash Flow already
 // calculated (saves us re-doing FCF math).
-const SCREENER_CASHFLOW_ROW_MAP = {
-  'Cash from Operating Activity': 'operatingCashFlow',
-  'Cash from Investing Activity': 'investingCashFlow',
-  'Cash from Financing Activity': 'financingCashFlow',
-  'Net Cash Flow': 'netCashFlow',
-  'Free Cash Flow': 'freeCashFlow',
-};
-
-function parseScreenerCashflow(html) {
-  const $ = cheerio.load(html);
-  const section = $('section#cash-flow');
-  if (section.length === 0) throw new Error('Cashflow section not found on screener page');
-  const table = section.find('table.data-table').first();
-  if (table.length === 0) throw new Error('Cashflow table not found');
-
-  // Headers are fiscal-year ends (e.g. "Mar 2024" = FY24). Build a label per column.
-  const headerCells = table.find('thead th').toArray();
-  const columns = headerCells.slice(1).map(el => {
-    const parsed = parseScreenerHeader($(el).text());
-    if (!parsed) return null;
-    // For annual cashflow, label by FY only (the Q is always FY-end Q4 = Mar).
-    return { ...parsed, fyLabel: `FY${String(parsed.fy).slice(-2)}` };
-  }).filter(Boolean);
-  if (columns.length === 0) throw new Error('No cashflow year columns parsed');
-
-  table.find('tbody tr').each((_, tr) => {
-    const tds = $(tr).find('td').toArray();
-    if (tds.length === 0) return;
-    const rawLabel = $(tds[0]).text().trim().replace(/\s*\+\s*$/, '').replace(/\s+/g, ' ');
-    const field = SCREENER_CASHFLOW_ROW_MAP[rawLabel];
-    if (!field) return;
-    tds.slice(1).forEach((td, i) => {
-      if (i >= columns.length) return;
-      columns[i][field] = parseNumberCell($(td).text());
-    });
-  });
-
-  // Drop columns with no data. Screener emits a blank header column for the
-  // current fiscal year before results are filed (e.g. SCHNEIDER's "Mar 2026"
-  // ahead of FY26 reporting), which would otherwise render as an empty FY bar.
-  const cfFields = Object.values(SCREENER_CASHFLOW_ROW_MAP);
-  return columns.filter(c => cfFields.some(f => c[f] != null));
-}
-
 const screenerCashflowCache = {};
 
 app.get('/api/screener-cashflow/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
-  const cached = screenerCashflowCache[symbol];
+  const consolidated = wantsConsolidated(req);
+  const cacheKey = `${symbol}::${consolidated ? 'consolidated' : 'standalone'}`;
+  const cached = screenerCashflowCache[cacheKey];
   if (cached && Date.now() - cached.ts < SCREENER_TTL) {
     return res.json({ ...cached.data, cached: true });
   }
   try {
-    const { html } = await fetchScreenerHTML(symbol);
-    const years = parseScreenerCashflow(html);
+    // Consolidated, like the P&L and balance-sheet tabs. Standalone cash flow
+    // for a holding company describes the parent's own treasury rather than the
+    // group's: Tata Power's FY26 standalone operating cash flow is −₹1,712 Cr
+    // while the group's is +₹5,993 Cr, so the standalone view raised a
+    // "negative operating cash flow" alarm about a group that generated cash.
+    const { rows: years, basis } = await pickScreenerBasis(symbol, {
+      consolidated,
+      parse: parseScreenerCashflow,
+      latestOf: (ys) => Math.max(...ys.map(y => y.fy)),
+      tag: 'screener-cashflow',
+    });
     if (years.length === 0) {
       return res.status(502).json({ error: 'No cashflow data parsed', fallback: 'yahoo' });
     }
-    const payload = { source: 'screener.in', symbol, period: 'annual', years };
-    screenerCashflowCache[symbol] = { data: payload, ts: Date.now() };
+    const payload = { source: 'screener.in', symbol, period: 'annual', basis, years };
+    screenerCashflowCache[cacheKey] = { data: payload, ts: Date.now() };
     res.json({ ...payload, cached: false });
   } catch (err) {
     console.error(`[screener-cashflow] ${symbol}:`, err.message);
@@ -4949,35 +4832,48 @@ const { computeValuation } = require('./valuation/engine');
 const valuationCache = {}; // symbol -> { data, ts }
 const VALUATION_TTL = 60 * 60 * 1000; // 1h — inputs refresh slower than this
 
-// Screener fetch helpers sharing the SAME caches the per-tab endpoints use,
-// so a user who already opened the P&L tab pays nothing extra here.
+// Screener fetch helpers sharing the SAME caches and the SAME consolidated
+// basis as the per-tab endpoints, so a user who already opened the P&L tab pays
+// nothing extra here — and, more importantly, so the valuation is computed on
+// the same set of books the tabs display. Valuing Tata Power off standalone
+// financials would model a parent company whose subsidiaries generate most of
+// the group's revenue.
 async function getScreenerAnnualCached(symbol) {
-  const cached = screenerAnnualCache[symbol];
+  const cacheKey = `${symbol}::consolidated`;
+  const cached = screenerAnnualCache[cacheKey];
   if (cached && Date.now() - cached.ts < SCREENER_TTL) return cached.data;
-  const { html } = await fetchScreenerHTML(symbol);
-  const years = parseScreenerAnnualPL(html);
-  const payload = { source: 'screener.in', symbol, period: 'annual', years };
-  screenerAnnualCache[symbol] = { data: payload, ts: Date.now() };
+  const { rows: years, basis } = await pickScreenerBasis(symbol, {
+    consolidated: true, parse: parseScreenerAnnualPL,
+    latestOf: (ys) => Math.max(...ys.map(y => y.fy)), tag: 'valuation/annual',
+  });
+  const payload = { source: 'screener.in', symbol, period: 'annual', basis, years };
+  screenerAnnualCache[cacheKey] = { data: payload, ts: Date.now() };
   return payload;
 }
 
 async function getScreenerQuarterlyCached(symbol) {
-  const cached = screenerCache[symbol];
+  const cacheKey = `${symbol}::consolidated`;
+  const cached = screenerCache[cacheKey];
   if (cached && Date.now() - cached.ts < SCREENER_TTL) return cached.data;
-  const { html } = await fetchScreenerHTML(symbol);
-  const quarters = parseScreenerQuarterly(html);
-  const payload = { source: 'screener.in', symbol, quarters };
-  screenerCache[symbol] = { data: payload, ts: Date.now() };
+  const { rows: quarters, basis } = await pickScreenerBasis(symbol, {
+    consolidated: true, parse: parseScreenerQuarterly,
+    latestOf: (qs) => Math.max(...qs.map(q => q.sortKey)), tag: 'valuation/quarterly',
+  });
+  const payload = { source: 'screener.in', symbol, basis, quarters };
+  screenerCache[cacheKey] = { data: payload, ts: Date.now() };
   return payload;
 }
 
 async function getScreenerCashflowCached(symbol) {
-  const cached = screenerCashflowCache[symbol];
+  const cacheKey = `${symbol}::consolidated`;
+  const cached = screenerCashflowCache[cacheKey];
   if (cached && Date.now() - cached.ts < SCREENER_TTL) return cached.data;
-  const { html } = await fetchScreenerHTML(symbol);
-  const years = parseScreenerCashflow(html);
-  const payload = { source: 'screener.in', symbol, period: 'annual', years };
-  screenerCashflowCache[symbol] = { data: payload, ts: Date.now() };
+  const { rows: years, basis } = await pickScreenerBasis(symbol, {
+    consolidated: true, parse: parseScreenerCashflow,
+    latestOf: (ys) => Math.max(...ys.map(y => y.fy)), tag: 'valuation/cashflow',
+  });
+  const payload = { source: 'screener.in', symbol, period: 'annual', basis, years };
+  screenerCashflowCache[cacheKey] = { data: payload, ts: Date.now() };
   return payload;
 }
 
@@ -5217,31 +5113,30 @@ app.post('/api/chat', async (req, res) => {
 });
 
 // ─── Quant Stock-Picks (deterministic factor ranking + AI brief) ──────────────
-const { buildFactorUniverse, generatePicksSummary, saveDailySnapshot, fetchSnapshotHistory } = require('./picks/engine');
+const { buildFactorUniverse, generatePicksSummary, fetchSnapshotHistory } = require('./picks/engine');
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const picksCache = {}; // `${from}|${to}` -> { data, ts }
 const PICKS_TTL = 10 * 60 * 1000; // 10 min
 
-// Daily default-weight top-25 snapshot → the model's out-of-sample track record
-// (stock_pick_snapshots, see migrate_pick_snapshots.js). Fired lazily on the
-// first picks request of each server-day; the table missing just logs a hint.
-const picksIsoDay = (off = 0) => { const d = new Date(); d.setDate(d.getDate() - off); return d.toISOString().slice(0, 10); };
-let lastPickSnapshotDay = null;
-async function runDailyPickSnapshot() {
-  const universe = await buildFactorUniverse({ from: picksIsoDay(30), to: picksIsoDay(1) });
-  return saveDailySnapshot(universe);
-}
-function ensureDailyPickSnapshot() {
-  const day = picksIsoDay(0);
-  if (lastPickSnapshotDay === day) return;
-  lastPickSnapshotDay = day; // one attempt per server-day, even on failure
-  runDailyPickSnapshot()
-    .then(r => console.log(`[stock-picks] daily snapshot ${r.snapDate}: ${r.saved} rows`))
-    .catch(err => console.error('[stock-picks] snapshot skipped:', err.message));
-}
+// The daily snapshot used to be fired lazily from this route, once per
+// server-day, with the "already tried" flag set before the write was known to
+// have succeeded — so a quiet day or one transient error lost that day's record
+// for good (2026-07-16 and 07-17 are missing for exactly this reason). It now
+// lives in dailyJobs.js on a timer, with completion decided by querying the
+// database instead of trusting an in-memory flag.
+//
+// Manual trigger for when you don't want to wait for the next tick.
+const { runOnce: runDailyJobsOnce, startDailyJobs } = require('./dailyJobs');
+app.post('/api/daily-jobs/run', async (req, res) => {
+  try {
+    res.json(await runDailyJobsOnce({ force: req.query.force === '1' }));
+  } catch (err) {
+    console.error('[daily]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/api/stock-picks', async (req, res) => {
-  ensureDailyPickSnapshot();
   // ?date=YYYY-MM-DD for a single-day snapshot, or ?from=&to= for a lookback.
   const date = req.query.date;
   const from = date || req.query.from;
@@ -5315,6 +5210,75 @@ app.get('/api/stock-picks/backtest', async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('[stock-picks/backtest]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Feed ingest health — which price tables are stale or missing sessions the
+// index traded. Cheap and read-only; cached briefly so a UI banner can poll it.
+const { checkDataHealth, logDataHealth } = require('./dataHealth');
+let dataHealthCache = null; // { data, ts }
+const DATA_HEALTH_TTL = 15 * 60 * 1000;
+app.get('/api/data-health', async (req, res) => {
+  try {
+    if (!req.query.force && dataHealthCache && Date.now() - dataHealthCache.ts < DATA_HEALTH_TTL) {
+      return res.json({ ...dataHealthCache.data, cached: true });
+    }
+    const data = await checkDataHealth();
+    dataHealthCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[data-health]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The other half of the picks validation: score the snapshots the server
+// actually published (picks/scorecard.js) rather than reconstructed picks.
+// Cheap next to /backtest — no engine re-runs — but still cached, since the
+// answer only moves once a day when a new snapshot lands.
+const { runScorecard } = require('./picks/scorecard');
+let scorecardCache = null; // { data, ts }
+const SCORECARD_TTL = 60 * 60 * 1000;
+let scorecardRunning = null;
+app.get('/api/stock-picks/scorecard', async (req, res) => {
+  try {
+    if (!req.query.force && scorecardCache && Date.now() - scorecardCache.ts < SCORECARD_TTL) {
+      return res.json({ ...scorecardCache.data, cached: true });
+    }
+    if (!scorecardRunning) {
+      scorecardRunning = runScorecard().finally(() => { scorecardRunning = null; });
+    }
+    const data = await scorecardRunning; // concurrent requests share one run
+    scorecardCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[stock-picks/scorecard]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Signal track records ────────────────────────────────────────────────────
+// Every signal in signals/registry.js, scored against what happened next. This
+// is what the UI reads to put a track record beside the signal itself, so
+// nothing on the dashboard can claim an edge without showing whether it has one.
+const { runSignalScorecard } = require('./signals/scorecard');
+let signalScoreCache = null; // { data, ts }
+const SIGNAL_SCORE_TTL = 60 * 60 * 1000;
+let signalScoreRunning = null;
+app.get('/api/signals/scorecard', async (req, res) => {
+  try {
+    if (!req.query.force && signalScoreCache && Date.now() - signalScoreCache.ts < SIGNAL_SCORE_TTL) {
+      return res.json({ ...signalScoreCache.data, cached: true });
+    }
+    if (!signalScoreRunning) {
+      signalScoreRunning = runSignalScorecard().finally(() => { signalScoreRunning = null; });
+    }
+    const data = await signalScoreRunning; // concurrent requests share one run
+    signalScoreCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[signals/scorecard]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -5807,5 +5771,14 @@ app.listen(PORT, async () => {
   // closes. A mismatch means prices are being rendered from a partial-volume
   // feed. Never blocks startup; see backend/feedAgreement.js.
   checkFeedAgreement().catch(() => {});
+  // Same spirit for the India feeds: compare every price table against the
+  // sessions NIFTY actually traded. Logs only when something is missing or
+  // stale, so a silent startup means the data underneath is whole.
+  checkDataHealth()
+    .then(r => { logDataHealth(r); if (r.ok) console.log('[data-health] all feeds current'); })
+    .catch(e => console.error('[data-health] check failed:', e.message));
+  // Snapshot the picks and record signal emissions on a timer rather than off
+  // the back of a page view — see dailyJobs.js for why that mattered.
+  startDailyJobs();
   await connectToKiteMcp();
 });
