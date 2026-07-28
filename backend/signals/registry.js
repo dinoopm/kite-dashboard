@@ -97,6 +97,12 @@ const BLOCKED_SIGNALS = [
     source: 'reconstructed',
     blockedReason: 'The Minervini gate needs a 200-day SMA plus a 60-bar base. nse_bhavcopy starts 2026-04-02, so no bar has enough history yet; this becomes scoreable once roughly a year of bhavcopy has accumulated.',
   },
+  {
+    name: 'expiry_volatility',
+    label: 'Monthly expiry volatility',
+    source: 'recorded',
+    blockedReason: 'A market-wide claim, not a per-symbol one, so this scorer — which measures each symbol against the index — cannot express it. It IS measured, by backend/expiryStudy.js against every non-expiry session since 2015: over 139 monthly expiries the effect is within noise (intraday range 6% wider, t=0.11). Registered here so a signal that fires on the whole market is not simply absent from the list.',
+  },
 ];
 
 // Signals captured at publication time rather than recomputed. These carry the

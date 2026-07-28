@@ -189,17 +189,67 @@ async function eventItems(getEvents, getXray) {
   } catch { return []; }
 }
 
-async function composeBriefing({ getQuotes, getXray, getEvents }) {
-  const [market, holdings, picks, events] = await Promise.all([
+/**
+ * Monthly F&O expiry.
+ *
+ * Two separate things, kept separate on purpose. The DATE is a calendar fact
+ * and is always shown. The volatility claim attached to it — "expiry week is
+ * choppy" — is folklore, so it is only ever reported as what the measurement
+ * says, which over 139 expiries since 2015 is: no distinguishable effect. An
+ * item that says "expiry Thursday, expect volatility" would be inventing the
+ * second half; this one names it and reports it came out empty.
+ */
+async function expiryItems(getExpiryStudy) {
+  if (!getExpiryStudy) return [];
+  try {
+    const study = await getExpiryStudy();
+    const next = study?.next;
+    if (!next) return [];
+
+    // sessionsAway is null once the date is beyond the traded calendar — the
+    // sessions between here and there have not happened, so counting them would
+    // be inventing a number. Fall back to calendar days, which is honest.
+    const away = next.sessionsAway == null
+      ? null
+      : ` (${next.sessionsAway} session${next.sessionsAway === 1 ? '' : 's'} away)`;
+    const shift = next.projected ? ' — moves a session earlier if that Thursday is a holiday' : '';
+
+    const items = [{
+      tone: next.sessionsAway === 0 ? 'warn' : 'neutral',
+      text: next.sessionsAway === 0
+        ? `Monthly F&O expiry today (${next.date})`
+        : `Monthly F&O expiry ${daysLeft(next.date)} — ${next.date}${away || ''}${shift}`,
+      link: '/market-data/expiry',
+    }];
+
+    // Only speak about volatility when the study has something to say, and say
+    // what it actually found rather than what everyone expects it to find.
+    const day = study?.results?.expiryDay?.rangePct;
+    if (day && !day.underSampled) {
+      items.push({
+        tone: 'neutral',
+        text: Math.abs(day.tStat ?? 0) >= 2
+          ? `Expiry sessions have run ${Math.round(Math.abs(day.ratio - 1) * 100)}% ${day.ratio > 1 ? 'wider' : 'narrower'} than a normal day (n=${day.n} since ${study.period.from})`
+          : `No measurable expiry-day volatility effect — ${day.n} expiries since ${study.period.from} are within noise of an ordinary session`,
+        link: '/market-data/expiry',
+      });
+    }
+    return items;
+  } catch { return []; }
+}
+
+async function composeBriefing({ getQuotes, getXray, getEvents, getExpiryStudy }) {
+  const [market, holdings, picks, events, expiry] = await Promise.all([
     marketItems(getQuotes),
     holdingItems(getXray).catch(e => [{ tone: 'neutral', text: `Holdings deltas unavailable: ${e.message}`, link: '/portfolio' }]),
     pickItems(),
     eventItems(getEvents, getXray),
+    expiryItems(getExpiryStudy),
   ]);
   return {
     date: today(),
-    market, holdings, picks, events,
-    quiet: market.length + holdings.length + picks.length + events.length === 0,
+    market, holdings, picks, events, expiry,
+    quiet: market.length + holdings.length + picks.length + events.length + expiry.length === 0,
   };
 }
 

@@ -5585,6 +5585,34 @@ app.get('/api/risk-regime', async (req, res) => {
 // "What changed since yesterday" — market flows + VIX, per-holding analytic
 // deltas (needs holding_state_snapshots), quant-picks churn. See briefing.js.
 const { composeBriefing } = require('./briefing');
+
+// ─── F&O expiry: the calendar fact, and whether it means anything ────────────
+// The date is deterministic. The folklore attached to it ("expiry week is
+// volatile") is not, so expiryStudy measures it against every other session
+// instead of repeating it. Cached hard — the answer moves once a month.
+const { runExpiryStudy } = require('./expiryStudy');
+let expiryStudyCache = null; // { data, ts }
+const EXPIRY_STUDY_TTL = 12 * 60 * 60 * 1000;
+let expiryStudyRunning = null;
+async function getExpiryStudyCached() {
+  if (expiryStudyCache && Date.now() - expiryStudyCache.ts < EXPIRY_STUDY_TTL) return expiryStudyCache.data;
+  if (!expiryStudyRunning) {
+    expiryStudyRunning = runExpiryStudy().finally(() => { expiryStudyRunning = null; });
+  }
+  const data = await expiryStudyRunning;
+  expiryStudyCache = { data, ts: Date.now() };
+  return data;
+}
+app.get('/api/expiry-study', async (req, res) => {
+  try {
+    if (req.query.force) { expiryStudyCache = null; }
+    res.json(await getExpiryStudyCached());
+  } catch (err) {
+    console.error('[expiry-study]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 let briefingCache = { data: null, ts: 0 };
 const BRIEFING_TTL = 30 * 60 * 1000;
 app.get('/api/briefing', async (req, res) => {
@@ -5603,7 +5631,7 @@ app.get('/api/briefing', async (req, res) => {
       const r = await fetch(`http://localhost:${PORT}/api/portfolio/xray`);
       return r.ok ? r.json() : null;
     };
-    const data = await composeBriefing({ getQuotes, getXray, getEvents: getAllEvents });
+    const data = await composeBriefing({ getQuotes, getXray, getEvents: getAllEvents, getExpiryStudy: getExpiryStudyCached });
     briefingCache = { data, ts: Date.now() };
     res.json(data);
   } catch (err) {
