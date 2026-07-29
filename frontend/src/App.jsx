@@ -33,6 +33,7 @@ import VolumeGainers from './pages/marketData/VolumeGainers'
 import SurveillanceStocks from './pages/marketData/SurveillanceStocks'
 import StockPicks from './pages/marketData/StockPicks'
 import MacroEconomics from './pages/marketData/MacroEconomics'
+import ExpiryStudy from './pages/marketData/ExpiryStudy'
 import EventsCalendar from './pages/marketData/EventsCalendar'
 import OilTracker from './pages/marketData/OilTracker'
 import Navbar from './components/Navbar'
@@ -249,6 +250,7 @@ function App() {
           <Route path="/market-data/volume-gainers" element={<VolumeGainers />} />
           <Route path="/market-data/surveillance" element={<SurveillanceStocks />} />
           <Route path="/market-data/macro" element={<MacroEconomics />} />
+          <Route path="/market-data/expiry" element={<ExpiryStudy />} />
           <Route path="/market-data/events" element={<EventsCalendar />} />
           <Route path="/market-data/oil" element={<OilTracker />} />
           <Route path="/instrument/:token" element={<Instrument />} />

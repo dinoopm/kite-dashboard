@@ -65,6 +65,8 @@ export default function Briefing() {
         <>
           <Section title="Your holdings — changes" items={data.holdings} />
           <Section title="Upcoming events — holdings & watchlists" items={data.events} />
+          {/* Dates come from the API as ISO; the app shows months in words. */}
+          <Section title="F&O expiry" items={data.expiry?.map(i => ({ ...i, text: fmtDate(i.text) }))} />
           <Section title="Market" items={data.market} />
           <Section title="Quant picks churn" items={data.picks} />
           {!data.holdings?.length && (
