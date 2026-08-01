@@ -5239,7 +5239,9 @@ app.get('/api/data-health', async (req, res) => {
 // answer only moves once a day when a new snapshot lands.
 const { runScorecard } = require('./picks/scorecard');
 let scorecardCache = null; // { data, ts }
-const SCORECARD_TTL = 60 * 60 * 1000;
+// Same reasoning as the signals scorecard: the snapshots it reads change once
+// a day, so re-deriving hourly is pure egress.
+const SCORECARD_TTL = 12 * 60 * 60 * 1000;
 let scorecardRunning = null;
 app.get('/api/stock-picks/scorecard', async (req, res) => {
   try {
@@ -5264,7 +5266,10 @@ app.get('/api/stock-picks/scorecard', async (req, res) => {
 // nothing on the dashboard can claim an edge without showing whether it has one.
 const { runSignalScorecard } = require('./signals/scorecard');
 let signalScoreCache = null; // { data, ts }
-const SIGNAL_SCORE_TTL = 60 * 60 * 1000;
+// 12h, not 1h. Scoring reads every emission plus the closes of every symbol
+// that ever fired — ~12 MB a run. Emissions only arrive once a session, so an
+// hourly TTL bought nothing and cost up to 278 MB of egress a day.
+const SIGNAL_SCORE_TTL = 12 * 60 * 60 * 1000;
 let signalScoreRunning = null;
 app.get('/api/signals/scorecard', async (req, res) => {
   try {

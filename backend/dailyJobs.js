@@ -56,6 +56,21 @@ function snapshotIsDue(bhavLast, snapLast) {
   return snapLast < bhavLast;
 }
 
+/**
+ * Newest date among the reconstructed (price-derived) emissions.
+ *
+ * One row, not a scan. This is the marker for "have the detectors already seen
+ * the latest session?" — recorded rows are excluded because picks and 52-week
+ * highs arrive on their own schedule and would mask a missing price signal.
+ */
+async function latestReconstructedEmission() {
+  const { data, error } = await supabase.from('signal_emissions')
+    .select('snap_date').eq('source', 'reconstructed')
+    .order('snap_date', { ascending: false }).limit(1);
+  if (error) throw new Error(`signal_emissions: ${error.message}`);
+  return data?.[0]?.snap_date || null;
+}
+
 async function picksSnapshotDue() {
   const [bhavLast, snapLast] = await Promise.all([
     latestDate('nse_bhavcopy', 'trade_date'),
@@ -119,12 +134,26 @@ async function runDailyJobs({ force = false } = {}) {
     console.error('[daily] picks snapshot failed (will retry next tick):', err.message);
   }
 
+  // Emission recording is the expensive job: the price detectors need every
+  // symbol's full candle history, which is a ~29 MB read of nse_bhavcopy. At
+  // one run per 30-minute tick that is 1.35 GB of egress a DAY — enough to
+  // exhaust a 5 GB monthly allowance in under four days, which is exactly what
+  // it did. Prices only change once a session, so this now runs when bhavcopy
+  // has actually advanced past what has already been recorded, not on a timer.
   try {
-    const { recordAll } = require('./signals/record');
-    const r = await recordAll({ fromDate: isoMinus(EMISSION_LOOKBACK_DAYS) });
-    out.emissions = r;
-    const total = r.price.saved + r.picks.saved + r.highs.saved;
-    console.log(`[daily] signal emissions: ${total} rows upserted over the last ${EMISSION_LOOKBACK_DAYS} days`);
+    const [bhavLast, emissionLast] = await Promise.all([
+      latestDate('nse_bhavcopy', 'trade_date'),
+      latestReconstructedEmission(),
+    ]);
+    if (force || !emissionLast || (bhavLast && emissionLast < bhavLast)) {
+      const { recordAll } = require('./signals/record');
+      const r = await recordAll({ fromDate: isoMinus(EMISSION_LOOKBACK_DAYS) });
+      out.emissions = r;
+      const total = r.price.saved + r.picks.saved + r.highs.saved;
+      console.log(`[daily] signal emissions: ${total} rows upserted (bhavcopy at ${bhavLast})`);
+    } else {
+      out.emissions = { skipped: 'no new sessions', bhavLast, emissionLast };
+    }
   } catch (err) {
     out.emissions = { error: err.message };
     console.error('[daily] signal recording failed (will retry next tick):', err.message);

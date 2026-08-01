@@ -64,14 +64,26 @@ function checkFreshness(lastDate, indexDates, { graceSessions = 1 } = {}) {
   };
 }
 
-/** Distinct dates present in `table`, ascending. Paged — these tables are large. */
-async function fetchDates(table, col) {
+/**
+ * Distinct dates present in `table`, ascending.
+ *
+ * `probeSymbol` is the whole trick. These tables hold one row per symbol per
+ * session, so paging them just to learn which DATES exist read 217,000 rows of
+ * nse_bhavcopy — 5.8 MB — to discover 78 distinct days, on every check. A
+ * symbol that trades every session answers the same question in 78 rows.
+ *
+ * The probe must be a name that never misses a session, or a real gap would be
+ * indistinguishable from that one stock not trading. RELIANCE is the same
+ * choice marketSeries makes for the trading calendar.
+ */
+async function fetchDates(table, col, probeSymbol) {
   const PAGE = 1000;
   const seen = new Set();
   let offset = 0;
   for (;;) {
-    const { data, error } = await supabase.from(table).select(col)
-      .order(col, { ascending: true }).range(offset, offset + PAGE - 1);
+    let q = supabase.from(table).select(col).order(col, { ascending: true });
+    if (probeSymbol) q = q.eq('symbol', probeSymbol);
+    const { data, error } = await q.range(offset, offset + PAGE - 1);
     if (error) throw new Error(`${table}: ${error.message}`);
     for (const r of data || []) seen.add(String(r[col]).slice(0, 10));
     if (!data || data.length < PAGE) break;
@@ -89,9 +101,13 @@ async function fetchIndexDates(period1) {
 
 // Feeds worth watching, with how late each is allowed to be. nse_bhavcopy is
 // the one everything else derives from, so it gets the tightest grace.
+// `probe` names a symbol present every session, so the date list costs a few
+// dozen rows instead of the whole table. Feeds with no such guarantee (a stock
+// only appears in volume_gainers on days it surged) are read in full, which is
+// affordable because those tables are far smaller.
 const FEEDS = [
-  { table: 'nse_bhavcopy',           col: 'trade_date', grace: 1, label: 'Bhavcopy (prices)' },
-  { table: 'nse_52_week_high_low',   col: 'trade_date', grace: 2, label: '52-week highs/lows' },
+  { table: 'nse_bhavcopy',           col: 'trade_date', grace: 1, label: 'Bhavcopy (prices)',   probe: 'RELIANCE' },
+  { table: 'nse_52_week_high_low',   col: 'trade_date', grace: 2, label: '52-week highs/lows',  probe: 'RELIANCE' },
   { table: 'volume_gainers',         col: 'trade_date', grace: 2, label: 'Volume gainers' },
   { table: 'stock_pick_snapshots',   col: 'snap_date',  grace: 2, label: 'Published picks' },
 ];
@@ -110,7 +126,7 @@ async function checkDataHealth({ since = '2026-04-01' } = {}) {
 
   for (const f of FEEDS) {
     try {
-      const dates = await fetchDates(f.table, f.col);
+      const dates = await fetchDates(f.table, f.col, f.probe);
       const gaps = findGaps(dates, indexDates);
       const fresh = checkFreshness(dates[dates.length - 1], indexDates, { graceSessions: f.grace });
       feeds.push({
