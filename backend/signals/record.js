@@ -54,8 +54,21 @@ const median = (xs) => {
  * closes every indicator in this codebase is built on.
  */
 async function loadCandles() {
+  // One query, every EQ row. A two-step version was tried — screen liquid names
+  // on the latest session, then fetch history only for those — and it did cut
+  // the read from 29 MB to 18 MB. It was reverted: it produced 4,813 emissions
+  // where the full scan produces 7,234, because a stock that was quiet on the
+  // single probe day was dropped even though its MEDIAN turnover clears the
+  // floor comfortably. Narrowing which symbols get scored to save egress is
+  // exactly the kind of silent sample change this module exists to avoid.
+  //
+  // The read is instead made rare rather than small: dailyJobs only calls this
+  // when bhavcopy has advanced past the newest recorded emission, so it runs
+  // about once a session instead of every 30 minutes.
+  //
+  // `open` is not selected — buildSeries exposes it but no detector reads it.
   const rows = await fetchAll('nse_bhavcopy',
-    'trade_date,symbol,series,open,high,low,close,volume,turnover_lacs',
+    'trade_date,symbol,high,low,close,volume,turnover_lacs',
     (q) => q.eq('series', 'EQ').order('trade_date', { ascending: true }));
 
   const bySymbol = new Map();
@@ -63,7 +76,7 @@ async function loadCandles() {
     if (r.close == null || r.high == null || r.low == null) continue;
     if (!bySymbol.has(r.symbol)) bySymbol.set(r.symbol, []);
     bySymbol.get(r.symbol).push({
-      date: r.trade_date, open: r.open, high: r.high, low: r.low,
+      date: r.trade_date, high: r.high, low: r.low,
       close: r.close, volume: r.volume || 0, turnover: r.turnover_lacs || 0,
     });
   }
