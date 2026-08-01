@@ -64,6 +64,11 @@ async function picksSnapshotDue() {
   return { due: snapshotIsDue(bhavLast, snapLast), bhavLast, snapLast };
 }
 
+// Injected by server.js, because pulling trades needs the live Kite MCP client
+// which lives there. Absent (no server, or MCP down) simply skips the job.
+let syncTradesFn = null;
+function registerTradeSync(fn) { syncTradesFn = fn; }
+
 /**
  * One pass of every daily recording job.
  *
@@ -72,7 +77,27 @@ async function picksSnapshotDue() {
  * to also stop recording price signals.
  */
 async function runDailyJobs({ force = false } = {}) {
-  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null };
+  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null };
+
+  // Trades first, and on EVERY tick rather than once a day. Kite exposes only
+  // the CURRENT day's fills, so a day this does not run is a day whose trades
+  // are gone from the API for good — recoverable only from a Console tradebook
+  // CSV. That asymmetry is why there is no "already done today" check here:
+  // the upsert is idempotent on trade_id, so re-running costs one API call and
+  // nothing else, while skipping wrongly costs a permanent hole. A day with no
+  // trades is indistinguishable from a sync that never happened, so guessing is
+  // not an option either.
+  if (syncTradesFn) {
+    try {
+      const r = await syncTradesFn();
+      out.trades = r;
+      // Quiet unless something actually arrived — this runs every 30 minutes.
+      if (r?.synced) console.log(`[daily] trades: ${r.synced} fill(s) synced`);
+    } catch (err) {
+      out.trades = { error: err.message };
+      console.warn('[daily] trade sync failed (will retry next tick):', err.message);
+    }
+  }
 
   try {
     const state = await picksSnapshotDue();
@@ -126,4 +151,4 @@ function startDailyJobs() {
   return () => { clearTimeout(first); clearInterval(timer); };
 }
 
-module.exports = { startDailyJobs, runDailyJobs, runOnce, picksSnapshotDue, snapshotIsDue, isoMinus };
+module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, picksSnapshotDue, snapshotIsDue, isoMinus };

@@ -14,6 +14,14 @@
 const { createClient } = require('@supabase/supabase-js');
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
+// NSE series suffixes that ride on Kite's tradingsymbol (BE = trade-to-trade,
+// SM = SME, and so on). The listed stock is the same company either way, so a
+// journal must fold them together — otherwise a stock moved to BE mid-holding
+// looks like two different instruments. Only the known set is stripped, so a
+// genuinely hyphenated name like BAJAJ-AUTO is left alone.
+const SERIES_SUFFIX = /-(BE|BZ|BL|IL|SM|ST|GB|GC|GS|DR)$/i;
+const baseSymbol = (sym) => String(sym || '').replace(SERIES_SUFFIX, '');
+
 const r2 = (v) => (v == null || !isFinite(v) ? null : +v.toFixed(2));
 const day = (ts) => String(ts).slice(0, 10);
 const daysBetween = (a, b) => Math.max(0, Math.round((new Date(b) - new Date(a)) / 86400000));
@@ -81,10 +89,17 @@ async function journalStats({ from, to } = {}) {
   if (error) throw new Error(error.message);
   if (!fills?.length) return { empty: true, fills: 0 };
 
+  // Group on the BASE symbol, not the tradingsymbol. NSE moves a stock between
+  // series (EQ -> BE trade-to-trade and back), and Kite's tradingsymbol carries
+  // that as a suffix — so the same holding is bought as SIGMAADV and sold as
+  // SIGMAADV-BE. Keyed on the raw string those never meet: the buys sit as an
+  // open position forever and the sell lands in unmatchedSellQty, so the round
+  // trip silently never appears. Same suffix set fetchScreenerHTML strips.
   const bySymbol = new Map();
   for (const f of fills) {
-    if (!bySymbol.has(f.symbol)) bySymbol.set(f.symbol, []);
-    bySymbol.get(f.symbol).push(f);
+    const key = baseSymbol(f.symbol);
+    if (!bySymbol.has(key)) bySymbol.set(key, []);
+    bySymbol.get(key).push(f);
   }
 
   let trips = [];
@@ -152,4 +167,4 @@ async function journalStats({ from, to } = {}) {
   };
 }
 
-module.exports = { journalStats, buildRoundTrips };
+module.exports = { journalStats, buildRoundTrips, baseSymbol };

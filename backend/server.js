@@ -5126,7 +5126,7 @@ const PICKS_TTL = 10 * 60 * 1000; // 10 min
 // database instead of trusting an in-memory flag.
 //
 // Manual trigger for when you don't want to wait for the next tick.
-const { runOnce: runDailyJobsOnce, startDailyJobs } = require('./dailyJobs');
+const { runOnce: runDailyJobsOnce, startDailyJobs, registerTradeSync } = require('./dailyJobs');
 app.post('/api/daily-jobs/run', async (req, res) => {
   try {
     res.json(await runDailyJobsOnce({ force: req.query.force === '1' }));
@@ -5646,8 +5646,7 @@ app.get('/api/briefing', async (req, res) => {
 // trade_id), runs at most once per day opportunistically when /stats is hit,
 // and can be forced via POST /api/journal/sync. History is backfilled from a
 // Zerodha Console tradebook CSV via POST /api/journal/import.
-const { journalStats } = require('./journal/engine');
-let lastTradeSyncDay = null;
+const { journalStats, baseSymbol } = require('./journal/engine');
 
 async function syncTodayTrades() {
   if (!mcpClient) throw new Error('MCP not connected');
@@ -5660,7 +5659,10 @@ async function syncTodayTrades() {
   const rows = trades.map(t => ({
     trade_id: String(t.trade_id),
     order_id: t.order_id != null ? String(t.order_id) : null,
-    symbol: t.tradingsymbol,
+    // Strip the NSE series suffix: the same holding is bought as SIGMAADV and,
+    // once the stock moves to trade-to-trade, sold as SIGMAADV-BE. Storing both
+    // spellings splits one position into two that never match.
+    symbol: baseSymbol(t.tradingsymbol),
     exchange: t.exchange || null,
     side: t.transaction_type, // 'BUY' | 'SELL'
     qty: t.quantity,
@@ -5675,10 +5677,14 @@ async function syncTodayTrades() {
   return { synced: rows.length };
 }
 
+// Kite serves only the current day's fills, so this runs on the dailyJobs
+// timer rather than off a page view — a day the server never asked is a day
+// those trades cannot be recovered from the API at all.
+registerTradeSync(() => (mcpClient ? syncTodayTrades() : Promise.resolve({ skipped: 'MCP not connected' })));
+
 app.post('/api/journal/sync', async (req, res) => {
   try {
     const out = await syncTodayTrades();
-    lastTradeSyncDay = new Date().toISOString().slice(0, 10);
     res.json(out);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -5702,7 +5708,7 @@ app.post('/api/journal/import', express.text({ type: '*/*', limit: '10mb' }), as
       rows.push({
         trade_id: String(r.trade_id),
         order_id: r.order_id ? String(r.order_id) : null,
-        symbol: String(r.symbol).toUpperCase(),
+        symbol: baseSymbol(String(r.symbol).toUpperCase()),
         exchange: r.exchange || null,
         side,
         qty: Number(r.quantity),
@@ -5725,13 +5731,10 @@ app.post('/api/journal/import', express.text({ type: '*/*', limit: '10mb' }), as
 
 app.get('/api/journal/stats', async (req, res) => {
   try {
-    // Opportunistic daily accumulation: first stats request of the day pulls
-    // today's fills so the user never has to remember to sync.
-    const today = new Date().toISOString().slice(0, 10);
-    if (lastTradeSyncDay !== today && mcpClient) {
-      try { await syncTodayTrades(); lastTradeSyncDay = today; }
-      catch (e) { console.warn('[journal] daily sync skipped:', e.message); }
-    }
+    // No sync here. It used to pull today's fills on the first stats request of
+    // the day, which meant a day nobody opened the journal was a day whose
+    // trades were never captured — and Kite only serves the current day, so
+    // those fills were unrecoverable. dailyJobs.js now pulls them on a timer.
     const dateRe = /^\d{4}-\d{2}-\d{2}$/;
     const from = dateRe.test(req.query.from || '') ? req.query.from : undefined;
     const to = dateRe.test(req.query.to || '') ? req.query.to : undefined;
