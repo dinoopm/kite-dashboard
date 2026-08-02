@@ -102,7 +102,7 @@ const BLOCKED_SIGNALS = [
     label: 'Year-long base → fresh BUY',
     minBars: 252 + 50,
     source: 'reconstructed',
-    blockedReason: 'The premise is that the stock went nowhere for a YEAR before the crossover, so scoring it needs 252 sessions of history before every firing plus a forward window after. nse_bhavcopy starts 2026-04-02 and holds ~82 sessions, so not one firing can be measured yet — the screener preset is available, but it is an untested idea, not a validated one. Becomes scoreable around mid-2027. The US side is not scoreable at any point yet: signals/record.js reads bhavcopy only, so US screener output never reaches signal_emissions.',
+    blockedReason: 'Not scoreable on Indian data: the premise is a YEAR of going nowhere, so one firing needs 252 sessions before it, and nse_bhavcopy holds ~82. Becomes measurable here around mid-2027. It HAS been measured on US history instead — backend/baseBreakoutStudy.js, 498 S&P 500 names over 2014-2026, 2,358 firings at the tight setting: 22-day median excess over the index +0.48% (t=4.1), decaying smoothly to nothing as the base is allowed to widen, and no effect at all at 5 or 10 days. Real but small, and the universe is today\'s index members, so survivorship bias flatters it by an unknown amount. Treat as a research filter, not an edge.',
   },
   {
     name: 'expiry_volatility',

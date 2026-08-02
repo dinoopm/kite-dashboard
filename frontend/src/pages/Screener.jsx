@@ -12,14 +12,17 @@ const ENUM_OPS = [{ v: 'is', label: 'is' }, { v: 'isnot', label: 'is not' }]
 // Built-in preset screens. Scope is left alone — the India screener defaults to
 // holdings, and a preset should change WHAT is asked, not WHERE.
 const PRESET_SCREENS = [
-  // Range-bound for a year, then the crossover fires. Each condition does a
-  // distinct job: range52wPct caps how wide the year's band was, the pair of
-  // ret1Y bounds keeps out stocks that quietly trended inside a wide band, and
-  // signal1050Age demands the BUY be fresh rather than months stale.
+  // Thresholds are measured, not chosen. backend/baseBreakoutStudy.js swept
+  // them over 498 S&P 500 names, 2014-2026: the 22-day median excess over the
+  // index runs +0.48% at range<=30 (t=4.1, n=2358), +0.15% at 45 (t=2.4),
+  // +0.08% at 60 (t=1.2) and vanishes by 80. The decay is smooth as the base
+  // widens, which is what a real effect looks like rather than a threshold
+  // artifact — so the tight setting is the default. Nothing shows at 5 or 10
+  // days; only 22.
   { id: 'p-basebreak', name: 'Year-long base → fresh BUY', conditions: [
-    { field: 'range52wPct', op: 'lte', value: 45 },
-    { field: 'ret1Y', op: 'lte', value: 20 },
-    { field: 'ret1Y', op: 'gte', value: -20 },
+    { field: 'range52wPct', op: 'lte', value: 30 },
+    { field: 'ret1Y', op: 'lte', value: 15 },
+    { field: 'ret1Y', op: 'gte', value: -15 },
     { field: 'signal1050', op: 'is', value: 'BUY' },
     { field: 'signal1050Age', op: 'lte', value: 10 },
   ] },

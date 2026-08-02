@@ -16,11 +16,14 @@ const PRESET_SCREENS = [
   { id: 'p-strong', name: 'Strong Uptrend (ST+ADX)', scope: { type: 'sp500' }, conditions: [{ field: 'supertrend', op: 'is', value: 'BULL' }, { field: 'smaCross', op: 'is', value: 'GOLDEN' }, { field: 'adx14', op: 'gte', value: 25 }, { field: 'pctVsSma200', op: 'gt', value: 0 }] },
   { id: 'p-approaching', name: 'Approaching Breakout', scope: { type: 'sp500' }, conditions: [{ field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 15 }, { field: 'dist20dHigh', op: 'gte', value: -3 }] },
   { id: 'p-buy20d', name: 'BUY + 20d Breakout', scope: { type: 'sp500' }, conditions: [{ field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'breakout20d', op: 'is', value: 'YES' }] },
-  // Range-bound for a year, then the crossover fires. The four conditions are
-  // doing distinct jobs: range52wPct caps how wide the year's band was,
-  // |ret1Y| keeps out stocks that quietly trended inside a wide band, and the
-  // signal pair demands the BUY be fresh rather than months old.
-  { id: 'p-basebreak', name: 'Year-long base → fresh BUY', scope: { type: 'sp500' }, conditions: [{ field: 'range52wPct', op: 'lte', value: 45 }, { field: 'ret1Y', op: 'lte', value: 20 }, { field: 'ret1Y', op: 'gte', value: -20 }, { field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 10 }] },
+  // Thresholds are measured, not chosen. backend/baseBreakoutStudy.js swept
+  // them over 498 S&P 500 names, 2014-2026: the 22-day median excess over the
+  // index runs +0.48% at range<=30 (t=4.1, n=2358), +0.15% at 45 (t=2.4),
+  // +0.08% at 60 (t=1.2) and vanishes by 80. The decay is smooth as the base
+  // widens, which is what a real effect looks like rather than a threshold
+  // artifact — so the tight setting is the default. Nothing shows at 5 or 10
+  // days; only 22.
+  { id: 'p-basebreak', name: 'Year-long base → fresh BUY', scope: { type: 'sp500' }, conditions: [{ field: 'range52wPct', op: 'lte', value: 30 }, { field: 'ret1Y', op: 'lte', value: 15 }, { field: 'ret1Y', op: 'gte', value: -15 }, { field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 10 }] },
   { id: 'p-vcp', name: 'VCP setups', scope: { type: 'sp500' }, conditions: [{ field: 'vcpSetup', op: 'is', value: 'YES' }] },
 ];
 
