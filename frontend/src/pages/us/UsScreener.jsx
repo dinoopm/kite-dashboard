@@ -16,6 +16,11 @@ const PRESET_SCREENS = [
   { id: 'p-strong', name: 'Strong Uptrend (ST+ADX)', scope: { type: 'sp500' }, conditions: [{ field: 'supertrend', op: 'is', value: 'BULL' }, { field: 'smaCross', op: 'is', value: 'GOLDEN' }, { field: 'adx14', op: 'gte', value: 25 }, { field: 'pctVsSma200', op: 'gt', value: 0 }] },
   { id: 'p-approaching', name: 'Approaching Breakout', scope: { type: 'sp500' }, conditions: [{ field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 15 }, { field: 'dist20dHigh', op: 'gte', value: -3 }] },
   { id: 'p-buy20d', name: 'BUY + 20d Breakout', scope: { type: 'sp500' }, conditions: [{ field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'breakout20d', op: 'is', value: 'YES' }] },
+  // Range-bound for a year, then the crossover fires. The four conditions are
+  // doing distinct jobs: range52wPct caps how wide the year's band was,
+  // |ret1Y| keeps out stocks that quietly trended inside a wide band, and the
+  // signal pair demands the BUY be fresh rather than months old.
+  { id: 'p-basebreak', name: 'Year-long base → fresh BUY', scope: { type: 'sp500' }, conditions: [{ field: 'range52wPct', op: 'lte', value: 45 }, { field: 'ret1Y', op: 'lte', value: 20 }, { field: 'ret1Y', op: 'gte', value: -20 }, { field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 10 }] },
   { id: 'p-vcp', name: 'VCP setups', scope: { type: 'sp500' }, conditions: [{ field: 'vcpSetup', op: 'is', value: 'YES' }] },
 ];
 
@@ -31,6 +36,7 @@ const RESULT_COLUMNS = [
   { key: 'ret1M', label: '1M %', pct: true },
   { key: 'ret1Y', label: '1Y %', pct: true },
   { key: 'dist52wHigh', label: '52wH %', pct: true },
+  { key: 'range52wPct', label: '52w range %', pct: true },
   { key: 'vcpScore', label: 'VCP' },
 ];
 

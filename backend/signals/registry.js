@@ -98,6 +98,13 @@ const BLOCKED_SIGNALS = [
     blockedReason: 'The Minervini gate needs a 200-day SMA plus a 60-bar base. nse_bhavcopy starts 2026-04-02, so no bar has enough history yet; this becomes scoreable once roughly a year of bhavcopy has accumulated.',
   },
   {
+    name: 'base_breakout',
+    label: 'Year-long base → fresh BUY',
+    minBars: 252 + 50,
+    source: 'reconstructed',
+    blockedReason: 'The premise is that the stock went nowhere for a YEAR before the crossover, so scoring it needs 252 sessions of history before every firing plus a forward window after. nse_bhavcopy starts 2026-04-02 and holds ~82 sessions, so not one firing can be measured yet — the screener preset is available, but it is an untested idea, not a validated one. Becomes scoreable around mid-2027. The US side is not scoreable at any point yet: signals/record.js reads bhavcopy only, so US screener output never reaches signal_emissions.',
+  },
+  {
     name: 'expiry_volatility',
     label: 'Monthly expiry volatility',
     source: 'recorded',

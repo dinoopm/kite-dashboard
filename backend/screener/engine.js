@@ -2,7 +2,7 @@
 // from its daily candles (reusing the backtester's buildSeries so screener
 // numbers can never disagree with backtest/alert math), then evaluates
 // user-defined conditions against that row. All conditions are ANDed.
-const { buildSeries, rollingMax } = require('../backtest/indicators');
+const { buildSeries, rollingMax, rollingMin } = require('../backtest/indicators');
 const { computeVcpScore } = require('./vcp');
 
 // Field catalog — drives both the UI's condition builder (dropdowns, operator
@@ -24,6 +24,19 @@ const SCREENER_FIELDS = [
   { key: 'pctVsSma200', label: 'Price vs SMA200 %',        type: 'number', group: 'Trend' },
   { key: 'pctVsEma200', label: 'Price vs EMA200 %',        type: 'number', group: 'Trend' },
   { key: 'dist52wHigh', label: 'Distance from 52w high %', type: 'number', group: 'Levels' },
+  // How WIDE the last year's range was, as a % of its low: (52w high - 52w low)
+  // / 52w low. A stock that spent the year between 400 and 500 scores 25; one
+  // that tripled scores 200. Low values are the "gone nowhere for a year" base
+  // a breakout can emerge from, which distance-from-high alone cannot express —
+  // a stock 2% off its high has the same dist52wHigh whether it drifted
+  // sideways all year or ran 300%.
+  { key: 'range52wPct', label: '52-week range width %',      type: 'number', group: 'Levels' },
+  // The same width over the last quarter divided by the year's. Only meaningful
+  // ALONGSIDE a narrow range52wPct: a stock that tripled also scores ~0.14 here,
+  // not because it is coiling but because one quarter of a huge run is small
+  // next to the whole run. Pair the two, or this reads a runaway trend as
+  // compression.
+  { key: 'rangeCompression', label: '3m range ÷ 12m range',  type: 'number', group: 'Levels' },
   // Signed % from the prior 20-day high: negative = still below (approaching a
   // breakout), >= 0 = already above (breaking out). Screen "within 2% of
   // breakout" with `dist20dHigh >= -2`.
@@ -105,6 +118,12 @@ function computeScreenerRow(candles) {
   const vol20 = S.vol20avg[last];
 
   const hi252 = rollingMax(S.highs, Math.min(252, last), last);
+  const lo252 = rollingMin(S.lows, Math.min(252, last), last);
+  const hi66 = rollingMax(S.highs, Math.min(66, last), last);
+  const lo66 = rollingMin(S.lows, Math.min(66, last), last);
+  const width = (hi, lo) => (hi != null && lo != null && lo > 0 ? (hi - lo) / lo : null);
+  const w252 = width(hi252, lo252);
+  const w66 = width(hi66, lo66);
   const hi20 = rollingMax(S.highs, Math.min(20, last), last);
   const hi55 = rollingMax(S.highs, Math.min(55, last), last);
 
@@ -126,6 +145,8 @@ function computeScreenerRow(candles) {
     pctVsEma200: pctVs(price, ema200),
     dist52wHigh: hi252 != null && hi252 > 0 ? +(((price - hi252) / hi252) * 100).toFixed(2) : null,
     dist20dHigh: hi20 != null && hi20 > 0 ? +(((price - hi20) / hi20) * 100).toFixed(2) : null,
+    range52wPct: w252 != null ? +(w252 * 100).toFixed(2) : null,
+    rangeCompression: (w252 != null && w252 > 0 && w66 != null) ? +(w66 / w252).toFixed(3) : null,
     supertrend: S.supertrend[last]?.direction ?? null,
     ...(() => {
       const { signal, barsAgo } = lastCrossoverSignal(closes, S.rsi14, 10, 50);

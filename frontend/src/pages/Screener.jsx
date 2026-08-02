@@ -9,6 +9,33 @@ const NUMBER_OPS = [
 ]
 const ENUM_OPS = [{ v: 'is', label: 'is' }, { v: 'isnot', label: 'is not' }]
 
+// Built-in preset screens. Scope is left alone — the India screener defaults to
+// holdings, and a preset should change WHAT is asked, not WHERE.
+const PRESET_SCREENS = [
+  // Range-bound for a year, then the crossover fires. Each condition does a
+  // distinct job: range52wPct caps how wide the year's band was, the pair of
+  // ret1Y bounds keeps out stocks that quietly trended inside a wide band, and
+  // signal1050Age demands the BUY be fresh rather than months stale.
+  { id: 'p-basebreak', name: 'Year-long base → fresh BUY', conditions: [
+    { field: 'range52wPct', op: 'lte', value: 45 },
+    { field: 'ret1Y', op: 'lte', value: 20 },
+    { field: 'ret1Y', op: 'gte', value: -20 },
+    { field: 'signal1050', op: 'is', value: 'BUY' },
+    { field: 'signal1050Age', op: 'lte', value: 10 },
+  ] },
+  { id: 'p-buy20d', name: 'BUY + 20d breakout', conditions: [
+    { field: 'signal1050', op: 'is', value: 'BUY' },
+    { field: 'breakout20d', op: 'is', value: 'YES' },
+  ] },
+  { id: 'p-coiling', name: 'Coiling (3m tighter than 12m)', conditions: [
+    { field: 'rangeCompression', op: 'lte', value: 0.5 },
+    { field: 'range52wPct', op: 'lte', value: 60 },
+  ] },
+  { id: 'p-vcp', name: 'VCP setups', conditions: [
+    { field: 'vcpSetup', op: 'is', value: 'YES' },
+  ] },
+]
+
 // Columns shown in the results table (subset of the field catalog, in order).
 const RESULT_COLUMNS = [
   { key: 'price', label: 'Price ₹' },
@@ -24,6 +51,7 @@ const RESULT_COLUMNS = [
   { key: 'ret1Y', label: '1Y %', pct: true },
   { key: 'dist20dHigh', label: '20dH %', pct: true },
   { key: 'dist52wHigh', label: '52wH %', pct: true },
+  { key: 'range52wPct', label: '52w range %', pct: true },
   { key: 'vcpScore', label: 'VCP' },
 ]
 
@@ -466,6 +494,25 @@ export default function Screener() {
         >
           {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? '✓ Saved' : 'Save screen'}
         </button>
+      </div>
+
+      {/* Preset screens — load a condition set with one click. Scope is left
+          as-is so the same question can be asked of holdings or a sector. */}
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1rem' }}>
+        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Presets</span>
+        {PRESET_SCREENS.map(p => (
+          <button
+            key={p.id}
+            onClick={() => setConditions(p.conditions.map(c => ({ ...c })))}
+            title={p.conditions.map(c => `${c.field} ${c.op} ${c.value}`).join('  ·  ')}
+            style={{
+              background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)',
+              borderRadius: '8px', padding: '0.35rem 0.8rem', cursor: 'pointer', fontSize: '0.78rem',
+            }}
+          >
+            {p.name}
+          </button>
+        ))}
       </div>
 
       {running && (
