@@ -3480,7 +3480,13 @@ async function resolveTokenFromMaster(isin, key) {
 async function resolveConstituentsFromRows(rows) {
   if (!rows || rows.length === 0) return [];
 
-  const instruments = rows.map(r => `NSE:${r.symbol}`);
+  // Honour the exchange each row was stored with. theme_instruments has carried
+  // an `exchange` column since it was created; keying every quote to NSE
+  // regardless meant a BSE-listed name was priced off NSE's book. That is not
+  // cosmetic — CGPOWER closed at 826.10 on NSE and 850 on BSE the same session,
+  // so the same stock showed +6.53% here and +3.65% in the broker.
+  const keyFor = (r) => `${(r.exchange || 'NSE').toString().toUpperCase()}:${r.symbol}`;
+  const instruments = rows.map(keyFor);
   const quoteResult = await callWithTimeout({ name: 'get_quotes', arguments: { instruments } });
   const quotes = parseMcpText(quoteResult) || {};
 
@@ -3490,7 +3496,7 @@ async function resolveConstituentsFromRows(rows) {
   }
 
   const constituents = rows.map(r => {
-    const key = `NSE:${r.symbol}`;
+    const key = keyFor(r);
     const q = quotes[key];
     return {
       symbol: r.symbol,
