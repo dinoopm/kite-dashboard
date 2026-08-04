@@ -468,6 +468,13 @@ function Instrument() {
   const { token } = useParams()
   const [searchParams] = useSearchParams()
   const symbol = searchParams.get('symbol')
+  // The exchange the position is actually held on. Kite's tradingsymbol is the
+  // same on both venues but the prices are not: CGPOWER closed at 826.10 on NSE
+  // and 850 on BSE the same day, so quoting a BSE holding against NSE's close
+  // reported +6.69% where the broker showed +3.65%. Defaults to NSE for links
+  // that carry no exchange (search, screener, picks), which are NSE symbols.
+  const exchange = (searchParams.get('exchange') || 'NSE').toUpperCase()
+  const quoteKey = `${exchange}:${symbol}`
   const navigate = useNavigate()
 
   // Resolve a peer's screener slug to its NSE instrument token, then open its
@@ -577,21 +584,20 @@ function Instrument() {
         const res = await fetchWithAbort('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments: [`NSE:${symbol}`] }),
+          body: JSON.stringify({ instruments: [quoteKey] }),
           signal: controller.signal
         });
         const resData = await res.json();
         if (resData?.content?.[0]?.text) {
           const parsed = JSON.parse(resData.content[0].text);
-          const key = `NSE:${symbol}`;
-          if (parsed[key]) setQuote(parsed[key]);
+          if (parsed[quoteKey]) setQuote(parsed[quoteKey]);
         }
       } catch (e) {
         if (e.name === 'AbortError') return;
       }
     })();
     return () => controller.abort();
-  }, [symbol])
+  }, [symbol, quoteKey])
 
   // Fetch canonical company name from Kite (search_instruments)
   useEffect(() => {
@@ -636,7 +642,7 @@ function Instrument() {
       }
     })();
     return () => controller.abort();
-  }, [symbol])
+  }, [symbol, quoteKey])
 
   // Reset annual P&L whenever the symbol changes so a stale previous-symbol
   // series never flashes before the lazy fetch below resolves.
@@ -696,7 +702,7 @@ function Instrument() {
       }
     })();
     return () => controller.abort();
-  }, [symbol])
+  }, [symbol, quoteKey])
 
   // Fetch peer comparison from screener.in (the company's industry listing).
   useEffect(() => {
@@ -719,7 +725,7 @@ function Instrument() {
       }
     })();
     return () => controller.abort();
-  }, [symbol])
+  }, [symbol, quoteKey])
 
   // Fetch annual consolidated balance sheet from screener.in.
   useEffect(() => {
@@ -745,7 +751,7 @@ function Instrument() {
       }
     })();
     return () => controller.abort();
-  }, [symbol])
+  }, [symbol, quoteKey])
 
   // Fetch quarterly shareholding pattern from screener.in.
   useEffect(() => {
@@ -771,7 +777,7 @@ function Instrument() {
       }
     })();
     return () => controller.abort();
-  }, [symbol])
+  }, [symbol, quoteKey])
 
   // Reset alert state whenever the instrument changes so the next fetch
   // doesn't get blocked by the dedup guard below and stale data from the
@@ -792,7 +798,7 @@ function Instrument() {
       try {
         setInstrumentAlertLoading(true);
         const res = await fetchWithAbort(
-          `/api/instrument-alert/${encodeURIComponent(token)}?symbol=${encodeURIComponent(symbol)}`,
+          `/api/instrument-alert/${encodeURIComponent(token)}?symbol=${encodeURIComponent(symbol)}&exchange=${encodeURIComponent(exchange)}`,
           { signal: controller.signal }
         );
         if (res.ok) {
@@ -810,7 +816,7 @@ function Instrument() {
       }
     })();
     return () => controller.abort();
-  }, [symbol, token, activeTab, instrumentAlert, instrumentAlertError])
+  }, [symbol, token, exchange, activeTab, instrumentAlert, instrumentAlertError])
 
   // Fetch indicators
   useEffect(() => {
@@ -861,7 +867,7 @@ function Instrument() {
       }
     })();
     return () => controller.abort();
-  }, [symbol]);
+  }, [symbol, quoteKey]);
 
   // Load the saved note for this symbol.
   useEffect(() => {
@@ -885,7 +891,7 @@ function Instrument() {
       }
     })();
     return () => controller.abort();
-  }, [symbol]);
+  }, [symbol, quoteKey]);
 
   const saveNote = async () => {
     if (!symbol) return;

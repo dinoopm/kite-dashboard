@@ -2179,7 +2179,11 @@ app.get('/api/instrument-alert/:token', async (req, res) => {
     let lastPrice = null;
     let previousClose = null;
     try {
-      const key = `NSE:${symbol}`;
+      // The venue matters: CGPOWER closed at 826.10 on NSE and 850 on BSE the
+      // same session, so pricing a BSE holding off NSE reported +6.69% where
+      // the broker showed +3.65%. Callers that know the holding's exchange
+      // pass it; everything else keeps the NSE default.
+      const key = `${(req.query.exchange || 'NSE').toString().toUpperCase()}:${symbol}`;
       const qr = await callWithTimeout({ name: 'get_quotes', arguments: { instruments: [key] } });
       if (qr?.content?.[0]?.text) {
         const parsed = JSON.parse(qr.content[0].text);
