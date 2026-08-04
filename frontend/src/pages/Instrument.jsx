@@ -575,29 +575,47 @@ function Instrument() {
     return () => window.removeEventListener('keydown', onKey);
   }, [cashflowHelpOpen])
 
-  // Fetch live quote
+  // Fetch live quote.
+  //
+  // Ask BOTH venues and let the token decide, rather than trusting whichever
+  // link brought us here. A dozen places navigate to this page — search, the
+  // basket table, alerts, peers, the journal — and only some know the exchange.
+  // Getting it wrong is not cosmetic: CGPOWER closed at 826.10 on NSE and 850
+  // on BSE the same session, so the NSE reading showed +6.53% against the
+  // broker's +3.53% for an identical last price.
+  //
+  // The URL token IS the venue: Kite issues a distinct instrument_token per
+  // exchange, so matching it against each quote identifies the right book with
+  // no extra round trip and no reliance on the caller.
   useEffect(() => {
     if (!symbol) return;
     const controller = new AbortController();
     (async () => {
       try {
+        const candidates = [...new Set([quoteKey, `NSE:${symbol}`, `BSE:${symbol}`])];
         const res = await fetchWithAbort('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments: [quoteKey] }),
+          body: JSON.stringify({ instruments: candidates }),
           signal: controller.signal
         });
         const resData = await res.json();
         if (resData?.content?.[0]?.text) {
           const parsed = JSON.parse(resData.content[0].text);
-          if (parsed[quoteKey]) setQuote(parsed[quoteKey]);
+          const byToken = token && token !== '0'
+            ? Object.values(parsed).find(q => String(q?.instrument_token) === String(token))
+            : null;
+          // Token match wins; then the exchange we were told; then whatever came
+          // back, so a page reached with no venue at all still shows a price.
+          const picked = byToken || parsed[quoteKey] || Object.values(parsed)[0];
+          if (picked) setQuote(picked);
         }
       } catch (e) {
         if (e.name === 'AbortError') return;
       }
     })();
     return () => controller.abort();
-  }, [symbol, quoteKey])
+  }, [symbol, quoteKey, token])
 
   // Fetch canonical company name from Kite (search_instruments)
   useEffect(() => {
