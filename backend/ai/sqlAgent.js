@@ -93,8 +93,25 @@ RULES:
 - Use ORDER BY trade_date DESC for time-series queries
 `;
 
+// Model is configurable, and the default was measured rather than assumed.
+// Asked one simple and three hard text-to-SQL questions against this schema,
+// all three Groq reasoning-tier candidates produced valid SQL — but not at the
+// same cost, and not all safely:
+//
+//   llama-3.3-70b-versatile   136 / 718 tokens   clean ```sql fence
+//   openai/gpt-oss-120b       378 / 2520         prose + comments to strip
+//   qwen/qwen3.6-27b          467 / -            emits <think> blocks, which
+//                                                extractSql would have to survive
+//
+// Bigger bought no visible correctness here and cost 3.5x the tokens and the
+// latency, on an interactive endpoint where latency is what the user feels.
+// Qwen is actively unsuitable: reasoning traces containing the word SELECT are
+// exactly what the extractor must not pick up.
+//
+// Override with GROQ_MODEL to try another without touching code — which is also
+// what makes re-running that comparison cheap when Groq's catalogue moves.
 const llm = new ChatOpenAI({
-  modelName: 'llama-3.3-70b-versatile',
+  modelName: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
   apiKey: process.env.GROQ_API_KEY,
   configuration: { baseURL: 'https://api.groq.com/openai/v1' },
   temperature: 0,

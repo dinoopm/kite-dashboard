@@ -1041,7 +1041,44 @@ app.get('/api/instrument-info/:symbol', async (req, res) => {
         };
       }
     }
-    instrumentInfoCache[cacheKey] = { data: info, ts: now };
+    // Kite's instrument master carries listings that no longer trade. SCANSTL
+    // resolves to an NSE token that quotes nothing — the stock is BSE-only —
+    // and the Instrument page then asked for history on a dead token and got
+    // "Market data unavailable or restricted by Kite". The search result is
+    // therefore confirmed against a live quote, and the other venue tried when
+    // it fails. One extra call on a cache miss, and only when the caller did
+    // not name an exchange itself.
+    // Tracks whether the live-quote check actually ran. A result that could not
+    // be verified must not be cached for 24h: a transient MCP outage would
+    // otherwise pin a wrong token for a day, which is exactly what happened
+    // while testing this — SCANSTL stayed on its dead NSE listing because the
+    // quote call failed and the unverified answer was cached anyway.
+    let verified = true;
+    if (info.instrument_token && !req.query.exchange) {
+      verified = false;
+      const alt = exchange === 'NSE' ? 'BSE' : 'NSE';
+      try {
+        const qr = await callWithTimeout(
+          { name: 'get_quotes', arguments: { instruments: [`${exchange}:${symbol}`, `${alt}:${symbol}`] } }, 8000);
+        const quotes = qr?.content?.[0]?.text ? JSON.parse(qr.content[0].text) : {};
+        const here = quotes[`${exchange}:${symbol}`];
+        const there = quotes[`${alt}:${symbol}`];
+        if (!here?.instrument_token && there?.instrument_token) {
+          console.log(`[instrument-info] ${symbol}: ${exchange} does not quote — using ${alt}`);
+          info = { ...info, exchange: alt, instrument_token: there.instrument_token };
+        } else if (here?.instrument_token && String(here.instrument_token) !== String(info.instrument_token)) {
+          // The master and the live book disagree; the book is what trades.
+          info = { ...info, instrument_token: here.instrument_token };
+        }
+        // Only a quote that came back tells us anything. An empty response is
+        // an unanswered question, not a confirmation.
+        verified = !!(here?.instrument_token || there?.instrument_token);
+      } catch { /* keep the search result rather than failing the lookup */ }
+    }
+
+    // Serve it either way, but only remember it once it has been confirmed
+    // against a live book, so the next caller retries after an outage.
+    if (verified) instrumentInfoCache[cacheKey] = { data: info, ts: now };
     res.json(info);
   } catch (err) {
     res.status(500).json({ error: err.message, symbol });
