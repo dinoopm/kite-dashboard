@@ -94,3 +94,50 @@ describe('buildRoundTrips', () => {
     assert.equal(unmatchedSellQty, 10, 'the two bad buys never opened a position');
   });
 });
+
+describe('invested (closed trades)', () => {
+  // Mirrors what journalStats sums: qty * entryAvg over closed round trips.
+  const investedOf = (trips) => trips.reduce((sum, t) => sum + (t.qty * t.entryAvg), 0);
+
+  test('counts capital at entry cost, not exit value', () => {
+    const { trips } = buildRoundTrips([
+      fill('2026-07-02', 'BUY', 20, 573),
+      fill('2026-07-10', 'BUY', 20, 563),
+      fill('2026-07-30', 'SELL', 40, 613),
+    ]);
+    // 40 shares at an average entry of 568 = 22,720 deployed, not 24,520 returned.
+    assert.equal(investedOf(trips), 22720);
+    assert.equal(trips[0].pnl, 1800);
+  });
+
+  // The reason this belongs to closed trades: an open position has no round
+  // trip, so it contributes nothing to the figure shown beside win rate.
+  test('excludes a position that is still open', () => {
+    const { trips, open } = buildRoundTrips([
+      fill('2026-07-02', 'BUY', 20, 573),
+      fill('2026-07-30', 'SELL', 5, 613),
+    ]);
+    assert.equal(trips.length, 0);
+    assert.equal(investedOf(trips), 0);
+    assert.ok(open.qty > 0, 'the capital is real, it is just not closed');
+  });
+
+  // Size-weighting is the point: equal-weighted percentages would call this
+  // pair roughly flat, while the money says otherwise.
+  test('return on invested weights by position size', () => {
+    const big = buildRoundTrips([
+      fill('2026-07-01', 'BUY', 100, 100),
+      fill('2026-07-20', 'SELL', 100, 90),   // -10% on 10,000
+    ]).trips;
+    const small = buildRoundTrips([
+      fill('2026-07-01', 'BUY', 1, 100),
+      fill('2026-07-20', 'SELL', 1, 120),    // +20% on 100
+    ]).trips;
+    const trips = [...big, ...small];
+    const cost = investedOf(trips);
+    const pnl = trips.reduce((s, t) => s + t.pnl, 0);
+    assert.equal(cost, 10100);
+    assert.ok(pnl < 0, 'the money lost');
+    assert.ok((pnl / cost) * 100 < -0.9, 'and the weighted return is negative');
+  });
+});

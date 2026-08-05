@@ -22,7 +22,7 @@ function StatCard({ label, value, sub, color }) {
 const inr = (v) => (v == null ? '—' : `${v < 0 ? '−' : ''}₹${Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`)
 
 // Quick ranges: label → days back from today (null = all history, 'ytd' = Jan 1).
-const PRESETS = [['1M', 30], ['3M', 91], ['6M', 182], ['YTD', 'ytd'], ['1Y', 365], ['All', null]]
+const PRESETS = [['1M', 30], ['2M', 61], ['3M', 91], ['6M', 182], ['YTD', 'ytd'], ['1Y', 365], ['All', null]]
 const isoDaysAgo = (d) => { const x = new Date(); x.setDate(x.getDate() - d); return x.toISOString().slice(0, 10) }
 
 export default function Journal() {
@@ -140,14 +140,17 @@ export default function Journal() {
             <StatCard label="Expectancy" value={`${s.expectancyPct >= 0 ? '+' : ''}${s.expectancyPct}%`} sub="mean return per trade" color={s.expectancyPct >= 0 ? GREEN : RED} />
             <StatCard label="Profit factor" value={s.profitFactor ?? '—'} sub="gross wins ÷ gross losses" color={s.profitFactor >= 1 ? GREEN : RED} />
             <StatCard label="Median hold" value={`${s.medianHoldingDays}d`} />
-            {/* Capital still tied up, at FIFO cost from this journal's own
-                fills — so it covers only positions the log can account for,
-                not holdings opened before the backfill window. */}
-            {data.openInvested != null && (
+            {/* Capital deployed in the trades that CLOSED in this window, at
+                FIFO entry cost. Scoped to the same filtered round trips as
+                every other card, so it moves with the period selector. */}
+            {s.invested != null && (
               <StatCard
-                label="Invested (open)"
-                value={inr(data.openInvested)}
-                sub={`${data.openPositionCount} open position${data.openPositionCount === 1 ? '' : 's'} at cost`}
+                label="Invested (closed)"
+                value={inr(s.invested)}
+                sub={s.returnOnInvestedPct != null
+                  ? `${s.returnOnInvestedPct >= 0 ? '+' : ''}${s.returnOnInvestedPct}% on capital deployed`
+                  : 'at entry cost'}
+                color={s.returnOnInvestedPct == null ? undefined : s.returnOnInvestedPct >= 0 ? GREEN : RED}
               />
             )}
             {s.pickTrades > 0 && (

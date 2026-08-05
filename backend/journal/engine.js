@@ -155,6 +155,18 @@ async function journalStats({ from, to } = {}) {
       profitFactor: grossLoss > 0 ? r2(grossWin / grossLoss) : null,
       totalPnl: r2(grossWin - grossLoss),
       medianHoldingDays: holdSorted.length ? holdSorted[Math.floor(holdSorted.length / 2)] : null,
+      // Capital actually deployed in the trades that CLOSED in this window,
+      // at FIFO entry cost. Sits inside `stats` deliberately: everything here
+      // is scoped to the filtered round trips, so switching to 3M moves this
+      // with the rest instead of quietly reporting a different period.
+      invested: r2(trips.reduce((sum, t) => sum + (t.qty * t.entryAvg), 0)),
+      // What that capital returned. The percentage fields above average each
+      // trade equally; this weights by position size, so one large loser is
+      // not offset by several small winners.
+      returnOnInvestedPct: (() => {
+        const cost = trips.reduce((sum, t) => sum + (t.qty * t.entryAvg), 0);
+        return cost > 0 ? r2(((grossWin - grossLoss) / cost) * 100) : null;
+      })(),
       best: trips.reduce((m, t) => (t.pnl > (m?.pnl ?? -Infinity) ? t : m), null),
       worst: trips.reduce((m, t) => (t.pnl < (m?.pnl ?? Infinity) ? t : m), null),
       pickTrades: trips.filter(t => t.wasPick).length,
@@ -163,12 +175,6 @@ async function journalStats({ from, to } = {}) {
     monthly: Object.entries(monthly).sort(([a], [b]) => a.localeCompare(b)).map(([month, pnl]) => ({ month, pnl })),
     trips: trips.slice(0, 200),
     openPositions,
-    // Capital currently tied up in still-open positions, at FIFO cost. Derived
-    // from the journal's own fills, so it counts only what this log can account
-    // for — positions opened before the backfill window are absent from
-    // openPositions and therefore from this total too.
-    openInvested: r2(openPositions.reduce((sum, p) => sum + (p.qty * p.avgPrice), 0)),
-    openPositionCount: openPositions.length,
     unmatchedSellQty: unmatched,
   };
 }
