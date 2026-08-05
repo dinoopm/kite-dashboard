@@ -340,8 +340,26 @@ function Portfolio() {
           >
             Mutual Funds
           </button>
+          <button
+            onClick={() => setActiveTab('stops')}
+            className={activeTab === 'stops' ? 'active-tab' : 'inactive-tab'}
+            style={{
+              padding: '0.8rem 1.5rem',
+              borderRadius: '12px',
+              border: 'none',
+              cursor: 'pointer',
+              fontWeight: '600',
+              background: activeTab === 'stops' ? 'var(--accent)' : 'var(--bg-card)',
+              color: '#fff',
+              transition: 'all 0.3s ease'
+            }}
+            title="Trailing stop levels for these holdings — read-only, nothing is sent to the broker"
+          >
+            Protective Stops
+          </button>
         </div>
 
+        {activeTab !== 'stops' && (
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <input
             type="text"
@@ -399,6 +417,7 @@ function Portfolio() {
             ⤓ Export CSV
           </button>
         </div>
+        )}
       </div>
 
       {activeTab === 'equity' ? (
@@ -574,10 +593,13 @@ function Portfolio() {
           ) : (
             <p>No equity holdings found matching your search.</p>
           )}
-          {/* Stop levels for these holdings. Read-only: renders what the daily
-              job computed and can send nothing to the broker. */}
-          <StopProposals />
         </section>
+      ) : activeTab === 'stops' ? (
+        /* Read-only: renders what the daily job computed and can send nothing
+           to the broker. Its own tab rather than a footer on the holdings
+           table — the breached list is a thing to sit and read, not something
+           to scroll past on the way somewhere else. */
+        <StopProposals />
       ) : (
         <section className="glass-panel animate-in">
           <h2 style={{ marginBottom: '1.5rem' }}>Mutual Fund Holdings</h2>
