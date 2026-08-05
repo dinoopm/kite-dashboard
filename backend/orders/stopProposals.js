@@ -166,7 +166,7 @@ async function saveProposals(rows, proposedOn) {
  * out of this module is what lets the computation be tested without a network.
  *
  * @param fetchHoldings () => holdings[]  (Kite shape)
- * @param fetchBars     (symbol, exchange) => bars[]
+ * @param fetchBars     (symbol, exchange, instrumentToken) => bars[]
  * @param sinceBySymbol optional map symbol -> entry date, from the journal
  */
 async function buildProposals({ fetchHoldings, fetchBars, sinceBySymbol = {}, proposedOn = null } = {}) {
@@ -182,7 +182,7 @@ async function buildProposals({ fetchHoldings, fetchBars, sinceBySymbol = {}, pr
     const exchange = (h.exchange || 'NSE').toUpperCase();
     let bars = null;
     try {
-      bars = await fetchBars(symbol, exchange);
+      bars = await fetchBars(symbol, exchange, h.instrument_token);
     } catch { /* recorded as a rejection below */ }
 
     rows.push(computeStopProposal({

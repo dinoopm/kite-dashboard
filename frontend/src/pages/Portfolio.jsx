@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import EyeIcon from '../components/EyeIcon'
+import StopProposals from '../components/StopProposals'
 
 // X-Ray badge palette — same tones the analytics panels use.
 const XRAY_TONES = {
@@ -573,6 +574,9 @@ function Portfolio() {
           ) : (
             <p>No equity holdings found matching your search.</p>
           )}
+          {/* Stop levels for these holdings. Read-only: renders what the daily
+              job computed and can send nothing to the broker. */}
+          <StopProposals />
         </section>
       ) : (
         <section className="glass-panel animate-in">

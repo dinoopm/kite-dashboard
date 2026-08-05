@@ -5705,7 +5705,22 @@ registerTradeSync(() => (mcpClient ? syncTodayTrades() : Promise.resolve({ skipp
 // The rule (4x ATR trail) is the one backend/stopStudy.js measured as best over
 // all 49 closed round trips; see that file for the sweep and its costs.
 const { buildProposals, listProposals } = require('./orders/stopProposals');
-const { fetchBars: fetchDailyBars } = require('./stopStudy');
+
+// Bars come from Kite, not Yahoo. Yahoo needs a symbol GUESS (.NS then .BO) to
+// find an instrument, which is the same class of assumption that priced a BSE
+// holding off NSE's book. An instrument_token is exact: it names one book on
+// one exchange, so a BSE holding is measured against BSE's own bars. It is also
+// the feed the rest of the app already trusts, and getOrFetchFullHistory caches
+// four years of it per token, so this adds no new fetching for names the
+// backtester or screener has already warmed.
+async function kiteDailyBars(instrumentToken) {
+  if (!instrumentToken) return null;
+  const { data } = await getOrFetchFullHistory(instrumentToken);
+  if (!Array.isArray(data)) return null;
+  return data
+    .filter(c => c.close != null && c.high != null && c.low != null)
+    .map(c => ({ date: String(c.date).slice(0, 10), high: c.high, low: c.low, close: c.close }));
+}
 
 async function kiteHoldings() {
   const result = await callWithTimeout({ name: 'get_holdings', arguments: {} }, 15000);
@@ -5728,7 +5743,7 @@ registerStopProposals(async () => {
 
   return buildProposals({
     fetchHoldings: kiteHoldings,
-    fetchBars: (symbol) => fetchDailyBars(symbol, '2024-01-01', new Date().toISOString().slice(0, 10)),
+    fetchBars: (symbol, exchange, token) => kiteDailyBars(token),
     sinceBySymbol,
   });
 });
