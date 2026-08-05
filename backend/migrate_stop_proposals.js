@@ -9,7 +9,9 @@
 //
 // `status` lifecycle:
 //   proposed  — computed and shown, nothing sent
-//   rejected  — failed a safety check (stop above price, cap breach, no qty)
+//   breached  — computed fine; the position is ALREADY below its trail, so no
+//               order is proposed (placing one would be a market sell)
+//   rejected  — could not be computed (no quantity, too little history)
 //   placed    — a GTT exists at the broker for it
 //   failed    — placement was attempted and the broker refused
 //   cancelled — the GTT is gone (cancelled at the broker, or superseded)
@@ -34,6 +36,13 @@ create table if not exists stop_proposals (
   avg_price        numeric,
   rule             text not null,
   worst_case_loss  numeric,
+  -- How far the trigger sits below spot, for a proposal.
+  distance_pct     numeric,
+  -- For a breached position: the trail level price fell through, and by how
+  -- much. A breach proposes no order, so it has no trigger_price — these two
+  -- carry the finding instead.
+  breached_level   numeric,
+  below_trail_pct  numeric,
   status           text not null default 'proposed',
   reject_reason    text,
   broker_order_id  text,
