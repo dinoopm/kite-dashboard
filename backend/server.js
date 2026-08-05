@@ -5136,7 +5136,7 @@ const PICKS_TTL = 10 * 60 * 1000; // 10 min
 // database instead of trusting an in-memory flag.
 //
 // Manual trigger for when you don't want to wait for the next tick.
-const { runOnce: runDailyJobsOnce, startDailyJobs, registerTradeSync } = require('./dailyJobs');
+const { runOnce: runDailyJobsOnce, startDailyJobs, registerTradeSync, registerStopProposals } = require('./dailyJobs');
 app.post('/api/daily-jobs/run', async (req, res) => {
   try {
     res.json(await runDailyJobsOnce({ force: req.query.force === '1' }));
@@ -5696,6 +5696,52 @@ async function syncTodayTrades() {
 // timer rather than off a page view — a day the server never asked is a day
 // those trades cannot be recovered from the API at all.
 registerTradeSync(() => (mcpClient ? syncTodayTrades() : Promise.resolve({ skipped: 'MCP not connected' })));
+
+// ─── Protective-stop proposals ───────────────────────────────────────────────
+// Computes a trailing stop for each holding and records it. This path CANNOT
+// reach the broker — it only writes rows to Supabase. Placement is a separate,
+// explicitly confirmed action.
+//
+// The rule (4x ATR trail) is the one backend/stopStudy.js measured as best over
+// all 49 closed round trips; see that file for the sweep and its costs.
+const { buildProposals, listProposals } = require('./orders/stopProposals');
+const { fetchBars: fetchDailyBars } = require('./stopStudy');
+
+async function kiteHoldings() {
+  const result = await callWithTimeout({ name: 'get_holdings', arguments: {} }, 15000);
+  const txt = result?.content?.[0]?.text;
+  if (result?.isError || !txt) throw new Error(txt || 'get_holdings failed');
+  const parsed = JSON.parse(txt);
+  return parsed.data || parsed;
+}
+
+registerStopProposals(async () => {
+  if (!mcpClient) return { skipped: 'MCP not connected' };
+  // Entry dates come from the journal where it has them, so the trail ratchets
+  // from when the position was actually opened rather than from an arbitrary
+  // lookback. Missing entries simply fall back to the full bar window.
+  const sinceBySymbol = {};
+  try {
+    const stats = await journalStats();
+    for (const p of stats.openPositions || []) sinceBySymbol[p.symbol] = p.since;
+  } catch { /* the trail still works without it */ }
+
+  return buildProposals({
+    fetchHoldings: kiteHoldings,
+    fetchBars: (symbol) => fetchDailyBars(symbol, '2024-01-01', new Date().toISOString().slice(0, 10)),
+    sinceBySymbol,
+  });
+});
+
+// Read-only. Returns what WOULD be placed, and what was rejected and why.
+app.get('/api/orders/stop-proposals', async (req, res) => {
+  try {
+    res.json({ proposals: await listProposals({ on: req.query.on || null }) });
+  } catch (err) {
+    console.error('[stop-proposals]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.post('/api/journal/sync', async (req, res) => {
   try {

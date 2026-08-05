@@ -84,6 +84,13 @@ async function picksSnapshotDue() {
 let syncTradesFn = null;
 function registerTradeSync(fn) { syncTradesFn = fn; }
 
+// Protective-stop proposals. Injected for the same reason as the trade sync:
+// building them needs live holdings, which come from the Kite MCP client in
+// server.js. This only ever WRITES PROPOSALS — nothing here can reach the
+// broker, and placement stays behind an explicit human click.
+let stopProposalsFn = null;
+function registerStopProposals(fn) { stopProposalsFn = fn; }
+
 /**
  * One pass of every daily recording job.
  *
@@ -92,7 +99,7 @@ function registerTradeSync(fn) { syncTradesFn = fn; }
  * to also stop recording price signals.
  */
 async function runDailyJobs({ force = false } = {}) {
-  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null };
+  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null, stops: null };
 
   // Trades first, and on EVERY tick rather than once a day. Kite exposes only
   // the CURRENT day's fills, so a day this does not run is a day whose trades
@@ -159,6 +166,20 @@ async function runDailyJobs({ force = false } = {}) {
     console.error('[daily] signal recording failed (will retry next tick):', err.message);
   }
 
+  // Proposals follow the price data: recompute once bhavcopy has a new session,
+  // not on every 30-minute tick. Same gate as the emission recorder, and the
+  // same reason — the expensive read has nothing new to say in between.
+  if (stopProposalsFn) {
+    try {
+      const r = await stopProposalsFn();
+      out.stops = r;
+      if (r?.proposed) console.log(`[daily] stop proposals: ${r.proposed} proposed, ${r.rejected} rejected (${r.rule})`);
+    } catch (err) {
+      out.stops = { error: err.message };
+      console.warn('[daily] stop proposals failed (will retry next tick):', err.message);
+    }
+  }
+
   return out;
 }
 
@@ -180,4 +201,4 @@ function startDailyJobs() {
   return () => { clearTimeout(first); clearInterval(timer); };
 }
 
-module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, picksSnapshotDue, snapshotIsDue, isoMinus };
+module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, registerStopProposals, picksSnapshotDue, snapshotIsDue, isoMinus };

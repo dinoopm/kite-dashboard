@@ -261,4 +261,4 @@ async function runStopStudy(trips, { onProgress = null } = {}) {
   };
 }
 
-module.exports = { runStopStudy, replayStop, stopSeries, RULES, MIN_TRIPS };
+module.exports = { runStopStudy, replayStop, stopSeries, fetchBars, RULES, MIN_TRIPS };
