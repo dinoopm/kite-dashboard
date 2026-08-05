@@ -166,14 +166,27 @@ async function runDailyJobs({ force = false } = {}) {
     console.error('[daily] signal recording failed (will retry next tick):', err.message);
   }
 
-  // Proposals follow the price data: recompute once bhavcopy has a new session,
-  // not on every 30-minute tick. Same gate as the emission recorder, and the
-  // same reason — the expensive read has nothing new to say in between.
+  // Once per session, not once per tick. Each run fetches holdings plus a year
+  // of daily bars for every one of them — ~26 external requests — and the stop
+  // levels are computed from DAILY bars, so 48 runs a day would produce the
+  // same answer 47 times. Completion is decided by asking the table whether
+  // today already has rows, the same DB-decided pattern as the picks snapshot,
+  // so a restart neither redoes the work nor skips it.
   if (stopProposalsFn) {
     try {
-      const r = await stopProposalsFn();
-      out.stops = r;
-      if (r?.proposed) console.log(`[daily] stop proposals: ${r.proposed} proposed, ${r.rejected} rejected (${r.rule})`);
+      const today = new Date().toISOString().slice(0, 10);
+      const { count, error } = await supabase.from('stop_proposals')
+        .select('id', { count: 'exact', head: true }).eq('proposed_on', today);
+      if (error) throw new Error(`stop_proposals: ${error.message}`);
+      if (!force && count > 0) {
+        // Skip this job only — never return early, or a job added after this
+        // one would be silently skipped along with it.
+        out.stops = { skipped: 'already computed today', proposedOn: today, rows: count };
+      } else {
+        const r = await stopProposalsFn();
+        out.stops = r;
+        if (r?.proposed) console.log(`[daily] stop proposals: ${r.proposed} proposed, ${r.breached} breached, ${r.rejected} rejected (${r.rule})`);
+      }
     } catch (err) {
       out.stops = { error: err.message };
       console.warn('[daily] stop proposals failed (will retry next tick):', err.message);
