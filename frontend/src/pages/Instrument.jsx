@@ -7,6 +7,7 @@ import AlertRow from '../components/alerts/AlertRow'
 import SignalChart from '../components/SignalChart'
 import { generateSignals } from '../lib/signalEngine'
 import { growthPill, expensePill, marginPill, cashflowPill } from '../lib/growthPill'
+import { quoteCandidates, pickQuote } from '../lib/pickQuote'
 import ConvictionModal from '../components/alerts/ConvictionModal'
 import TradePlanModal from '../components/alerts/TradePlanModal'
 import ValuationPanel from '../components/ValuationPanel'
@@ -592,22 +593,15 @@ function Instrument() {
     const controller = new AbortController();
     (async () => {
       try {
-        const candidates = [...new Set([quoteKey, `NSE:${symbol}`, `BSE:${symbol}`])];
         const res = await fetchWithAbort('/api/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments: candidates }),
+          body: JSON.stringify({ instruments: quoteCandidates(symbol, exchange) }),
           signal: controller.signal
         });
         const resData = await res.json();
         if (resData?.content?.[0]?.text) {
-          const parsed = JSON.parse(resData.content[0].text);
-          const byToken = token && token !== '0'
-            ? Object.values(parsed).find(q => String(q?.instrument_token) === String(token))
-            : null;
-          // Token match wins; then the exchange we were told; then whatever came
-          // back, so a page reached with no venue at all still shows a price.
-          const picked = byToken || parsed[quoteKey] || Object.values(parsed)[0];
+          const picked = pickQuote(JSON.parse(resData.content[0].text), { token, quoteKey });
           if (picked) setQuote(picked);
         }
       } catch (e) {
@@ -615,7 +609,7 @@ function Instrument() {
       }
     })();
     return () => controller.abort();
-  }, [symbol, quoteKey, token])
+  }, [symbol, exchange, quoteKey, token])
 
   // Fetch canonical company name from Kite (search_instruments)
   useEffect(() => {

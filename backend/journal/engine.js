@@ -163,6 +163,12 @@ async function journalStats({ from, to } = {}) {
     monthly: Object.entries(monthly).sort(([a], [b]) => a.localeCompare(b)).map(([month, pnl]) => ({ month, pnl })),
     trips: trips.slice(0, 200),
     openPositions,
+    // Capital currently tied up in still-open positions, at FIFO cost. Derived
+    // from the journal's own fills, so it counts only what this log can account
+    // for — positions opened before the backfill window are absent from
+    // openPositions and therefore from this total too.
+    openInvested: r2(openPositions.reduce((sum, p) => sum + (p.qty * p.avgPrice), 0)),
+    openPositionCount: openPositions.length,
     unmatchedSellQty: unmatched,
   };
 }

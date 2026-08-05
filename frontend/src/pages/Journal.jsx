@@ -140,6 +140,16 @@ export default function Journal() {
             <StatCard label="Expectancy" value={`${s.expectancyPct >= 0 ? '+' : ''}${s.expectancyPct}%`} sub="mean return per trade" color={s.expectancyPct >= 0 ? GREEN : RED} />
             <StatCard label="Profit factor" value={s.profitFactor ?? '—'} sub="gross wins ÷ gross losses" color={s.profitFactor >= 1 ? GREEN : RED} />
             <StatCard label="Median hold" value={`${s.medianHoldingDays}d`} />
+            {/* Capital still tied up, at FIFO cost from this journal's own
+                fills — so it covers only positions the log can account for,
+                not holdings opened before the backfill window. */}
+            {data.openInvested != null && (
+              <StatCard
+                label="Invested (open)"
+                value={inr(data.openInvested)}
+                sub={`${data.openPositionCount} open position${data.openPositionCount === 1 ? '' : 's'} at cost`}
+              />
+            )}
             {s.pickTrades > 0 && (
               <StatCard label="Quant-pick entries" value={`${s.pickWinRate}%`} sub={`win rate over ${s.pickTrades} pick trades`}
                 color={s.pickWinRate >= (s.winRate || 0) ? GREEN : RED} />
