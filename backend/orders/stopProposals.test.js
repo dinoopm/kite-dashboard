@@ -74,13 +74,23 @@ describe('computeStopProposal', () => {
 
   // The dangerous case: a position already below its own trail. Placing this
   // would be a market sell dressed as a stop.
-  test('refuses a stop at or above spot instead of selling immediately', () => {
+  // The live form of the NEWGEN pattern: the position fell through its stop
+  // some time ago. This is a finding, not a failure, so it gets its own status
+  // rather than being filed next to 'no quantity held'.
+  test('reports a position already below its trail as breached, not rejected', () => {
     const rising = Array.from({ length: 80 }, (_, i) => bar(i, 100 + i * 2));
-    // Spot has collapsed far below where the ratcheted trail sits.
     const p = computeStopProposal(holding({ last_price: 50, quantity: 10 }), rising);
-    assert.equal(p.status, 'rejected');
-    assert.match(p.reject_reason, /at or above last price/);
-    assert.equal(p.trigger_price, null, 'a rejection carries no trigger to place');
+    assert.equal(p.status, 'breached');
+    assert.ok(p.breached_level > 50, 'carries the level it fell through');
+    assert.ok(p.below_trail_pct > 0, 'and how far below it now sits');
+    assert.equal(p.trigger_price, null, 'proposes no order — that would be a market sell');
+    assert.equal(p.worst_case_loss, null);
+  });
+
+  test('a breach is never counted as a computation failure', () => {
+    const rising = Array.from({ length: 80 }, (_, i) => bar(i, 100 + i * 2));
+    const p = computeStopProposal(holding({ last_price: 50, quantity: 10 }), rising);
+    assert.notEqual(p.status, 'rejected');
   });
 
   test('rejects a stop implying a fall beyond the cap', () => {

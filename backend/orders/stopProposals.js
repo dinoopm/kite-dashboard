@@ -79,6 +79,23 @@ function computeStopProposal(holding, bars, { sinceDate = null, limits = LIMITS 
   };
 
   const reject = (reason) => ({ ...base, status: 'rejected', reject_reason: reason, trigger_price: null, worst_case_loss: null });
+  // `breached` is deliberately NOT a rejection. A rejection means "this could
+  // not be computed"; a breach means "it computed fine, and the answer is that
+  // this position fell through its stop some time ago". That is the single most
+  // useful thing this module can say — it is the live form of the pattern the
+  // journal recorded as NEWGEN, held 456 days at -48% — so it must not be
+  // filed away next to 'no quantity held'. It carries the trail level and how
+  // far below it price now sits, and it proposes no order: placing a stop above
+  // spot would be a market sell wearing a stop's clothes.
+  const breached = (trail) => ({
+    ...base,
+    status: 'breached',
+    reject_reason: `price ${base.last_price} is ${r2(((trail - base.last_price) / trail) * 100)}% below the ${r2(trail)} trail`,
+    trigger_price: null,
+    breached_level: r2(trail),
+    below_trail_pct: r2(((trail - base.last_price) / trail) * 100),
+    worst_case_loss: null,
+  });
 
   if (!(base.quantity > 0)) return reject('no quantity held');
   if (!Number.isFinite(base.last_price) || base.last_price <= 0) return reject('no usable last price');
@@ -92,9 +109,7 @@ function computeStopProposal(holding, bars, { sinceDate = null, limits = LIMITS 
   // A trail computed on a position that has fallen a long way can sit ABOVE
   // spot. That is not a stop, it is a market sell — refuse and say so, rather
   // than quietly placing an order that executes immediately.
-  if (trigger >= base.last_price) {
-    return reject(`stop ${r2(trigger)} is at or above last price ${base.last_price} — the position is already below its trail`);
-  }
+  if (trigger >= base.last_price) return breached(trigger);
 
   const distancePct = ((base.last_price - trigger) / base.last_price) * 100;
   if (distancePct < limits.minDistancePct) {
@@ -185,6 +200,7 @@ async function buildProposals({ fetchHoldings, fetchBars, sinceBySymbol = {}, pr
     rule: RULE.name,
     holdings: holdings?.length || 0,
     proposed: rows.filter(r => r.status === 'proposed').length,
+    breached: rows.filter(r => r.status === 'breached').length,
     rejected: rows.filter(r => r.status === 'rejected').length,
     ...persisted,
     rows,
