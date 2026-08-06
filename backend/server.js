@@ -5518,6 +5518,8 @@ app.get('/api/events', async (req, res) => {
     const events = rows.filter(e => e.date >= today)
       .map(e => ({ ...e, held: held.has(e.symbol) }))
       .sort((a, b) => a.date.localeCompare(b.date) || (b.held - a.held));
+    // India only, by design — the page has a US tab backed by
+    // /api/us/earnings-calendar, which is where US names belong.
     res.json({ events, holdings: [...held], source: 'NSE event calendar + your events' });
   } catch (err) {
     res.status(502).json({ error: err.message });

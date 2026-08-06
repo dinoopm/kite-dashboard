@@ -1059,33 +1059,69 @@ router.get('/breadth', async (req, res) => {
 // ─── GET /api/us/events/:symbol — next earnings + ex-dividend (Yahoo) ───────
 const usEventsCache = {}; // sym -> { data, ts }
 const US_EVENTS_TTL = 12 * 60 * 60 * 1000;
-router.get('/events/:symbol', async (req, res) => {
-  const sym = req.params.symbol.toUpperCase();
+/**
+ * Next earnings window and dividend dates for one US symbol.
+ *
+ * Pulled out of the route so the Corporate Events page can fan it out over a
+ * whole basket. Cached per symbol for 12h — the answer moves about once a
+ * quarter, and the calendar page asks for many symbols at once.
+ */
+async function usSymbolEvents(symbol) {
+  const sym = String(symbol || '').toUpperCase();
+  if (!sym) return null;
   const hit = usEventsCache[sym];
-  if (hit && Date.now() - hit.ts < US_EVENTS_TTL) return res.json({ ...hit.data, cached: true });
+  if (hit && Date.now() - hit.ts < US_EVENTS_TTL) return { ...hit.data, cached: true };
+
+  const q = await yf.quoteSummary(sym, { modules: ['calendarEvents'] });
+  const ce = q.calendarEvents || {};
+  const iso = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+  // earningsDate is a 1–2 element window (Yahoo gives a range until
+  // confirmed) — and when the NEXT report isn't scheduled yet, Yahoo hands
+  // back the LAST one. Only report a window that hasn't fully passed.
+  const earningsDates = (ce.earnings?.earningsDate || []).map(iso).filter(Boolean);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const upcoming = earningsDates.length && earningsDates[earningsDates.length - 1] >= todayIso;
+  const data = {
+    symbol: sym,
+    earnings: upcoming ? { from: earningsDates[0], to: earningsDates[earningsDates.length - 1] } : null,
+    exDividendDate: iso(ce.exDividendDate),
+    dividendDate: iso(ce.dividendDate),
+    source: 'Yahoo Finance calendarEvents',
+  };
+  usEventsCache[sym] = { data, ts: Date.now() };
+  return data;
+}
+
+router.get('/events/:symbol', async (req, res) => {
   try {
-    const q = await yf.quoteSummary(sym, { modules: ['calendarEvents'] });
-    const ce = q.calendarEvents || {};
-    const iso = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null);
-    // earningsDate is a 1–2 element window (Yahoo gives a range until
-    // confirmed) — and when the NEXT report isn't scheduled yet, Yahoo hands
-    // back the LAST one. Only report a window that hasn't fully passed.
-    const earningsDates = (ce.earnings?.earningsDate || []).map(iso).filter(Boolean);
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const upcoming = earningsDates.length && earningsDates[earningsDates.length - 1] >= todayIso;
-    const data = {
-      symbol: sym,
-      earnings: upcoming ? { from: earningsDates[0], to: earningsDates[earningsDates.length - 1] } : null,
-      exDividendDate: iso(ce.exDividendDate),
-      dividendDate: iso(ce.dividendDate),
-      source: 'Yahoo Finance calendarEvents',
-    };
-    usEventsCache[sym] = { data, ts: Date.now() };
-    res.json(data);
+    res.json(await usSymbolEvents(req.params.symbol));
   } catch (err) {
     res.status(err.statusCode || 502).json({ error: err.message });
   }
 });
+
+/**
+ * The US symbols the user actually watches: everything in a US basket, plus
+ * anything held in a US virtual portfolio. These live in their own tables —
+ * the India events page walks theme_instruments and has never seen them, which
+ * is why a QBTS earnings date showed on the instrument page and nowhere else.
+ */
+async function usWatchedSymbols() {
+  const [basketsR, portfoliosR] = await Promise.allSettled([
+    supabase.from('us_baskets').select('symbols'),
+    supabase.from('us_virtual_portfolios').select('holdings'),
+  ]);
+  const out = new Set();
+  if (basketsR.status === 'fulfilled') {
+    for (const b of basketsR.value.data || []) for (const s of b.symbols || []) out.add(String(s).toUpperCase());
+  }
+  if (portfoliosR.status === 'fulfilled') {
+    for (const p of portfoliosR.value.data || []) for (const h of p.holdings || []) {
+      if (h?.symbol) out.add(String(h.symbol).toUpperCase());
+    }
+  }
+  return [...out];
+}
 
 // ─── GET /api/us/treasury-10y — US 10Y Treasury yield series ─────────────────
 // The risk-free rate that drives equity valuations and FII flows. The LIVE
@@ -1195,8 +1231,18 @@ router.get('/earnings-calendar', async (req, res) => {
     return res.json({ ...earningsCalCache.data, cached: true });
   }
   try {
+    // "Your" US symbols: union of basket symbol arrays + portfolio holdings.
+    // Resolved BEFORE the universe is built, not after. They used to be looked
+    // up only to flag rows the index scan had already produced, which meant a
+    // symbol outside the S&P 500 and Nasdaq 100 was never queried, never
+    // appeared, and so could never be flagged. Every small-cap in a basket was
+    // invisible on this page — QBTS, RGTI, GSAT, ASTS, LUNR, IONQ — while
+    // NVDA and RKLB showed up fine because they happen to be index members.
+    const mine = await usWatchedSymbols();
+    const mineSet = new Set(mine);
+
     const [sp, ndx] = await Promise.all([getSP500().catch(() => []), getNasdaq100().catch(() => [])]);
-    const symbols = [...new Set([...sp, ...ndx].map(x => x.symbol))];
+    const symbols = [...new Set([...[...sp, ...ndx].map(x => x.symbol), ...mine])];
 
     // Yahoo uses dashes for share classes (BRK-B), the universe lists use
     // dots (BRK.B) — query in Yahoo form, report in the app's form. Dotted
@@ -1226,26 +1272,15 @@ router.get('/earnings-calendar', async (req, res) => {
       } catch (e) { console.warn('[earnings-calendar] chunk failed:', e.message); }
     }
 
-    // "Your" US symbols: union of basket symbol arrays + portfolio holdings.
-    const mine = new Set();
-    if (supabase) {
-      const [bk, pf] = await Promise.all([
-        supabase.from('us_baskets').select('symbols'),
-        supabase.from('us_virtual_portfolios').select('holdings'),
-      ]);
-      for (const b of bk.data || []) for (const s of b.symbols || []) mine.add(String(s).toUpperCase());
-      for (const p of pf.data || []) for (const h of p.holdings || []) if (h?.symbol) mine.add(String(h.symbol).toUpperCase());
-    }
-
     const today = new Date().toISOString().slice(0, 10);
     const horizon = new Date(); horizon.setDate(horizon.getDate() + 60);
     const hz = horizon.toISOString().slice(0, 10);
     const events = rows
       .filter(r => r.date >= today && r.date <= hz)
-      .map(r => ({ ...r, mine: mine.has(r.symbol) }))
+      .map(r => ({ ...r, mine: mineSet.has(r.symbol) }))
       .sort((a, b) => a.date.localeCompare(b.date) || (b.marketCap ?? 0) - (a.marketCap ?? 0));
 
-    const data = { events, universe: symbols.length, source: 'Yahoo batched quotes over S&P 500 + Nasdaq 100' };
+    const data = { events, universe: symbols.length, source: `Yahoo batched quotes over S&P 500 + Nasdaq 100 + ${mine.length} symbols you track` };
     earningsCalCache = { data, ts: Date.now() };
     res.json(data);
   } catch (err) {
