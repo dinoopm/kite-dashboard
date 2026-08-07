@@ -78,6 +78,12 @@ using *today's* surveillance list and revised feeds, so it flatters. Where it an
   flag set before the write succeeded, which is why `stock_pick_snapshots` is
   missing 2026-07-16 and 07-17. Those days cannot be recovered — a snapshot
   reconstructed after the fact is not the same evidence.
+- A gap nobody can ever fix is declared in `ACKNOWLEDGED_GAPS` (`dataHealth.js`)
+  with its cause, so the integrity banner stops nagging about it and stays
+  credible for gaps that *are* actionable. Declaring one is a claim that the cause
+  is known and the data is unrecoverable, never a way to quiet an inconvenient
+  number — undeclared dates still raise the banner, and the declared ones keep
+  showing up as a caveat on the scorecard whose `n` they shorten.
 
 ## Style
 

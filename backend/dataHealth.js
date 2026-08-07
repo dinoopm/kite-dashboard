@@ -47,6 +47,34 @@ function findGaps(tableDates, indexDates, since) {
 }
 
 /**
+ * Gaps that are real, understood, and can never be filled.
+ *
+ * An entry here is not a mute button. It is a claim that the cause is known and
+ * the data is unrecoverable, which is why each one has to carry its reason —
+ * a date silenced without a stated cause is indistinguishable from one silenced
+ * because it was inconvenient. Dates NOT declared here still raise the banner,
+ * so a recorder that breaks tomorrow is exactly as loud as it ever was.
+ *
+ * The point of declaring them is that a warning which can never be cleared
+ * gets ignored, and then the next real gap is ignored with it.
+ */
+const ACKNOWLEDGED_GAPS = {
+  stock_pick_snapshots: {
+    dates: ['2026-07-16', '2026-07-17'],
+    reason: 'Daily recording fired lazily off a page view and set its done-flag before the write landed (it runs on a timer in dailyJobs.js now). A snapshot reconstructed after the fact is not the same evidence, so these two cannot be recovered.',
+  },
+};
+
+/** Split found gaps into ones worth an alarm and ones already accounted for. */
+function partitionGaps(gaps, acknowledged) {
+  const known = new Set(acknowledged?.dates || []);
+  return {
+    gaps: gaps.filter(d => !known.has(d)),
+    acknowledged: gaps.filter(d => known.has(d)),
+  };
+}
+
+/**
  * How stale a feed is, measured in index sessions rather than calendar days —
  * a feed last written on Friday is not "3 days behind" on Monday, it is current.
  *
@@ -127,7 +155,8 @@ async function checkDataHealth({ since = '2026-04-01' } = {}) {
   for (const f of FEEDS) {
     try {
       const dates = await fetchDates(f.table, f.col, f.probe);
-      const gaps = findGaps(dates, indexDates);
+      const declared = ACKNOWLEDGED_GAPS[f.table];
+      const { gaps, acknowledged } = partitionGaps(findGaps(dates, indexDates), declared);
       const fresh = checkFreshness(dates[dates.length - 1], indexDates, { graceSessions: f.grace });
       feeds.push({
         table: f.table, label: f.label,
@@ -136,6 +165,10 @@ async function checkDataHealth({ since = '2026-04-01' } = {}) {
         sessionsBehind: fresh.sessionsBehind,
         stale: fresh.stale,
         gaps,
+        // Reported so the fact survives in the payload, but deliberately not
+        // part of `ok` — nothing downstream can act on it.
+        acknowledged,
+        acknowledgedReason: acknowledged.length ? declared.reason : null,
         ok: !fresh.stale && gaps.length === 0,
       });
     } catch (err) {
@@ -162,4 +195,7 @@ function logDataHealth(report) {
   }
 }
 
-module.exports = { checkDataHealth, logDataHealth, findGaps, checkFreshness };
+module.exports = {
+  checkDataHealth, logDataHealth, findGaps, checkFreshness,
+  partitionGaps, ACKNOWLEDGED_GAPS,
+};

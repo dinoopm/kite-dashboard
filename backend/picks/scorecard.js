@@ -25,8 +25,22 @@
 
 const { scoreSignal, summarise } = require('../signalScoring');
 const { fetchAll, buildMarketContext, BENCHMARK } = require('../signals/marketSeries');
+const { ACKNOWLEDGED_GAPS } = require('../dataHealth');
 
 const HORIZONS = [5, 10, 22]; // trading days: ~1 week, ~2 weeks, ~1 month
+
+// The snapshot days that were never written. dataHealth declares them so the
+// feed-integrity banner stops nagging about something nobody can fix; here they
+// matter for the opposite reason. Every `n` below is genuinely short by those
+// days, and that belongs beside the number it weakens rather than in a banner
+// about broken feeds — a missing snapshot distorts no arithmetic, it just means
+// less evidence than the count implies.
+const MISSING_SNAPSHOTS = ACKNOWLEDGED_GAPS.stock_pick_snapshots;
+
+/** Declared-missing snapshot days falling inside a scored period. */
+function missingInPeriod(first, last) {
+  return (MISSING_SNAPSHOTS?.dates || []).filter(d => d >= first && d <= last);
+}
 
 /** Every recorded emission, oldest first. */
 async function fetchEmissions() {
@@ -85,13 +99,19 @@ async function runScorecard() {
   const top10 = scoreSignal(emissions.filter(e => e.rank <= 10), seriesBySymbol, opts);
 
   const snapDates = [...new Set(emissions.map(e => e.date))];
+  const lastDate = snapDates[snapDates.length - 1];
+  const lostSnapshots = missingInPeriod(firstDate, lastDate);
   return {
     params: { horizons: HORIZONS, benchmark: BENCHMARK, topSlice: 10 },
-    period: { first: firstDate, last: snapDates[snapDates.length - 1], snapshotDays: snapDates.length, emissions: emissions.length },
+    period: { first: firstDate, last: lastDate, snapshotDays: snapDates.length, emissions: emissions.length },
     calendarGaps,
+    lostSnapshots,
     overall: present(overall),
     top10: present(top10),
     caveats: [
+      ...(lostSnapshots.length
+        ? [`No picks were recorded on ${lostSnapshots.join(', ')} — the recorder fired lazily off a page view then and lost them. Those days are absent from every n below and cannot be recovered.`]
+        : []),
       ...(calendarGaps.length
         ? [`nse_bhavcopy is missing ${calendarGaps.length} session(s) the index traded (${calendarGaps.join(', ')}). Horizons are counted on the merged calendar so spacing stays right, but any pick entering or exiting on those dates is unresolved.`]
         : []),
@@ -106,4 +126,4 @@ async function runScorecard() {
   };
 }
 
-module.exports = { runScorecard };
+module.exports = { runScorecard, missingInPeriod };

@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 // test never touch it, but the constructor throws on a missing URL.
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'http://localhost';
 process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'test-key';
-const { findGaps, checkFreshness } = require('./dataHealth');
+const { findGaps, checkFreshness, partitionGaps, ACKNOWLEDGED_GAPS } = require('./dataHealth');
 
 // A week of index sessions, Mon-Fri.
 const INDEX = ['2026-07-01', '2026-07-02', '2026-07-03', '2026-07-06', '2026-07-07'];
@@ -51,6 +51,45 @@ describe('findGaps', () => {
   test('still reports a hole once the feed has moved past it', () => {
     const table = ['2026-07-01', '2026-07-03', '2026-07-06', '2026-07-07'];
     assert.deepEqual(findGaps(table, INDEX), ['2026-07-02'], 'skipped, then kept going');
+  });
+});
+
+describe('partitionGaps', () => {
+  const known = { dates: ['2026-07-16', '2026-07-17'], reason: 'recorder lost them' };
+
+  test('sets aside the dates already accounted for', () => {
+    const out = partitionGaps(['2026-07-16', '2026-07-17'], known);
+    assert.deepEqual(out.gaps, []);
+    assert.deepEqual(out.acknowledged, ['2026-07-16', '2026-07-17']);
+  });
+
+  // The property that keeps this from being a mute button: declaring two dates
+  // must not buy silence on a third.
+  test('still reports a gap that was never declared', () => {
+    const out = partitionGaps(['2026-07-16', '2026-07-20', '2026-07-17'], known);
+    assert.deepEqual(out.gaps, ['2026-07-20']);
+    assert.deepEqual(out.acknowledged, ['2026-07-16', '2026-07-17']);
+  });
+
+  test('passes everything through for a feed with no declaration', () => {
+    const out = partitionGaps(['2026-07-16'], undefined);
+    assert.deepEqual(out.gaps, ['2026-07-16']);
+    assert.deepEqual(out.acknowledged, []);
+  });
+
+  test('reports nothing for a feed with no gaps at all', () => {
+    assert.deepEqual(partitionGaps([], known), { gaps: [], acknowledged: [] });
+  });
+});
+
+describe('ACKNOWLEDGED_GAPS', () => {
+  // A date silenced without a stated cause is indistinguishable from one
+  // silenced because it was inconvenient.
+  test('every declared gap carries dates and a reason', () => {
+    for (const [table, entry] of Object.entries(ACKNOWLEDGED_GAPS)) {
+      assert.ok(entry.dates?.length, `${table} declares no dates`);
+      assert.ok(entry.reason?.length > 20, `${table} declares no reason`);
+    }
   });
 });
 
