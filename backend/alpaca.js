@@ -1531,8 +1531,83 @@ router.post('/holdings-fundamentals', async (req, res) => {
 });
 
 // ─── GET /api/us/pnl/:symbol — annual + quarterly income statement (Yahoo) ──
+//
+// Yahoo serves this statement through two endpoints that disagree about which
+// periods exist, and neither is reliably ahead. Checked 2026-08-07:
+//
+//   PLTR   fundamentalsTimeSeries → 2026-03-31    quoteSummary → 2026-06-30
+//   AAPL   fundamentalsTimeSeries → 2026-06-30    quoteSummary → 2026-03-31
+//   MSFT / NVDA / GOOGL — the two agree
+//
+// So PLTR's June quarter was simply absent from the page while Yahoo's own
+// site showed it. Widening period2 does nothing; the rows are not there.
+//
+// fundamentalsTimeSeries stays the primary source — it carries the full line
+// detail and EPS — and the older quoteSummary submodule is used only to append
+// periods the primary hasn't published. That submodule is thin (yahoo-finance2
+// warns it "provided almost no data since Nov 2024"), and thin in a dangerous
+// way: absent figures come back as 0, not null. Mapping PLTR's June quarter
+// literally yields $0 gross profit and a 0% gross margin on revenue that ran an
+// 86% margin the quarter before. Those zeros are dropped and the row is flagged
+// `partial` so the UI can mark the column instead of quietly implying the
+// company earned nothing.
 const pnlCache = {}; // sym -> { data, ts }
 const PNL_TTL = 6 * 60 * 60 * 1000; // 6h — statements rarely change intraday
+
+const statementLabel = (d, isQuarter) => (d
+  ? (isQuarter ? `Q${Math.floor(d.getUTCMonth() / 3) + 1} '${String(d.getUTCFullYear()).slice(2)}` : `FY ${d.getUTCFullYear()}`)
+  : '—');
+
+/**
+ * One row of the legacy quoteSummary income statement.
+ *
+ * Only revenue and net income are trusted. Every other field there is either
+ * null or a placeholder 0, and there is no way to tell a real zero from a
+ * missing one — so all of them become null and render as a dash. Returns null
+ * when even those two are absent, which is what an ETF or a stub row looks
+ * like.
+ */
+function mapLegacyStatementRow(r, isQuarter) {
+  const d = r?.endDate ? new Date(r.endDate) : null;
+  const keep = (v) => (v == null || v === 0 ? null : v);
+  const revenue = keep(r?.totalRevenue);
+  const netIncome = keep(r?.netIncome);
+  if (revenue == null && netIncome == null) return null;
+  return {
+    label: statementLabel(d, isQuarter),
+    endDate: d ? d.toISOString().slice(0, 10) : null,
+    sortKey: d ? d.getTime() : 0,
+    revenue,
+    costOfRevenue: null,
+    grossProfit: null,
+    operatingExpense: null,
+    operatingIncome: null,
+    interestExpense: null,
+    pretaxIncome: null,
+    tax: null,
+    netIncome,
+    eps: null,
+    grossMargin: null,
+    operatingMargin: null,
+    netMargin: revenue && netIncome != null ? (netIncome / revenue) * 100 : null,
+    partial: true,
+  };
+}
+
+/**
+ * Union of the two sources, oldest first.
+ *
+ * Detailed rows always win a period both sources have — otherwise a full
+ * column would be replaced by a two-figure one every time the legacy endpoint
+ * happened to be ahead.
+ */
+function mergeStatementRows(detailed, legacy) {
+  const have = new Set(detailed.map(r => r.endDate));
+  const extra = legacy.filter(r => r.endDate && !have.has(r.endDate));
+  if (!extra.length) return detailed;
+  return [...detailed, ...extra].sort((a, b) => a.sortKey - b.sortKey);
+}
+
 router.get('/pnl/:symbol', async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
   const hit = pnlCache[sym];
@@ -1547,11 +1622,9 @@ router.get('/pnl/:symbol', async (req, res) => {
       const grossProfit = r.grossProfit ?? (revenue != null && r.costOfRevenue != null ? revenue - r.costOfRevenue : null);
       const operatingIncome = r.operatingIncome ?? null;
       const netIncome = r.netIncome ?? null;
-      const label = d
-        ? (isQuarter ? `Q${Math.floor(d.getUTCMonth() / 3) + 1} '${String(d.getUTCFullYear()).slice(2)}` : `FY ${d.getUTCFullYear()}`)
-        : '—';
       return {
-        label, endDate: d ? d.toISOString().slice(0, 10) : null, sortKey: d ? d.getTime() : 0,
+        label: statementLabel(d, isQuarter),
+        endDate: d ? d.toISOString().slice(0, 10) : null, sortKey: d ? d.getTime() : 0,
         revenue,
         costOfRevenue: r.costOfRevenue ?? null,
         grossProfit,
@@ -1573,7 +1646,26 @@ router.get('/pnl/:symbol', async (req, res) => {
         return (rows || []).map(r => mapRow(r, type === 'quarterly')).filter(r => r.revenue != null || r.netIncome != null).sort((a, b) => a.sortKey - b.sortKey);
       } catch { return []; }
     };
-    const [annual, quarterly] = await Promise.all([fetchTS('annual'), fetchTS('quarterly')]);
+    // The legacy submodule is best-effort: it is the fallback, so its failure
+    // must leave the primary result intact rather than blank the whole tab.
+    const fetchLegacy = async () => {
+      try {
+        const q = await yf.quoteSummary(sym,
+          { modules: ['incomeStatementHistory', 'incomeStatementHistoryQuarterly'] },
+          { validateResult: false });
+        const map = (hist, isQuarter) => (hist?.incomeStatementHistory || [])
+          .map(r => mapLegacyStatementRow(r, isQuarter)).filter(Boolean);
+        return {
+          annual: map(q.incomeStatementHistory, false),
+          quarterly: map(q.incomeStatementHistoryQuarterly, true),
+        };
+      } catch { return { annual: [], quarterly: [] }; }
+    };
+    const [annualTS, quarterlyTS, legacy] = await Promise.all([
+      fetchTS('annual'), fetchTS('quarterly'), fetchLegacy(),
+    ]);
+    const annual = mergeStatementRows(annualTS, legacy.annual);
+    const quarterly = mergeStatementRows(quarterlyTS, legacy.quarterly);
     const data = { symbol: sym, currency: 'USD', annual, quarterly };
     pnlCache[sym] = { data, ts: Date.now() };
     res.json(data);
@@ -2231,4 +2323,6 @@ module.exports = {
   checkFeedAgreement,
   // Exported for the range-coverage test — see TNX_RANGES.
   TNX_RANGES, TNX_DEFAULT_RANGE, tnxRangeConfig,
+  // Exported for the income-statement merge tests — see /pnl/:symbol.
+  mapLegacyStatementRow, mergeStatementRows,
 };

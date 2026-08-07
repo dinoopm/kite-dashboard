@@ -27,6 +27,7 @@ const fmtPrice = (v) => (v == null ? '—' : v.toLocaleString('en-US', { minimum
 const fmtPct = (v) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`);
 const pctColor = (v) => (v == null ? 'var(--text-secondary)' : v >= 0 ? 'var(--success)' : 'var(--danger)');
 const GREEN = 'var(--success)', RED = 'var(--danger)', GREY = 'var(--text-secondary)';
+const AMBER = '#fbbf24'; // same caution tone the red-flag and data-health panels use
 const fmtBig = (n) => {
   if (n == null) return '—';
   const a = Math.abs(n);
@@ -513,7 +514,15 @@ function PnL({ sym }) {
           <thead>
             <tr>
               <th style={{ ...th, textAlign: 'left', ...stickyBg }}>Metric</th>
-              {rows.map(r => <th key={r.label} style={th}>{r.label}</th>)}
+              {/* A partial column carries revenue and net income only — marked
+                  so a row of dashes reads as "not published yet" rather than as
+                  a broken page. See the footnote and /api/us/pnl. */}
+              {rows.map(r => (
+                <th key={r.label} style={th}>
+                  {r.label}
+                  {r.partial && <span style={{ color: AMBER }} title="Detailed statement not published yet"> *</span>}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -534,6 +543,11 @@ function PnL({ sym }) {
           </tbody>
         </table>
       </div>
+      {rows.some(r => r.partial) && (
+        <p style={{ fontSize: '0.7rem', color: AMBER, marginTop: '0.75rem' }}>
+          * Yahoo has not published the detailed statement for this period yet — only revenue and net income are available. Blank cells are unpublished, not zero.
+        </p>
+      )}
       <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.75rem', fontStyle: 'italic' }}>
         Income statement via Yahoo Finance{d.cached ? ' · cached' : ''}. Values in {d.currency}; growth is period-over-period.
       </p>
