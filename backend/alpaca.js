@@ -1594,16 +1594,144 @@ function mapLegacyStatementRow(r, isQuarter) {
   };
 }
 
+// ─── SEC XBRL as the middle tier ─────────────────────────────────────────────
+//
+// When Yahoo's timeseries is a quarter behind, the company's own 10-Q is
+// usually already public and carries the whole statement — PLTR's June quarter
+// was filed 2026-08-04 while Yahoo still ended at March. Reading it directly
+// turns a two-figure partial column into a complete one, from the primary
+// source rather than a vendor's copy of it.
+//
+// Companies do not all use the same tag for the same line, so each field has a
+// candidate list tried in order. Anything still missing is derived only where
+// the arithmetic is exact (gross profit from revenue less cost, operating
+// expense from gross profit less operating income) and otherwise left null.
+//
+// Known limit: a 10-K reports the FULL YEAR, so there is no three-month fact
+// for Q4. A missing Q4 therefore falls through to the thin quoteSummary row
+// and stays flagged partial. Deriving it as FY minus Q1-Q3 would mix reported
+// and computed figures and can disagree with the company's own release, so it
+// is deliberately not done.
+const SEC_TAGS = {
+  revenue: ['RevenueFromContractWithCustomerExcludingAssessedTax', 'Revenues',
+    'RevenueFromContractWithCustomerIncludingAssessedTax', 'SalesRevenueNet'],
+  costOfRevenue: ['CostOfRevenue', 'CostOfGoodsAndServicesSold', 'CostOfServices', 'CostOfGoodsSold'],
+  grossProfit: ['GrossProfit'],
+  operatingExpense: ['OperatingExpenses'],
+  operatingIncome: ['OperatingIncomeLoss'],
+  pretaxIncome: [
+    'IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest',
+    'IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments',
+  ],
+  tax: ['IncomeTaxExpenseBenefit'],
+  netIncome: ['NetIncomeLoss', 'ProfitLoss'],
+  eps: ['EarningsPerShareDiluted', 'EarningsPerShareBasicAndDiluted'],
+};
+
+// A quarter is ~91 days and a year ~365. The window matters: the same tag holds
+// a year-to-date fact ending on the SAME date as the quarter — PLTR's H1
+// revenue and its Q2 revenue both end 2026-06-30 — and taking the wrong one
+// overstates the quarter by 84%.
+const spansPeriod = (f, isQuarter) => {
+  if (!f.start || !f.end) return false;
+  const days = (Date.parse(f.end) - Date.parse(f.start)) / 86400000;
+  return isQuarter ? (days > 80 && days < 100) : (days > 350 && days < 380);
+};
+
+/** Latest-filed value of `field` for the period ending `end`, or null. */
+function pickSecFact(gaap, field, end, isQuarter) {
+  for (const tag of SEC_TAGS[field]) {
+    const units = gaap[tag]?.units;
+    if (!units) continue;
+    const facts = Object.values(units).flat()
+      .filter(f => f.end === end && spansPeriod(f, isQuarter));
+    if (!facts.length) continue;
+    // Restatements and amendments share a period; the newest filing wins.
+    return facts.sort((a, b) => String(b.filed).localeCompare(String(a.filed)))[0].val ?? null;
+  }
+  return null;
+}
+
+/** Every period the filings cover, as statement rows, oldest first. */
+function secStatementRows(facts, isQuarter) {
+  const gaap = facts?.facts?.['us-gaap'];
+  if (!gaap) return [];
+
+  // Period end dates are whatever the revenue or net-income tags report; a
+  // period with neither is not a statement worth showing.
+  const ends = new Set();
+  for (const field of ['revenue', 'netIncome']) {
+    for (const tag of SEC_TAGS[field]) {
+      for (const arr of Object.values(gaap[tag]?.units || {})) {
+        for (const f of arr) if (spansPeriod(f, isQuarter)) ends.add(f.end);
+      }
+    }
+  }
+
+  const pct = (a, b) => (a != null && b ? (a / b) * 100 : null);
+  const rows = [];
+  for (const end of ends) {
+    const get = (field) => pickSecFact(gaap, field, end, isQuarter);
+    const revenue = get('revenue');
+    const netIncome = get('netIncome');
+    if (revenue == null && netIncome == null) continue;
+    const costOfRevenue = get('costOfRevenue');
+    const grossProfit = get('grossProfit')
+      ?? (revenue != null && costOfRevenue != null ? revenue - costOfRevenue : null);
+    const operatingIncome = get('operatingIncome');
+    const operatingExpense = get('operatingExpense')
+      ?? (grossProfit != null && operatingIncome != null ? grossProfit - operatingIncome : null);
+    const d = new Date(`${end}T00:00:00Z`);
+    rows.push({
+      label: statementLabel(d, isQuarter),
+      endDate: end,
+      sortKey: d.getTime(),
+      revenue,
+      costOfRevenue,
+      grossProfit,
+      operatingExpense,
+      operatingIncome,
+      interestExpense: null,
+      pretaxIncome: get('pretaxIncome'),
+      tax: get('tax'),
+      netIncome,
+      eps: get('eps'),
+      grossMargin: pct(grossProfit, revenue),
+      operatingMargin: pct(operatingIncome, revenue),
+      netMargin: pct(netIncome, revenue),
+      source: 'SEC',
+    });
+  }
+  return rows.sort((a, b) => a.sortKey - b.sortKey);
+}
+
+// Sources disagree about the exact day a period ends: Apple's fiscal quarters
+// close on a Saturday (2026-03-28) while Yahoo normalises to month end
+// (2026-03-31). Keyed on the exact date, the same quarter appears twice.
+const SAME_PERIOD_MS = 5 * 86400000;
+const samePeriod = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) <= SAME_PERIOD_MS;
+
 /**
- * Union of the two sources, oldest first.
+ * Extend `detailed` forward with periods it has not published, oldest first.
  *
- * Detailed rows always win a period both sources have — otherwise a full
- * column would be replaced by a two-figure one every time the legacy endpoint
- * happened to be ahead.
+ * Two rules, both learned the hard way:
+ *
+ *   · Detailed rows win any period both sources have, or a full column gets
+ *     replaced by a two-figure one whenever the fallback happens to be ahead.
+ *   · The fallback may only extend the series FORWARD. SEC carries every
+ *     filing a company ever made, and appending all of them turned a 6-column
+ *     table into 22 (72 for AAPL) — a different page, not a fixed one. The
+ *     point is the quarter the primary hasn't got yet, not a decade of history.
+ *
+ * With no primary data at all the fallback has to carry the tab, capped to
+ * roughly the window Yahoo would have returned.
  */
-function mergeStatementRows(detailed, legacy) {
-  const have = new Set(detailed.map(r => r.endDate));
-  const extra = legacy.filter(r => r.endDate && !have.has(r.endDate));
+function mergeStatementRows(detailed, fallback, { maxStandalone = 8 } = {}) {
+  const usable = (fallback || []).filter(r => r?.endDate);
+  if (!detailed.length) return usable.slice(-maxStandalone);
+  const newest = detailed[detailed.length - 1].endDate;
+  const extra = usable.filter(r =>
+    Date.parse(r.endDate) > Date.parse(newest) && !samePeriod(r.endDate, newest));
   if (!extra.length) return detailed;
   return [...detailed, ...extra].sort((a, b) => a.sortKey - b.sortKey);
 }
@@ -1661,11 +1789,26 @@ router.get('/pnl/:symbol', async (req, res) => {
         };
       } catch { return { annual: [], quarterly: [] }; }
     };
-    const [annualTS, quarterlyTS, legacy] = await Promise.all([
-      fetchTS('annual'), fetchTS('quarterly'), fetchLegacy(),
+    // Also best-effort: no CIK, an SEC outage or a rate-limit must degrade to
+    // the Yahoo answer rather than fail the tab.
+    const fetchSec = async () => {
+      try {
+        const cik = (await getCikMap()).get(sym.replace(/\./g, '-')) || (await getCikMap()).get(sym);
+        if (!cik) return { annual: [], quarterly: [] };
+        const r = await fetch(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, { headers: SEC_UA });
+        if (!r.ok) return { annual: [], quarterly: [] };
+        const facts = await r.json();
+        return { annual: secStatementRows(facts, false), quarterly: secStatementRows(facts, true) };
+      } catch { return { annual: [], quarterly: [] }; }
+    };
+    const [annualTS, quarterlyTS, sec, legacy] = await Promise.all([
+      fetchTS('annual'), fetchTS('quarterly'), fetchSec(), fetchLegacy(),
     ]);
-    const annual = mergeStatementRows(annualTS, legacy.annual);
-    const quarterly = mergeStatementRows(quarterlyTS, legacy.quarterly);
+    // Yahoo stays primary so nothing on screen shifts retroactively; SEC fills
+    // the periods it hasn't published; the thin submodule is the last resort
+    // (a Q4 the filings can't supply as a three-month figure).
+    const annual = mergeStatementRows(mergeStatementRows(annualTS, sec.annual), legacy.annual);
+    const quarterly = mergeStatementRows(mergeStatementRows(quarterlyTS, sec.quarterly), legacy.quarterly);
     const data = { symbol: sym, currency: 'USD', annual, quarterly };
     pnlCache[sym] = { data, ts: Date.now() };
     res.json(data);
@@ -2324,5 +2467,5 @@ module.exports = {
   // Exported for the range-coverage test — see TNX_RANGES.
   TNX_RANGES, TNX_DEFAULT_RANGE, tnxRangeConfig,
   // Exported for the income-statement merge tests — see /pnl/:symbol.
-  mapLegacyStatementRow, mergeStatementRows,
+  mapLegacyStatementRow, mergeStatementRows, secStatementRows,
 };

@@ -5,7 +5,7 @@ const path = require('node:path');
 
 const {
   TNX_RANGES, TNX_DEFAULT_RANGE, tnxRangeConfig,
-  mapLegacyStatementRow, mergeStatementRows,
+  mapLegacyStatementRow, mergeStatementRows, secStatementRows,
 } = require('./alpaca');
 
 describe('treasury-10y ranges', () => {
@@ -152,5 +152,144 @@ describe('mergeStatementRows', () => {
   test('keeps the result oldest-first', () => {
     const out = mergeStatementRows([ts[1]], [legacy[1], legacy[0]]);
     assert.deepEqual(out.map(r => r.sortKey), [4, 5]);
+  });
+});
+
+// ─── SEC XBRL statement extraction ───────────────────────────────────────────
+// Yahoo's timeseries can be a quarter behind (see above) while the 10-Q is
+// already public. These facts are PLTR's real 2026-06-30 quarter as filed on
+// 2026-08-04, trimmed to the tags the statement needs, plus an amended earlier
+// value to pin down which one wins.
+const PLTR_FACTS = {
+  facts: {
+    'us-gaap': {
+      RevenueFromContractWithCustomerExcludingAssessedTax: {
+        units: { USD: [
+          { start: '2026-04-01', end: '2026-06-30', val: 1935464000, form: '10-Q', filed: '2026-08-04' },
+          { start: '2026-01-01', end: '2026-06-30', val: 3568047000, form: '10-Q', filed: '2026-08-04' }, // H1, must be ignored
+          { start: '2026-01-01', end: '2026-03-31', val: 1632583000, form: '10-Q', filed: '2026-05-05' },
+        ] },
+      },
+      CostOfRevenue: { units: { USD: [{ start: '2026-04-01', end: '2026-06-30', val: 296870000, form: '10-Q', filed: '2026-08-04' }] } },
+      GrossProfit: { units: { USD: [{ start: '2026-04-01', end: '2026-06-30', val: 1638594000, form: '10-Q', filed: '2026-08-04' }] } },
+      OperatingExpenses: { units: { USD: [{ start: '2026-04-01', end: '2026-06-30', val: 726590000, form: '10-Q', filed: '2026-08-04' }] } },
+      OperatingIncomeLoss: { units: { USD: [{ start: '2026-04-01', end: '2026-06-30', val: 912004000, form: '10-Q', filed: '2026-08-04' }] } },
+      IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest: {
+        units: { USD: [{ start: '2026-04-01', end: '2026-06-30', val: 1081345000, form: '10-Q', filed: '2026-08-04' }] },
+      },
+      IncomeTaxExpenseBenefit: { units: { USD: [{ start: '2026-04-01', end: '2026-06-30', val: 15383000, form: '10-Q', filed: '2026-08-04' }] } },
+      NetIncomeLoss: { units: { USD: [
+        { start: '2026-04-01', end: '2026-06-30', val: 1061890000, form: '10-Q', filed: '2026-08-04' },
+        // An original filing later amended — the restated value must win.
+        { start: '2026-01-01', end: '2026-03-31', val: 870000000, form: '10-Q', filed: '2026-05-05' },
+        { start: '2026-01-01', end: '2026-03-31', val: 870527000, form: '10-Q/A', filed: '2026-06-01' },
+      ] } },
+      EarningsPerShareDiluted: { units: { 'USD/shares': [{ start: '2026-04-01', end: '2026-06-30', val: 0.41, form: '10-Q', filed: '2026-08-04' }] } },
+    },
+  },
+};
+
+describe('secStatementRows', () => {
+  const rows = () => secStatementRows(PLTR_FACTS, true);
+
+  test('builds the quarter Yahoo had not published', () => {
+    const q2 = rows().find(r => r.endDate === '2026-06-30');
+    assert.equal(q2.label, "Q2 '26");
+    assert.equal(q2.revenue, 1935464000);
+    assert.equal(q2.costOfRevenue, 296870000);
+    assert.equal(q2.grossProfit, 1638594000);
+    assert.equal(q2.operatingExpense, 726590000);
+    assert.equal(q2.operatingIncome, 912004000);
+    assert.equal(q2.pretaxIncome, 1081345000);
+    assert.equal(q2.tax, 15383000);
+    assert.equal(q2.netIncome, 1061890000);
+    assert.equal(q2.eps, 0.41);
+  });
+
+  // The half-year column sits in the same tag with the same end date. Counting
+  // it as the quarter would overstate revenue by 84%.
+  test('ignores the year-to-date fact sharing the quarter end date', () => {
+    assert.equal(rows().find(r => r.endDate === '2026-06-30').revenue, 1935464000);
+  });
+
+  test('prefers the most recently filed value for a restated period', () => {
+    assert.equal(rows().find(r => r.endDate === '2026-03-31').netIncome, 870527000);
+  });
+
+  test('derives margins from the filed figures', () => {
+    const q2 = rows().find(r => r.endDate === '2026-06-30');
+    assert.ok(Math.abs(q2.grossMargin - 84.66) < 0.01, `gross margin was ${q2.grossMargin}`);
+    assert.ok(Math.abs(q2.operatingMargin - 47.12) < 0.01, `operating margin was ${q2.operatingMargin}`);
+    assert.ok(Math.abs(q2.netMargin - 54.86) < 0.01, `net margin was ${q2.netMargin}`);
+  });
+
+  // A full row, unlike the quoteSummary fallback — so it must not be marked.
+  test('is a complete row, not a partial one', () => {
+    assert.ok(!rows().find(r => r.endDate === '2026-06-30').partial);
+    assert.equal(rows().find(r => r.endDate === '2026-06-30').source, 'SEC');
+  });
+
+  test('returns rows oldest-first', () => {
+    assert.deepEqual(rows().map(r => r.endDate), ['2026-03-31', '2026-06-30']);
+  });
+
+  test('returns nothing for facts with no us-gaap block', () => {
+    assert.deepEqual(secStatementRows({ facts: {} }, true), []);
+    assert.deepEqual(secStatementRows(null, true), []);
+  });
+
+  // Annual durations are ~365 days, so the quarterly pass must not pick them up
+  // and the annual pass must not pick up quarters.
+  test('separates annual periods from quarterly ones', () => {
+    const annualFacts = { facts: { 'us-gaap': { Revenues: { units: { USD: [
+      { start: '2025-01-01', end: '2025-12-31', val: 5000000000, form: '10-K', filed: '2026-02-15' },
+      { start: '2025-10-01', end: '2025-12-31', val: 1406802000, form: '10-K', filed: '2026-02-15' },
+    ] } } } } };
+    assert.deepEqual(secStatementRows(annualFacts, false).map(r => r.label), ['FY 2025']);
+    assert.deepEqual(secStatementRows(annualFacts, true).map(r => r.label), ["Q4 '25"]);
+  });
+});
+
+describe('mergeStatementRows — keeping the table the right shape', () => {
+  const ts = [
+    { endDate: '2025-12-31', label: "Q4 '25", sortKey: Date.parse('2025-12-31'), revenue: 1 },
+    { endDate: '2026-03-31', label: "Q1 '26", sortKey: Date.parse('2026-03-31'), revenue: 2 },
+  ];
+
+  // Apple's fiscal quarters end on a Saturday and Yahoo normalises to month
+  // end, so the same quarter arrives as 2026-03-28 and 2026-03-31. Keyed on
+  // the exact date they both survived and the table showed one quarter twice.
+  test('treats period ends a few days apart as the same period', () => {
+    const sec = [{ endDate: '2026-03-28', label: "Q1 '26", sortKey: Date.parse('2026-03-28'), revenue: 2 }];
+    assert.deepEqual(mergeStatementRows(ts, sec), ts);
+  });
+
+  test('still appends a genuinely later period ending off-month', () => {
+    const sec = [{ endDate: '2026-06-27', label: "Q2 '26", sortKey: Date.parse('2026-06-27'), revenue: 3 }];
+    assert.deepEqual(mergeStatementRows(ts, sec).map(r => r.endDate), ['2025-12-31', '2026-03-31', '2026-06-27']);
+  });
+
+  // SEC carries years of filings. The fallback exists to extend the series
+  // forward to periods the primary has not published, not to rewrite its
+  // history — appending everything turned a 6-column table into 22 (72 for
+  // AAPL), which is a different page, not a fixed one.
+  test('does not backfill history older than the primary source', () => {
+    const sec = [
+      { endDate: '2021-03-31', label: "Q1 '21", sortKey: Date.parse('2021-03-31'), revenue: 0 },
+      { endDate: '2021-06-30', label: "Q2 '21", sortKey: Date.parse('2021-06-30'), revenue: 0 },
+      { endDate: '2026-06-30', label: "Q2 '26", sortKey: Date.parse('2026-06-30'), revenue: 3 },
+    ];
+    assert.deepEqual(mergeStatementRows(ts, sec).map(r => r.endDate), ['2025-12-31', '2026-03-31', '2026-06-30']);
+  });
+
+  // Yahoo down entirely: the fallback has to carry the tab, but capped to
+  // roughly the window Yahoo would have returned rather than every filing.
+  test('caps the fallback when there is no primary data at all', () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({
+      endDate: `20${10 + i}-06-30`, label: `Q2 '${10 + i}`, sortKey: Date.parse(`20${10 + i}-06-30`), revenue: i,
+    }));
+    const out = mergeStatementRows([], many);
+    assert.equal(out.length, 8);
+    assert.equal(out[out.length - 1].endDate, '2039-06-30', 'keeps the most recent, not the oldest');
   });
 });

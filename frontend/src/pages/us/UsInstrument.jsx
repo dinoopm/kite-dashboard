@@ -549,7 +549,7 @@ function PnL({ sym }) {
         </p>
       )}
       <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.75rem', fontStyle: 'italic' }}>
-        Income statement via Yahoo Finance{d.cached ? ' · cached' : ''}. Values in {d.currency}; growth is period-over-period.
+        Income statement via Yahoo Finance{rows.some(r => r.source === 'SEC') ? ', latest period from the company\'s SEC filing' : ''}{d.cached ? ' · cached' : ''}. Values in {d.currency}; growth is period-over-period.
       </p>
     </div>
   );
