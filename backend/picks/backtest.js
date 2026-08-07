@@ -8,11 +8,21 @@
 //   - per-factor information coefficient (Spearman rank corr vs forward return)
 // Entry is the eval-date close; costs/slippage are not modeled. The surveillance
 // exclusion uses the CURRENT ASM/GSM list (small lookahead — the table isn't dated).
+//
+// Horizons are counted in BARS, so the calendar has to be right. nse_bhavcopy
+// has ingested holes (2026-07-03/06/07 were missing while NIFTY traded), and on
+// the bhavcopy-only calendar those holes close up: 07-02 and 07-08 look
+// adjacent, so a "5-day" return silently spans seven real sessions and the
+// excess/IC numbers are computed over windows that aren't the length they claim.
+// The fix is the one picks/scorecard.js already uses — merge the index's own
+// sessions in via signals/marketSeries, which restores spacing at no cost, and
+// report the holes as `calendarGaps` rather than absorbing them.
 
-const { createClient } = require('@supabase/supabase-js');
 const { buildFactorUniverse, rankUniverse } = require('./engine');
-
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+const {
+  fetchAll, fetchTradingDates, fetchBenchmark,
+  mergeCalendars, findCalendarGaps, BENCHMARK,
+} = require('../signals/marketSeries');
 
 // Factor feeds only reach full coverage from mid-May 2026 (volume_gainers
 // 2026-05-04, nse_52_week_high_low 2026-05-14) — evaluating earlier would rank
@@ -20,30 +30,9 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const EVAL_FLOOR = '2026-05-18';
 const LOOKBACK_DAYS = 30; // calendar, mirrors the live default period
 
-async function fetchAll(table, cols, applyFilters) {
-  const PAGE = 1000;
-  let offset = 0;
-  const out = [];
-  for (;;) {
-    let q = supabase.from(table).select(cols).range(offset, offset + PAGE - 1);
-    if (applyFilters) q = applyFilters(q);
-    const { data, error } = await q;
-    if (error) throw new Error(`${table}: ${error.message}`);
-    out.push(...(data || []));
-    if (!data || data.length < PAGE) break;
-    offset += PAGE;
-  }
-  return out;
-}
-
-// Trading calendar = RELIANCE's bhavcopy dates (trades every session).
-async function getTradingDates() {
-  const rows = await fetchAll('nse_bhavcopy', 'trade_date',
-    (q) => q.eq('symbol', 'RELIANCE').eq('series', 'EQ').order('trade_date', { ascending: true }));
-  return rows.map(r => r.trade_date);
-}
-
-// date -> (symbol -> close), EQ preferred over BE.
+// date -> (symbol -> close), EQ preferred over BE. Dates the table never
+// ingested come back as empty maps, which is what makes a window ending on a
+// gap drop out of the sample instead of being scored against a stale price.
 async function getCloses(dates) {
   const map = new Map(dates.map(d => [d, new Map()]));
   const CHUNK = 10; // .in() filter on a manageable number of dates per query
@@ -104,18 +93,41 @@ const isoMinus = (iso, days) => {
 
 const FACTOR_KEYS = ['momentum', 'volume', 'fiftyTwo', 'deals'];
 
+/**
+ * Entry dates: every `step` bars along `calendar` from `floor` on, keeping room
+ * for the shortest horizon.
+ *
+ * Both the stepping and the room check run on the MERGED calendar, so a session
+ * bhavcopy is missing still consumes a bar — that is the whole point, since a
+ * bar is what a horizon is counted in. A gap date can never be an entry itself
+ * (`priceDates` gates that): with no closes there is nothing to rank or buy,
+ * and pretending otherwise would enter the next available price under an
+ * earlier date's label.
+ */
+function pickEvalDates(calendar, priceDates, { step, minHorizon, floor }) {
+  const priced = new Set(priceDates);
+  const out = [];
+  for (let i = 0; i < calendar.length; i += step) {
+    const d = calendar[i];
+    if (d >= floor && priced.has(d) && i + minHorizon < calendar.length) out.push(d);
+  }
+  return out;
+}
+
 async function runBacktest({ horizons = [5, 10, 20], step = 5, topN = 25 } = {}) {
-  const tdates = await getTradingDates();
+  // Bhavcopy's own sessions, plus the ones only the index knows about. A
+  // missing benchmark degrades to the bhavcopy calendar rather than failing —
+  // Yahoo being down should not delete the backtest, only its gap detection.
+  const bhavDates = await fetchTradingDates();
+  if (!bhavDates.length) throw new Error('No evaluable dates yet — feeds/bhavcopy history too short.');
+  const benchByDate = await fetchBenchmark(bhavDates[0]).catch(() => null);
+
+  const tdates = mergeCalendars(bhavDates, benchByDate ? [...benchByDate.keys()] : [], bhavDates[0]);
+  const calendarGaps = findCalendarGaps(bhavDates, tdates);
   const dateIdx = new Map(tdates.map((d, i) => [d, i]));
   const maxH = Math.min(...horizons);
 
-  // Eval dates: every `step` sessions from the feed floor, keeping room for at
-  // least the shortest horizon.
-  const evalDates = [];
-  for (let i = 0; i < tdates.length; i += step) {
-    const d = tdates[i];
-    if (d >= EVAL_FLOOR && i + maxH < tdates.length) evalDates.push(d);
-  }
+  const evalDates = pickEvalDates(tdates, bhavDates, { step, minHorizon: maxH, floor: EVAL_FLOOR });
   if (!evalDates.length) throw new Error('No evaluable dates yet — feeds/bhavcopy history too short.');
 
   // All dates whose closes we need (entries + exits).
@@ -221,8 +233,17 @@ async function runBacktest({ horizons = [5, 10, 20], step = 5, topN = 25 } = {})
   return {
     params: { horizons, step, topN, lookbackDays: LOOKBACK_DAYS, evalFloor: EVAL_FLOOR },
     period: { firstEval: evalDates[0], lastEval: evalDates[evalDates.length - 1], evalDates: evalDates.length },
+    calendarGaps,
     summary, ics, perDate,
     caveats: [
+      ...(calendarGaps.length
+        ? [`nse_bhavcopy is missing ${calendarGaps.length} session(s) the index traded (${calendarGaps.join(', ')}). Horizons are counted on the merged calendar so bar spacing stays right, but a window entering or exiting on those dates has no price and drops out of the sample.`]
+        : []),
+      // ^NSEI is only the reference CALENDAR here — the return benchmark stays
+      // the universe median (next caveat). Without it a bhavcopy hole is
+      // invisible, which is worth saying rather than quietly reverting to the
+      // stretched-horizon behaviour this file used to have.
+      ...(benchByDate ? [] : [`Index calendar (${BENCHMARK}) unavailable, so sessions are bhavcopy's alone — any session it skipped is undetectable here and horizons spanning one are stretched.`]),
       'Short history — treat as preliminary; error bars are wide.',
       'Benchmark = universe median return (did picks beat the average active stock).',
       'Entry at eval-date close; transaction costs, slippage and liquidity not modeled.',
@@ -232,4 +253,4 @@ async function runBacktest({ horizons = [5, 10, 20], step = 5, topN = 25 } = {})
   };
 }
 
-module.exports = { runBacktest };
+module.exports = { runBacktest, pickEvalDates };

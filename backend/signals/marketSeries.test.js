@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'http://localhost';
 process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'test-key';
-const { mergeCalendars, alignToCalendar } = require('./marketSeries');
+const { mergeCalendars, alignToCalendar, findCalendarGaps } = require('./marketSeries');
 
 describe('mergeCalendars', () => {
   // The exact defect this exists for: bhavcopy dropped three sessions the
@@ -32,6 +32,30 @@ describe('mergeCalendars', () => {
 
   test('survives a missing benchmark', () => {
     assert.deepEqual(mergeCalendars(['2026-07-01'], null, '2026-07-01'), ['2026-07-01']);
+  });
+});
+
+describe('findCalendarGaps', () => {
+  const cal = ['2026-07-01', '2026-07-02', '2026-07-03', '2026-07-06', '2026-07-07', '2026-07-08'];
+
+  test('names the sessions the price table skipped', () => {
+    const bhav = ['2026-07-01', '2026-07-02', '2026-07-08'];
+    assert.deepEqual(findCalendarGaps(bhav, cal), ['2026-07-03', '2026-07-06', '2026-07-07']);
+  });
+
+  // The false alarm this bound exists for: the index prints today's close hours
+  // before bhavcopy does, so an unbounded diff reports today as a hole every
+  // afternoon. Not-yet-published is staleness, not a gap.
+  test('ignores sessions after the table\'s last row', () => {
+    assert.deepEqual(findCalendarGaps(['2026-07-01', '2026-07-02'], cal), []);
+  });
+
+  test('is empty when the table has every session', () => {
+    assert.deepEqual(findCalendarGaps(cal, cal), []);
+  });
+
+  test('handles an empty table', () => {
+    assert.deepEqual(findCalendarGaps([], cal), []);
   });
 });
 

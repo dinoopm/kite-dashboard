@@ -45,6 +45,24 @@ function mergeCalendars(tableDates, benchDates, since) {
   return [...all].sort();
 }
 
+/**
+ * Sessions on `calendar` that the price table skipped, so a caller can say so
+ * instead of quietly reporting numbers computed over a holed calendar.
+ *
+ * Bounded at the table's own last row: bhavcopy publishes hours after the
+ * close, so the index prints today's bar before the price feed does. Counting
+ * that as a hole would raise a false alarm every afternoon — anything at or
+ * after the last ingested date is not-yet-arrived, which is dataHealth.js's
+ * freshness check, not a gap.
+ */
+function findCalendarGaps(tableDates, calendar) {
+  const sorted = [...(tableDates || [])].sort();
+  const last = sorted[sorted.length - 1];
+  if (!last) return [];
+  const have = new Set(sorted);
+  return calendar.filter(d => d < last && !have.has(d));
+}
+
 /** Lay a date->close map onto a calendar; missing sessions stay as null closes. */
 function alignToCalendar(dates, closeByDate) {
   return dates.map(d => ({ date: d, close: closeByDate?.get(d) ?? null }));
@@ -100,12 +118,7 @@ async function buildMarketContext(symbols, since) {
   ]);
 
   const calendar = mergeCalendars(tdatesAll, benchByDate ? [...benchByDate.keys()] : [], since);
-  const bhavDates = new Set(tdatesAll);
-  // Only sessions bhavcopy SKIPPED, not ones it has yet to publish. The index
-  // prints today's close hours before bhavcopy does, so an unbounded diff
-  // reports today as a hole every afternoon.
-  const bhavLast = tdatesAll.length ? tdatesAll[tdatesAll.length - 1] : null;
-  const calendarGaps = calendar.filter(d => d < bhavLast && !bhavDates.has(d));
+  const calendarGaps = findCalendarGaps(tdatesAll, calendar);
 
   const seriesBySymbol = {};
   for (const s of symbols) seriesBySymbol[s] = alignToCalendar(calendar, closesBySymbol.get(s));
@@ -120,6 +133,6 @@ async function buildMarketContext(symbols, since) {
 }
 
 module.exports = {
-  BENCHMARK, fetchAll, mergeCalendars, alignToCalendar,
+  BENCHMARK, fetchAll, mergeCalendars, findCalendarGaps, alignToCalendar,
   fetchTradingDates, fetchCloses, fetchBenchmark, buildMarketContext,
 };
