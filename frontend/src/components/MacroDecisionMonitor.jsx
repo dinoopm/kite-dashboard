@@ -1,84 +1,103 @@
 import { useEffect, useState } from 'react'
+import {
+  REGIME_WORD, POLICY_WORD, COMPONENT_LABEL,
+  directionWord, confidenceConstraint, signalTriad, countdown,
+  explain, whatWouldChange, freshnessStatus, sixMonthRead,
+  interpretIndicator, contextReason, signed,
+} from '../lib/macroRead.js'
 
 // ─── Macro Decision Monitor ──────────────────────────────────────────────────
 //
-// Six months of official US macro data (FRED, redistributing BLS/BEA/EIA/Fed)
-// as five sub-signals and one regime read. Terminal-style: dense, monospaced
-// numbers, no illustration.
+// Six months of official US macro data as five weighted components and one
+// regime read. Terminal style: dense, tabular numerals, no decoration.
 //
-// The presentation rules are not cosmetic:
+// The layout answers five questions in order, because a reader who has to
+// assemble the answer from bars will assemble it wrong:
 //
-//   · The headline is a BIAS, never a forecast. "Hold bias" and "hike risk"
-//     are claims about what the data leans toward; the FOMC weighs financial
-//     stability, credit and global growth, none of which are inputs here.
-//   · Every number is labelled with WHICH transform produced it — annualized,
-//     percentage-point, or percent change — because the same "+0.7" means
-//     three different things across these series, and an unlabelled figure
-//     invites the reader to guess wrong.
-//   · Conflicting signals are shown, not averaged away. A composite near zero
-//     with wide disagreement is a different situation from one with everything
-//     clustered at zero, and the confidence row is where that shows up.
+//   1. what regime          — headline, largest type on the screen
+//   2. why                  — derived paragraph, immediately under it
+//   3. what could move it   — next catalyst, same row as the regime
+//   4. what would change it — collapsible, computed against the thresholds
+//   5. what agrees/disagrees— component bars, then the indicator detail
+//
+// Every word of it is DERIVED (see lib/macroRead.js). The one time a summary of
+// this panel was written by hand it named the wrong offset.
+//
+// Three rules the styling follows:
+//   · Direction is carried by icon AND text AND colour, never colour alone.
+//   · Cooling reads green because this panel is about INFLATION pressure, not
+//     about markets — falling price pressure is the "good" direction here.
+//   · Nothing claims a central bank will do anything. "Hold-compatible" is a
+//     property of the data, and the qualifier next to it says so permanently.
 
 const GREEN = 'var(--success)', RED = 'var(--danger)', GREY = 'var(--text-secondary)'
 const AMBER = '#fbbf24'
 
-// Cooling reads green because the panel is about INFLATION pressure, not about
-// markets — falling price pressure is the "good" direction here.
-const REGIME_STYLE = {
-  cooling: { label: 'Cooling', color: GREEN, bias: 'Cut bias' },
-  neutral: { label: 'Neutral', color: AMBER, bias: 'Hold bias' },
-  reaccelerating: { label: 'Re-accelerating', color: RED, bias: 'Hike risk' },
-  unknown: { label: 'Unknown', color: GREY, bias: 'No read' },
+const REGIME_TONE = { cooling: GREEN, neutral: AMBER, reaccelerating: RED, unknown: GREY }
+const TONE_COLOR = { ok: GREEN, warn: AMBER, bad: RED, muted: GREY }
+
+// ▲ pressure, ▼ cooling, ◆ risk, ○ unavailable — so the direction survives
+// greyscale, colour-blindness and a screen reader.
+const MARK = { up: '▲', down: '▼', flat: '◆', none: '○' }
+const markFor = (v) => (v == null ? MARK.none : v > 0.005 ? MARK.up : v < -0.005 ? MARK.down : MARK.flat)
+const toneFor = (v) => (v == null ? GREY : v > 0.005 ? RED : v < -0.005 ? GREEN : AMBER)
+
+const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const longDate = (iso) => {
+  if (!iso) return '—'
+  const [y, m, d] = iso.split('-')
+  return `${MONTH[+m - 1]} ${+d}, ${y}`
 }
 
-const SIGNAL_LABELS = {
-  inflation: 'Inflation', labour: 'Labour market', wages: 'Wage pressure',
-  expectations: 'Expectations', oil: 'Oil / energy',
+function Section({ title, count, children, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.7rem', marginTop: '0.7rem' }}>
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        style={{
+          background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: GREY,
+          fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600,
+          display: 'flex', alignItems: 'center', gap: '0.4rem',
+        }}
+      >
+        <span aria-hidden="true">{open ? '▾' : '▸'}</span>
+        {title}{count != null && ` (${count})`}
+      </button>
+      {open && <div style={{ marginTop: '0.6rem' }}>{children}</div>}
+    </div>
+  )
 }
 
-// What each transform means, in the tooltip, in words rather than jargon.
-const TRANSFORM_HELP = {
-  index: 'Annualized: the pace of the last 3 and 6 months, projected to a year.',
-  price: 'Percent change over six months.',
-  rate: 'Percentage-point change over six months — this series is already a percent, so a ratio would be meaningless.',
-  count: 'Average monthly change over the last three months, in the series own units.',
+/** Score on its scale, with the neutral band drawn so −0.06 reads as a position. */
+function ScoreScale({ score, coolingMax, reaccelMin }) {
+  const pos = Math.max(0, Math.min(100, ((score + 1) / 2) * 100))
+  const bandL = ((coolingMax + 1) / 2) * 100
+  const bandR = ((reaccelMin + 1) / 2) * 100
+  return (
+    <div style={{ marginTop: '0.35rem' }}>
+      <div style={{ position: 'relative', height: 10, background: 'var(--border)', borderRadius: 2 }}>
+        <div style={{ position: 'absolute', left: `${bandL}%`, width: `${bandR - bandL}%`, top: 0, bottom: 0, background: `${AMBER}33` }} />
+        <div style={{ position: 'absolute', left: `calc(${pos}% - 1px)`, top: -2, bottom: -2, width: 2, background: 'var(--text-primary)' }} />
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', color: GREY, marginTop: '0.2rem' }}>
+        <span>−1 cooling</span><span>neutral band</span><span>+1 re-accelerating</span>
+      </div>
+    </div>
+  )
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
-const fmt = (v, d = 2, suffix = '') => (v == null || !Number.isFinite(v) ? '—' : `${v.toFixed(d)}${suffix}`)
-const signed = (v, d = 2, suffix = '') => (v == null || !Number.isFinite(v) ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(d)}${suffix}`)
-const toneOf = (v) => (v == null ? GREY : v > 0.05 ? RED : v < -0.05 ? GREEN : AMBER)
-
-/** The six-month headline for one indicator, with its transform named. */
-function headlineFor(ind) {
-  if (ind.transform === 'index' && ind.annualized6m != null) {
-    return { value: signed(ind.annualized6m, 2, '%'), caption: '6m annualized' }
-  }
-  if (ind.transform === 'rate' && ind.changePp != null) {
-    return { value: signed(ind.changePp, 2, 'pp'), caption: '6m change' }
-  }
-  if (ind.transform === 'price' && ind.rocPct != null) {
-    return { value: signed(ind.rocPct, 1, '%'), caption: '6m change' }
-  }
-  if (ind.transform === 'count' && ind.avg3mChange != null) {
-    return { value: signed(ind.avg3mChange, 0, 'k'), caption: '3m avg / month' }
-  }
-  return { value: '—', caption: 'no six-month reading' }
-}
-
-function Bar({ contribution }) {
-  // Contributions run roughly ±0.45 (inflation at full weight), so ±0.5 is the
-  // full-width scale.
-  const pct = contribution == null ? 0 : Math.min(100, Math.abs(contribution) / 0.5 * 100)
+function ContributionBar({ contribution }) {
+  const pct = contribution == null ? 0 : Math.min(100, (Math.abs(contribution) / 0.5) * 100)
   const positive = (contribution || 0) >= 0
   return (
-    <div style={{ display: 'flex', alignItems: 'center', height: 8, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: 8, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
       <div style={{ width: '50%', display: 'flex', justifyContent: 'flex-end' }}>
-        {!positive && <div style={{ width: `${pct}%`, height: 8, background: GREEN }} />}
+        {!positive && <div style={{ width: `${pct}%`, background: GREEN }} />}
       </div>
       <div style={{ width: '50%' }}>
-        {positive && <div style={{ width: `${pct}%`, height: 8, background: RED }} />}
+        {positive && <div style={{ width: `${pct}%`, background: RED }} />}
       </div>
     </div>
   )
@@ -88,7 +107,7 @@ export default function MacroDecisionMonitor() {
   const [d, setD] = useState(null)
   const [err, setErr] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [openHelp, setOpenHelp] = useState(null)
+  const [openRow, setOpenRow] = useState(null)
 
   useEffect(() => {
     let on = true
@@ -104,178 +123,242 @@ export default function MacroDecisionMonitor() {
   if (err) return <div className="glass-panel" style={{ padding: '1.5rem', color: RED }}>Macro monitor unavailable: {err}</div>
   if (!d) return null
 
-  const regime = REGIME_STYLE[d.composite.regime] || REGIME_STYLE.unknown
-  const conf = d.confidence.level
-  const confColor = conf === 'high' ? GREEN : conf === 'medium' ? AMBER : RED
-  // Scored series first, then the context-only ones. They stay on screen —
-  // Michigan expectations and headline CPI are worth seeing — but carrying a
-  // tag, because listing them identically to the scored series is what made a
-  // reviewer conclude a stale survey print was dragging the Expectations
-  // component. It never fed it.
-  const rows = [...d.indicators.filter(i => i.scored), ...d.indicators.filter(i => !i.scored)]
+  const regimeKey = d.composite.regime || 'unknown'
+  const tone = REGIME_TONE[regimeKey] || GREY
+  const triad = signalTriad(d)
+  const conf = confidenceConstraint(d.confidence)
+  const changes = whatWouldChange(d)
+  const next = d.releases?.next
+  const scored = d.indicators.filter(i => i.scored)
+  const context = d.indicators.filter(i => !i.scored)
+  const band = d.thresholds?.regime || { coolingMax: -0.25, reaccelMin: 0.25 }
 
-  const cell = { padding: '0.45rem 0.7rem', fontSize: '0.8rem', fontVariantNumeric: 'tabular-nums' }
-  const th = { ...cell, color: GREY, textTransform: 'uppercase', fontSize: '0.68rem', letterSpacing: '0.05em', textAlign: 'left', fontWeight: 600 }
+  const label = { fontSize: '0.62rem', color: GREY, textTransform: 'uppercase', letterSpacing: '0.07em', fontWeight: 600 }
+  const cell = { padding: '0.5rem 0.6rem', fontSize: '0.8rem', fontVariantNumeric: 'tabular-nums' }
+  const th = { ...cell, ...label, textAlign: 'left', padding: '0.4rem 0.6rem' }
 
   return (
     <div className="glass-panel" style={{ padding: '1rem', marginBottom: '1.25rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.5rem' }}>
         <h2 style={{ margin: 0, fontSize: '1rem', letterSpacing: '0.02em' }}>Macro Decision Monitor</h2>
-        <span style={{ fontSize: '0.68rem', color: GREY }}>
+        <span style={{ fontSize: '0.66rem', color: GREY }}>
           US · six-month window · {d.dataPath === 'database' ? 'stored vintages' : 'live from FRED'}
         </span>
       </div>
 
-      {/* Headline regime */}
-      <div style={{
-        display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'center',
-        margin: '0.9rem 0', padding: '0.85rem 1rem',
-        border: `1px solid ${regime.color}55`, background: `${regime.color}0f`, borderRadius: 8,
-      }}>
+      {/* ─── PRIMARY: regime, interpretation, catalyst ─────────────────────── */}
+      <div
+        aria-live="polite"
+        style={{
+          margin: '0.85rem 0', padding: '0.9rem 1rem', borderRadius: 8,
+          border: `1px solid ${tone}55`, background: `${tone}0f`,
+          display: 'grid', gap: '1.25rem',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+        }}
+      >
         <div>
-          <div style={{ fontSize: '0.66rem', color: GREY, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Regime</div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: regime.color, lineHeight: 1.25 }}>{regime.label}</div>
-          <div style={{ fontSize: '0.8rem', color: regime.color }}>{regime.bias}</div>
+          <div style={label}>Regime</div>
+          <div style={{ fontSize: '1.5rem', fontWeight: 700, color: tone, lineHeight: 1.2 }}>
+            {REGIME_WORD[regimeKey] || 'Unknown'}
+          </div>
+          <div style={{ fontSize: '0.7rem', color: GREY }}>of the last six months of data</div>
         </div>
+
         <div>
-          <div style={{ fontSize: '0.66rem', color: GREY, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Score</div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{signed(d.composite.score, 3)}</div>
-          <div style={{ fontSize: '0.7rem', color: GREY }}>−1 cooling · +1 re-accelerating</div>
-        </div>
-        <div>
-          <div style={{ fontSize: '0.66rem', color: GREY, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Confidence</div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: confColor, textTransform: 'capitalize' }}>{conf}</div>
-          <div style={{ fontSize: '0.7rem', color: GREY }}>
-            fresh {fmt(d.confidence.freshness * 100, 0, '%')} · agree {fmt(d.confidence.agreement * 100, 0, '%')} · cover {fmt(d.composite.coverage * 100, 0, '%')}
+          <div style={label}>Policy interpretation</div>
+          <div style={{ fontSize: '1.15rem', fontWeight: 700, color: tone, lineHeight: 1.3 }}>
+            {POLICY_WORD[d.composite.bias] || '—'}
+          </div>
+          {/* Permanent, not a tooltip: the single most misreadable line here. */}
+          <div style={{ fontSize: '0.68rem', color: GREY }}>
+            from a {signed(d.composite.score, 2)} composite · not a Fed forecast
           </div>
         </div>
-        {d.releases?.next && (
-          <div>
-            <div style={{ fontSize: '0.66rem', color: GREY, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Next release</div>
-            <div style={{ fontSize: '0.95rem', fontWeight: 600 }}>{d.releases.next.title}</div>
-            <div style={{ fontSize: '0.7rem', color: GREY }}>
-              {d.releases.next.date} · {d.releases.next.daysAway === 0 ? 'today' : `${d.releases.next.daysAway}d`}
+
+        <div>
+          <div style={label}>Next catalyst</div>
+          {next ? (
+            <>
+              <div style={{ fontSize: '0.95rem', fontWeight: 600, lineHeight: 1.3 }}>{next.title}</div>
+              <div style={{ fontSize: '0.72rem', color: GREY }}>
+                {longDate(next.date)} · {countdown(next.daysAway)}
+              </div>
+              {next.detail && <div style={{ fontSize: '0.66rem', color: GREY, marginTop: '0.15rem' }}>{next.detail}</div>}
+            </>
+          ) : (
+            <div style={{ fontSize: '0.75rem', color: AMBER }}>
+              Release calendar unavailable — not an all-clear.
             </div>
+          )}
+        </div>
+      </div>
+
+      {/* Derived explanation. */}
+      <p style={{ margin: '0 0 0.8rem', fontSize: '0.86rem', lineHeight: 1.65, maxWidth: '70ch' }}>
+        {explain(d)}
+      </p>
+
+      {/* Signal status triad. */}
+      <div style={{ display: 'grid', gap: '0.3rem', marginBottom: '0.9rem' }}>
+        {[
+          ['Main pressure', triad.pressure, triad.pressure?.value],
+          ['Main offset', triad.offset, triad.offset?.value],
+        ].map(([name, item, value]) => (
+          <div key={name} style={{ display: 'grid', gridTemplateColumns: '1.2rem 8.5rem 1fr auto', gap: '0.5rem', alignItems: 'baseline', fontSize: '0.78rem' }}>
+            <span aria-hidden="true" style={{ color: toneFor(value) }}>{markFor(value)}</span>
+            <span style={{ color: GREY }}>{name}</span>
+            <span style={{ fontWeight: 600 }}>{item ? item.label : 'none'}</span>
+            <span style={{ fontVariantNumeric: 'tabular-nums', color: toneFor(value) }}>
+              {value == null ? '—' : signed(value, 2)}
+            </span>
           </div>
-        )}
+        ))}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2rem 8.5rem 1fr', gap: '0.5rem', alignItems: 'baseline', fontSize: '0.78rem' }}>
+          <span aria-hidden="true" style={{ color: AMBER }}>{MARK.flat}</span>
+          <span style={{ color: GREY }}>Next risk</span>
+          <span style={{ fontWeight: 600 }}>
+            {triad.risk ? `${triad.risk.title} · ${countdown(triad.risk.daysAway)}` : 'no scheduled catalyst'}
+          </span>
+        </div>
       </div>
 
-      {/* Contribution breakdown. A component computed from a subset of its
-          declared inputs says so — a full-looking score built on half its
-          series is the thing this panel must never render silently. */}
-      <div style={{ display: 'grid', gap: '0.4rem', marginBottom: '1rem' }}>
-        {d.composite.contributions.map(c => {
-          const sig = d.signals[c.key] || {}
-          const partial = sig.inputsTotal > 0 && sig.inputsUsed < sig.inputsTotal
-          return (
-            <div key={c.key}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(90px, 1fr) 2.6fr auto', gap: '0.6rem', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.75rem', color: GREY }}>
-                  {SIGNAL_LABELS[c.key]} <span style={{ opacity: 0.6 }}>{Math.round(c.weight * 100)}%</span>
-                </span>
-                <Bar contribution={c.contribution} />
-                <span style={{ fontSize: '0.75rem', fontVariantNumeric: 'tabular-nums', color: toneOf(c.score), minWidth: 52, textAlign: 'right' }}>
-                  {c.score == null ? 'n/a' : signed(c.score)}
-                </span>
+      {/* ─── SECONDARY: score and confidence ──────────────────────────────── */}
+      <div style={{ display: 'grid', gap: '1.25rem', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', marginBottom: '0.4rem' }}>
+        <div>
+          <div style={label}>Score</div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem' }}>
+            <span style={{ fontSize: '1.2rem', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{signed(d.composite.score, 3)}</span>
+            <span style={{ fontSize: '0.82rem', color: tone }}>{directionWord(d.composite.score)}</span>
+          </div>
+          <ScoreScale score={d.composite.score ?? 0} coolingMax={band.coolingMax} reaccelMin={band.reaccelMin} />
+        </div>
+        <div>
+          <div style={label}>Confidence</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 700, textTransform: 'capitalize', color: d.confidence.level === 'high' ? GREEN : d.confidence.level === 'medium' ? AMBER : RED }}>
+            {d.confidence.level}
+          </div>
+          {/* Name the binding constraint rather than printing three percentages. */}
+          <div style={{ fontSize: '0.72rem', color: GREY, lineHeight: 1.5 }}>
+            {conf?.key ? `Limited by: ${conf.text} (${Math.round(conf.value * 100)}%)` : conf?.text || '—'}
+            {d.composite.coverage < 1 && ` · ${Math.round(d.composite.coverage * 100)}% of weight scored`}
+          </div>
+        </div>
+      </div>
+
+      {/* ─── SECONDARY: component contributions ───────────────────────────── */}
+      <div style={{ marginTop: '0.9rem' }}>
+        <div style={{ ...label, marginBottom: '0.45rem' }}>Component contributions</div>
+        <div style={{ display: 'grid', gap: '0.55rem' }}>
+          {d.composite.contributions.map(c => {
+            const sig = d.signals[c.key] || {}
+            const partial = sig.inputsTotal > 0 && sig.inputsUsed < sig.inputsTotal
+            return (
+              <div key={c.key}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1.1rem minmax(120px, 1.5fr) 2fr auto', gap: '0.5rem', alignItems: 'center' }}>
+                  <span aria-hidden="true" style={{ color: toneFor(c.contribution), fontSize: '0.72rem' }}>{markFor(c.contribution)}</span>
+                  <span style={{ fontSize: '0.78rem' }}>
+                    {COMPONENT_LABEL[c.key] || c.key}{' '}
+                    <span style={{ color: GREY }}>{Math.round(c.weight * 100)}%</span>
+                  </span>
+                  <div
+                    role="img"
+                    aria-label={`${COMPONENT_LABEL[c.key] || c.key}, weight ${Math.round(c.weight * 100)} percent, contributing ${c.contribution == null ? 'nothing' : signed(c.contribution, 2)} to the composite`}
+                  >
+                    <ContributionBar contribution={c.contribution} />
+                  </div>
+                  <span style={{ fontSize: '0.76rem', fontVariantNumeric: 'tabular-nums', color: toneFor(c.contribution), minWidth: 48, textAlign: 'right' }}>
+                    {c.contribution == null ? 'n/a' : signed(c.contribution, 2)}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.64rem', color: partial ? AMBER : GREY, paddingLeft: '1.6rem', marginTop: '0.1rem' }}>
+                  {sig.usedSeries?.length ? sig.usedSeries.join(' + ') : (sig.reason || 'no inputs')}
+                  {sig.inputsTotal > 0 && ` · ${sig.inputsUsed} of ${sig.inputsTotal} series`}
+                  {partial && sig.excluded?.length ? ` · ${sig.excluded.join(', ')} excluded` : ''}
+                </div>
               </div>
-              <div style={{ fontSize: '0.63rem', color: partial ? AMBER : GREY, paddingLeft: '0.1rem', marginTop: '0.1rem' }}>
-                {sig.usedSeries?.length ? sig.usedSeries.join(' + ') : (sig.reason || 'no inputs')}
-                {sig.inputsTotal > 0 && ` · based on ${sig.inputsUsed} of ${sig.inputsTotal} series`}
-                {partial && sig.excluded?.length ? ` (${sig.excluded.join(', ')} excluded)` : ''}
-              </div>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
 
-      {/* Indicators */}
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
-          <thead>
-            <tr>
-              <th style={th}>Indicator</th>
-              <th style={{ ...th, textAlign: 'right' }}>Latest</th>
-              <th style={{ ...th, textAlign: 'right' }}>Six-month</th>
-              <th style={{ ...th, textAlign: 'right' }}>Reference</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(ind => {
-              const h = headlineFor(ind)
-              return (
-                <tr key={ind.seriesId} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={cell}>
-                    <button
-                      onClick={() => setOpenHelp(openHelp === ind.seriesId ? null : ind.seriesId)}
-                      style={{ background: 'none', border: 'none', padding: 0, color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem', textAlign: 'left' }}
-                      title={TRANSFORM_HELP[ind.transform]}
-                    >
-                      {ind.label}
-                      {!ind.scored && <span style={{ color: GREY, fontWeight: 400 }}> · context only, not scored</span>}
-                    </button>
-                    <div style={{ fontSize: '0.65rem', color: GREY }}>
-                      {ind.source} · <span style={{ fontFamily: 'ui-monospace, monospace' }}>{ind.seriesId}</span>
-                      {ind.releasesBehind > 0 && <span style={{ color: AMBER }}> · {ind.releasesBehind} release behind</span>}
-                    </div>
-                    {/* The three first differences behind a "3m avg / month".
-                        Total nonfarm and private payrolls diverge — over
-                        May-Jul 2026, PAYEMS averaged +20k while USPRIV averaged
-                        +40.3k — so the underlying months have to be visible for
-                        the headline to be checkable. */}
-                    {ind.monthlyChanges?.length > 0 && (
-                      <div style={{ fontSize: '0.63rem', color: GREY, marginTop: '0.15rem', fontVariantNumeric: 'tabular-nums' }}>
-                        {ind.monthlyChanges.map(c => `${MONTHS[+c.date.slice(5, 7) - 1]} ${c.change >= 0 ? '+' : ''}${Math.round(c.change)}k`).join(' · ')}
-                      </div>
-                    )}
-                    {openHelp === ind.seriesId && (
-                      <div style={{ fontSize: '0.68rem', color: GREY, marginTop: '0.3rem', maxWidth: 420, lineHeight: 1.5 }}>
-                        {TRANSFORM_HELP[ind.transform]} {ind.note}
-                      </div>
-                    )}
-                  </td>
-                  <td style={{ ...cell, textAlign: 'right' }}>
-                    {fmt(ind.latest, ind.transform === 'count' ? 0 : 2)}
-                    <div style={{ fontSize: '0.63rem', color: GREY }}>{ind.unit}</div>
-                  </td>
-                  <td style={{ ...cell, textAlign: 'right', fontWeight: 600 }}>
-                    {h.value}
-                    <div style={{ fontSize: '0.63rem', color: GREY }}>{h.caption}</div>
-                  </td>
-                  <td style={{ ...cell, textAlign: 'right', color: GREY, fontSize: '0.72rem' }}>
-                    {ind.latestDate || '—'}
-                    {ind.sixMonthsAgoDate && <div style={{ fontSize: '0.63rem' }}>from {ind.sixMonthsAgoDate}</div>}
-                    {/* "first seen", not "vintage". Without FRED_API_KEY the
-                        CSV feed carries no vintage information, so the honest
-                        stamp is the day WE first saw this value — not the day
-                        BEA or BLS published it. Calling that a vintage claims
-                        knowledge we do not have, and reading a 2026-08-09
-                        stamp as a source revision date is what made this look
-                        inconsistent. With an API key the source's own
-                        realtime_start is stored instead. */}
-                    {ind.vintageDate && (
-                      <div style={{ fontSize: '0.6rem', opacity: 0.75 }}
-                           title={d.vintagesAvailable
-                             ? 'Source vintage: the date the statistical agency published this value.'
-                             : 'The date this dashboard first recorded this value. Not the agency\'s revision date — set FRED_API_KEY for true source vintages.'}>
-                        {d.vintagesAvailable ? 'vintage' : 'first seen'} {ind.vintageDate}
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+      {/* ─── SECONDARY: what would change this ────────────────────────────── */}
+      {changes.length > 0 && (
+        <Section title="What would change this signal" count={changes.length}>
+          <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+            {changes.map((c, i) => <li key={i}>{c}</li>)}
+          </ul>
+        </Section>
+      )}
 
-      <details style={{ marginTop: '0.9rem' }}>
-        <summary style={{ cursor: 'pointer', fontSize: '0.72rem', color: GREY }}>
-          What this is, and what it is not ({d.caveats.length})
-        </summary>
-        <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.1rem', fontSize: '0.72rem', color: GREY, lineHeight: 1.65 }}>
+      {/* ─── TERTIARY: indicator detail ───────────────────────────────────── */}
+      <Section title="Indicator detail" count={d.indicators.length}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={th}>Indicator</th>
+                <th style={{ ...th, textAlign: 'right' }}>Latest</th>
+                <th style={{ ...th, textAlign: 'right' }}>Six-month</th>
+                <th style={th}>Reading</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...scored, ...context].map(ind => {
+                const six = sixMonthRead(ind)
+                const fresh = freshnessStatus(ind, d.thresholds?.staleness?.maxForScoring ?? 1)
+                const reason = contextReason(ind)
+                const open = openRow === ind.seriesId
+                return (
+                  <tr key={ind.seriesId} style={{ borderTop: '1px solid var(--border)', opacity: ind.scored ? 1 : 0.72 }}>
+                    <td style={cell}>
+                      <button
+                        onClick={() => setOpenRow(open ? null : ind.seriesId)}
+                        aria-expanded={open}
+                        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-primary)', fontSize: '0.8rem', textAlign: 'left' }}
+                      >
+                        {ind.label} <span aria-hidden="true" style={{ color: GREY }}>{open ? '▾' : '▸'}</span>
+                      </button>
+                      <div style={{ fontSize: '0.63rem', color: TONE_COLOR[fresh.tone] }}>
+                        <span style={{ fontFamily: 'ui-monospace, monospace', color: GREY }}>{ind.seriesId}</span> · {fresh.label}
+                      </div>
+                      {open && (
+                        <div style={{ fontSize: '0.67rem', color: GREY, marginTop: '0.35rem', lineHeight: 1.6, maxWidth: '46ch' }}>
+                          <div>Source: {ind.source} · unit {ind.unit}</div>
+                          <div>Observation month: {ind.latestDate || '—'}{ind.sixMonthsAgoDate && ` · compared with ${ind.sixMonthsAgoDate}`}</div>
+                          {ind.vintageDate && (
+                            <div>{d.vintagesAvailable ? 'Source vintage' : 'First recorded here'}: {longDate(ind.vintageDate)}</div>
+                          )}
+                          {ind.monthlyChanges?.length > 0 && (
+                            <div>Monthly: {ind.monthlyChanges.map(c => `${MONTH[+c.date.slice(5, 7) - 1]} ${c.change >= 0 ? '+' : ''}${Math.round(c.change)}k`).join(' · ')}</div>
+                          )}
+                          {reason && <div style={{ marginTop: '0.25rem' }}>{reason}</div>}
+                          {ind.note && <div style={{ marginTop: '0.25rem' }}>{ind.note}</div>}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ ...cell, textAlign: 'right' }}>
+                      {ind.latest == null ? '—' : ind.transform === 'count' ? Math.round(ind.latest).toLocaleString() : ind.latest.toFixed(2)}
+                    </td>
+                    <td style={{ ...cell, textAlign: 'right' }}>
+                      <div style={{ fontWeight: 600 }}>{six.value}</div>
+                      <div style={{ fontSize: '0.62rem', color: GREY }}>{six.label}</div>
+                    </td>
+                    <td style={{ ...cell, fontSize: '0.74rem', color: ind.scored ? 'var(--text-secondary)' : GREY }}>
+                      {ind.scored ? interpretIndicator(ind, d.thresholds) : 'Context only · not scored'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+
+      <Section title="What this is, and what it is not" count={d.caveats.length}>
+        <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.72rem', color: GREY, lineHeight: 1.7 }}>
           {d.caveats.map((c, i) => <li key={i}>{c}</li>)}
         </ul>
-      </details>
+      </Section>
     </div>
   )
 }
