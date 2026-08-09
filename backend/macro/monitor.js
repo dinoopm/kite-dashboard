@@ -110,6 +110,11 @@ async function buildMonitor({ anchorDate = null, preferDb = true } = {}) {
     m.releasesBehind = releasesBehind(m.latestDate, {
       frequency: s.frequency, releaseLagDays: s.releaseLagDays, anchorDate,
     });
+    // Which vintage the LATEST observation came from, so the panel can say
+    // "Jun 2026 value, as revised 2026-08-09" instead of leaving the reader to
+    // guess whether a figure is a first print or a revision.
+    const latestRow = (observations[s.id] || []).filter(o => o.value != null).pop();
+    m.vintageDate = latestRow?.vintage_date ?? null;
     metrics[s.key] = { ...m, seriesId: s.id, frequency: s.frequency };
     indicators.push({
       key: s.key,
@@ -150,6 +155,8 @@ async function buildMonitor({ anchorDate = null, preferDb = true } = {}) {
       'A bias read from seven data series, not a forecast of any rate decision. The FOMC also weighs financial stability, credit conditions and global growth, none of which are inputs here.',
       'Core PCE publishes about 30 days after its reference month and core CPI about 13, so at any moment the two describe different months — compare the reference dates before reading a divergence.',
       'Payrolls are revised in each of the next two releases and again at the annual benchmark; the seasonally-adjusted CPI and unemployment series are revised each February.',
+      'Values shown are the LATEST vintage — the current best estimate, recomputed when a revision arrives — not the figure first published. Prior vintages are kept, so an as-of read is available for anything that must not use hindsight.',
+      'Every price index here is seasonally adjusted (CPIAUCSL, CPILFESL, PCEPILFE). The not-seasonally-adjusted twins run several points apart over a six-month window, because half a seasonal cycle is mostly seasonality.',
       ...(missing.length ? [`No current reading for: ${missing.join(', ')}. Those weights are excluded and the rest renormalised, so coverage is ${(composite.coverage * 100).toFixed(0)}%.`] : []),
       ...(staleSeries.length ? [`Stale: ${staleSeries.join(', ')}.`] : []),
       ...(Object.keys(fetchErrors).length ? [`Fetch failed for: ${Object.keys(fetchErrors).join(', ')}.`] : []),

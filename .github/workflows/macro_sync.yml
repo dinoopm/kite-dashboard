@@ -1,0 +1,43 @@
+name: Macro Data Sync
+
+# The dashboard's daily job (backend/dailyJobs.js) only runs while the server
+# is up, which for a locally-run backend means "while the laptop is on". This
+# keeps macro_observations current regardless.
+#
+# 12:30 UTC is after the 08:30 ET window that BLS and BEA publish into, so a
+# release-day run picks the new print up the same day.
+on:
+  schedule:
+    - cron: '30 12 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'recent (rolling 30 months) or backfill (from 2000)'
+        required: false
+        default: 'recent'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: cd backend && (npm ci || npm install)
+
+      # FRED_API_KEY is optional: without it the keyless CSV endpoint is used,
+      # which carries the same observations but no vintage history.
+      - name: Ingest macro series
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: cd backend && node macro/ingest.js ${{ github.event.inputs.mode || 'recent' }}

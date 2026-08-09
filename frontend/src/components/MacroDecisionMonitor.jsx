@@ -244,6 +244,10 @@ export default function MacroDecisionMonitor() {
                   <td style={{ ...cell, textAlign: 'right', color: GREY, fontSize: '0.72rem' }}>
                     {ind.latestDate || '—'}
                     {ind.sixMonthsAgoDate && <div style={{ fontSize: '0.63rem' }}>from {ind.sixMonthsAgoDate}</div>}
+                    {/* Latest vintage, not first print — stated rather than
+                        assumed, since a revised figure and an original one are
+                        different numbers for the same month. */}
+                    {ind.vintageDate && <div style={{ fontSize: '0.6rem', opacity: 0.75 }}>vintage {ind.vintageDate}</div>}
                   </td>
                 </tr>
               )

@@ -11,6 +11,23 @@
 // stays one row per date, and a payrolls benchmark revision leaves a permanent
 // before-and-after pair.
 
+// Loaded before the Supabase client is constructed below, and only when this
+// file is the entry point — required from server.js the env is already set.
+if (require.main === module) {
+  const dotenv = require('dotenv');
+  const pathMod = require('path');
+  // Cover being run from backend/, from the repo root, and from a worktree.
+  for (const p of [
+    pathMod.resolve(__dirname, '../../.env'),
+    pathMod.resolve(process.cwd(), '../.env'),
+    pathMod.resolve(process.cwd(), '.env'),
+  ]) dotenv.config({ path: p });
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
+    console.error('[macro-ingest] SUPABASE_URL / SUPABASE_SERVICE_KEY not found in .env');
+    process.exit(1);
+  }
+}
+
 const { createClient } = require('@supabase/supabase-js');
 const { SERIES } = require('./series');
 const { fetchMany } = require('./fred');
@@ -139,19 +156,77 @@ async function runIngest({ mode = 'recent', asOf = null } = {}) {
   return { mode, start, results, errors, ranAt: new Date().toISOString() };
 }
 
-/** Observations for the monitor, newest vintage per date, oldest first. */
-async function readSeries(seriesId, since) {
-  const { data, error } = await supabase
-    .from('macro_observations_latest')
-    .select('observation_date,value')
+/**
+ * Observations for the monitor: LATEST VINTAGE per observation date.
+ *
+ * The vintage policy, stated once so it is not inferred from behaviour:
+ *
+ *   The dashboard shows the LATEST vintage — the best current estimate of what
+ *   happened — and recomputes when a revision is ingested. It does not freeze
+ *   values at first print. A panel describing today's economy should use the
+ *   data statisticians currently believe, not what they believed in February.
+ *
+ *   Prior vintages are never overwritten, so an as-of read is available for
+ *   anything that must not use hindsight — the same query with
+ *   `.lte('vintage_date', asOf)` before the distinct. That is what a
+ *   reconstruction must use, because a backtest reading revised payrolls reads
+ *   numbers the signal could not have seen.
+ *
+ * `vintage_date` comes back with every row so the UI can say which vintage a
+ * number is from rather than leaving the reader to assume.
+ */
+async function readSeries(seriesId, since, { asOf = null } = {}) {
+  let q = supabase
+    .from(asOf ? 'macro_observations' : 'macro_observations_latest')
+    .select('observation_date,value,vintage_date')
     .eq('series_id', seriesId)
-    .gte('observation_date', since)
-    .order('observation_date', { ascending: true });
-  if (error) throw new Error(`macro_observations_latest: ${error.message}`);
-  return (data || []).map(r => ({
+    .gte('observation_date', since);
+  if (asOf) q = q.lte('vintage_date', asOf);
+  const { data, error } = await q.order('observation_date', { ascending: true });
+  if (error) throw new Error(`macro_observations: ${error.message}`);
+
+  const rows = (data || []).map(r => ({
     observation_date: String(r.observation_date).slice(0, 10),
     value: r.value == null ? null : Number(r.value),
+    vintage_date: r.vintage_date ? String(r.vintage_date).slice(0, 10) : null,
   }));
+  if (!asOf) return rows;
+
+  // An as-of read comes from the raw table, so collapse to the newest vintage
+  // that existed on or before `asOf`.
+  const byDate = new Map();
+  for (const r of rows) {
+    const prev = byDate.get(r.observation_date);
+    if (!prev || (r.vintage_date || '') > (prev.vintage_date || '')) byDate.set(r.observation_date, r);
+  }
+  return [...byDate.values()].sort((a, b) => (a.observation_date < b.observation_date ? -1 : 1));
+}
+
+// Runnable on demand, because "the timer will get to it" is not an answer when
+// a release just landed:
+//
+//   node macro/ingest.js              — rolling 30-month window (the daily job)
+//   node macro/ingest.js backfill     — from 2000, for the regime study
+//   node macro/ingest.js 2026-06-30   — that VINTAGE, i.e. the data as it was
+//                                       known on that date (needs FRED_API_KEY)
+//
+// Exits non-zero if any series failed, so a scheduled run fails loudly rather
+// than reporting success over a partial fetch.
+if (require.main === module) {
+  const arg = (process.argv[2] || '').trim();
+  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(arg) ? arg : null;
+  const mode = arg === 'backfill' ? 'backfill' : 'recent';
+
+  runIngest({ mode, asOf })
+    .then((r) => {
+      for (const x of r.results) {
+        console.log(`  ${x.seriesId.padEnd(15)} +${x.inserted} new, ${x.revised} revised, ${x.skipped} unchanged`);
+      }
+      const failed = Object.keys(r.errors);
+      console.log(`[macro-ingest] ${r.mode} from ${r.start}: ${r.results.length} series${failed.length ? `, ${failed.length} FAILED` : ''}`);
+      if (failed.length) process.exit(1);
+    })
+    .catch((err) => { console.error('[macro-ingest]', err.message); process.exit(1); });
 }
 
 module.exports = { runIngest, ingestSeries, syncCatalogue, readSeries, changed };

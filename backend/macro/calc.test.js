@@ -339,3 +339,39 @@ describe('against verified FRED reference data', () => {
     assert.equal(m.avg3mChange, null, 'an incomplete window must report nothing, not a wrong average');
   });
 });
+
+// ─── Seasonal adjustment is part of the series identity ──────────────────────
+// A validation report attributed CPIAUCNS values to CPIAUCSL and concluded the
+// dashboard was showing an NSA print. Both series are pinned here so the
+// confusion cannot survive a code change either.
+describe('headline CPI: seasonally adjusted vs not', () => {
+  const monthly = (pairs) => pairs.map(([d, v]) => ({ observation_date: d, value: v }));
+  const opts = { frequency: 'monthly', transform: 'index', anchorDate: '2026-08-09' };
+
+  // CPIAUCSL — the series actually ingested, and what the panel shows.
+  test('CPIAUCSL annualizes to 4.05% off the December base', () => {
+    const m = computeMetrics(monthly([
+      ['2025-12-01', 326.031], ['2026-01-01', 326.588], ['2026-02-01', 327.460],
+      ['2026-03-01', 330.293], ['2026-04-01', 332.407], ['2026-05-01', 333.979],
+      ['2026-06-01', 332.568],
+    ]), opts);
+    assert.equal(m.latest, 332.568);
+    assert.equal(m.sixMonthsAgo, 326.031);
+    assert.ok(Math.abs(m.annualized6m - 4.0505) < 0.01, `expected 4.05, got ${m.annualized6m}`);
+  });
+
+  // CPIAUCNS — same concept, no seasonal adjustment. Annualizing it over
+  // Dec->Jun spans HALF A SEASONAL CYCLE, so the 6.2% it produces is mostly
+  // the spring price upswing, not underlying inflation. This is why the
+  // catalogue ingests the SA series, and why the 6.2% figure quoted against
+  // CPIAUCSL was really this series.
+  test('CPIAUCNS gives 6.2% over the same window — seasonality, not inflation', () => {
+    const m = computeMetrics(monthly([
+      ['2025-12-01', 324.054], ['2026-01-01', 325.252], ['2026-02-01', 326.785],
+      ['2026-03-01', 330.213], ['2026-04-01', 333.020], ['2026-05-01', 335.123],
+      ['2026-06-01', 333.952],
+    ]), opts);
+    assert.ok(Math.abs(m.annualized6m - 6.2018) < 0.02, `expected ~6.20, got ${m.annualized6m}`);
+    assert.ok(m.annualized6m - 4.0505 > 2, 'the SA/NSA gap over this window is over 2pp — not a rounding matter');
+  });
+});
