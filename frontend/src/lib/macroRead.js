@@ -275,6 +275,106 @@ const SCORE_TOOLTIP =
  * Only for components that are actually scoring, and phrased as conditions on
  * observable data — never as a claim about what any central bank would then do.
  */
+/**
+ * Every scored lever, with the two markers that would move it.
+ *
+ * `higherIsHotter: false` for unemployment, which cools as it RISES — the one
+ * inverted series, and the easiest thing here to get backwards.
+ */
+function levers(monitor) {
+  const T = monitor?.thresholds;
+  const s = monitor?.signals;
+  if (!T || !s) return [];
+  const L = [
+    { key: 'inflation', weight: T.weights?.inflation ?? 0.45, noun: 'Core inflation',
+      value: s.inflation?.detail?.annualized6m, fmt: (v) => `${n2(v)}%`, unit: 'annualized over six months',
+      coolAt: T.inflation?.cool6m, hotAt: T.inflation?.hot6m, higherIsHotter: true },
+    { key: 'labour', weight: T.weights?.labour ?? 0.25, noun: 'Hiring',
+      value: s.labour?.detail?.avg3mChangeThousands, fmt: (v) => fmtK(v), unit: 'a month over three months',
+      coolAt: T.labour?.payrollsCool, hotAt: T.labour?.payrollsHot, higherIsHotter: true },
+    { key: 'unemployment', weight: (T.weights?.labour ?? 0.25) * (T.labour?.unemploymentWeight ?? 0.4), noun: 'The unemployment rate',
+      value: s.labour?.detail?.unemploymentChangePp, fmt: (v) => `${signed(v)}pp`, unit: 'over six months',
+      coolAt: T.labour?.unemploymentCoolPp, hotAt: T.labour?.unemploymentHotPp, higherIsHotter: false },
+    { key: 'wages', weight: T.weights?.wages ?? 0.15, noun: 'Wage growth',
+      value: s.wages?.detail?.yoyPct, fmt: (v) => `${n2(v)}%`, unit: 'year-over-year',
+      coolAt: T.wages?.yoyCool, hotAt: T.wages?.yoyHot, higherIsHotter: true },
+    { key: 'expectations', weight: T.weights?.expectations ?? 0.10, noun: 'Long-run inflation expectations',
+      value: s.expectations?.detail?.latest, fmt: (v) => `${n2(v)}%`, unit: '',
+      coolAt: T.expectations?.levelCool, hotAt: T.expectations?.levelHot, higherIsHotter: true },
+    { key: 'oil', weight: T.weights?.oil ?? 0.05, noun: 'Oil',
+      value: s.oil?.detail?.roc6mPct, fmt: (v) => `${signed(v)}%`, unit: 'over six months',
+      coolAt: T.oil?.rocCool, hotAt: T.oil?.rocHot, higherIsHotter: true },
+  ];
+  return L.filter(l => Number.isFinite(l.value) && Number.isFinite(l.coolAt) && Number.isFinite(l.hotAt));
+}
+
+/**
+ * What would move the reading, split by which way it would move it.
+ *
+ * Grouped rather than listed because "what would change this" is really two
+ * questions with opposite answers, and a flat list makes the reader work out
+ * which direction each condition points. Ordered by weight, capped at two per
+ * group: the levers that cannot move the composite much are noise here.
+ *
+ * Phrased as conditions on observable data. Never as a claim about what any
+ * central bank would then do — the group headings say "signal", not "decision".
+ */
+function whatWouldChangeByDirection(monitor) {
+  const all = levers(monitor).sort((a, b) => b.weight - a.weight);
+  const hotter = [];
+  const cooler = [];
+
+  for (const l of all) {
+    // A lever already past its marker cannot "rise above" it, and dropping it
+    // for that reason is how the heaviest component vanished from the list —
+    // core inflation at 3.76% against a 3.50% marker was simply absent. Beyond
+    // the marker, the condition is that it STAYS there rather than reverting.
+    const beyondHot = l.higherIsHotter ? l.value >= l.hotAt : l.value <= l.hotAt;
+    const beyondCool = l.higherIsHotter ? l.value <= l.coolAt : l.value >= l.coolAt;
+
+    // Say which SIDE explicitly. "Beyond" reads as "above" whichever way the
+    // series runs, and that is wrong half the time — hiring at +20k against a
+    // +50k marker is below it, not beyond it.
+    const towardHot = beyondHot
+      ? `holding ${l.higherIsHotter ? 'above' : 'below'} ${l.fmt(l.hotAt)} rather than reverting`
+      : `${l.higherIsHotter ? 'rising above' : 'falling below'} ${l.fmt(l.hotAt)}`;
+    const towardCool = beyondCool
+      ? `holding ${l.higherIsHotter ? 'below' : 'above'} ${l.fmt(l.coolAt)} rather than reverting`
+      : `${l.higherIsHotter ? 'falling below' : 'rising above'} ${l.fmt(l.coolAt)}`;
+
+    const at = `now ${l.fmt(l.value)}${l.unit ? ` ${l.unit}` : ''}`;
+    // Every lever appears in BOTH lists — it can always move either way, and
+    // its marker in each direction is exactly what the reader is asking for.
+    if (hotter.length < 2) hotter.push(`${l.noun} ${towardHot} — ${at}.`);
+    if (cooler.length < 2) cooler.push(`${l.noun} ${towardCool} — ${at}.`);
+  }
+
+  const regime = monitor?.composite?.regime;
+  const groups = [];
+  if (hotter.length) {
+    groups.push({
+      direction: 'hotter',
+      heading: 'Would push toward hike-risk',
+      items: hotter,
+    });
+  }
+  if (cooler.length) {
+    groups.push({
+      direction: 'cooler',
+      heading: 'Would push toward a cut-compatible signal',
+      items: cooler,
+    });
+  }
+  if (regime === 'neutral' && hotter.length && cooler.length) {
+    groups.push({
+      direction: 'hold',
+      heading: 'Would reinforce the current hold-compatible reading',
+      items: ['Both sides staying inside their current ranges, leaving the components offsetting one another as they do now.'],
+    });
+  }
+  return groups;
+}
+
 function whatWouldChange(monitor) {
   const T = monitor?.thresholds;
   const out = [];
@@ -422,6 +522,7 @@ export {
   REGIME_WORD, POLICY_WORD, COMPONENT_LABEL, COMPONENT_PHRASE, SCORE_TOOLTIP,
   directionWord, confidenceConstraint, signalTriad, countdown,
   explain, explainShort, componentInterpretation, whatWouldChange,
+  whatWouldChangeByDirection, levers,
   freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
   shortTitle, reportMonth, signed, fmtK,
 };

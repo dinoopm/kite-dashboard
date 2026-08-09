@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import {
   REGIME_WORD, POLICY_WORD, COMPONENT_LABEL, SCORE_TOOLTIP,
   directionWord, confidenceConstraint, signalTriad, countdown,
-  explain, explainShort, componentInterpretation, whatWouldChange,
+  explain, explainShort, componentInterpretation, whatWouldChangeByDirection,
   freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
   shortTitle, reportMonth, signed,
 } from '../lib/macroRead.js'
@@ -129,7 +129,7 @@ export default function MacroDecisionMonitor() {
   const tone = REGIME_TONE[regimeKey] || GREY
   const triad = signalTriad(d)
   const conf = confidenceConstraint(d.confidence)
-  const changes = whatWouldChange(d)
+  const changeGroups = whatWouldChangeByDirection(d)
   const next = d.releases?.next
   const scored = d.indicators.filter(i => i.scored)
   const context = d.indicators.filter(i => !i.scored)
@@ -317,11 +317,27 @@ export default function MacroDecisionMonitor() {
       </div>
 
       {/* ─── SECONDARY: what would change this ────────────────────────────── */}
-      {changes.length > 0 && (
-        <Section title="What would change this signal" count={changes.length}>
-          <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.76rem', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
-            {changes.map((c, i) => <li key={i}>{c}</li>)}
-          </ul>
+      {changeGroups.length > 0 && (
+        <Section title="What would change this signal">
+          {/* Grouped by which way it would move, because a flat list makes the
+              reader work out the direction of every line for themselves. */}
+          <div style={{ display: 'grid', gap: '0.8rem' }}>
+            {changeGroups.map(g => (
+              <div key={g.direction}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', marginBottom: '0.2rem' }}>
+                  <span aria-hidden="true" style={{ color: g.direction === 'hotter' ? RED : g.direction === 'cooler' ? GREEN : AMBER, fontSize: '0.7rem' }}>
+                    {g.direction === 'hotter' ? MARK.up : g.direction === 'cooler' ? MARK.down : MARK.flat}
+                  </span>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: g.direction === 'hotter' ? RED : g.direction === 'cooler' ? GREEN : AMBER }}>
+                    {g.heading}
+                  </span>
+                </div>
+                <ul style={{ margin: 0, paddingLeft: '1.5rem', fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.65 }}>
+                  {g.items.map((it, i) => <li key={i}>{it}</li>)}
+                </ul>
+              </div>
+            ))}
+          </div>
         </Section>
       )}
 

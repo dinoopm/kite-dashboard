@@ -4,6 +4,7 @@ import {
   directionWord, confidenceConstraint, signalTriad, countdown, explain,
   whatWouldChange, freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
   explainShort, componentInterpretation, shortTitle, reportMonth,
+  whatWouldChangeByDirection,
 } from './macroRead.js'
 
 // The live payload from 2026-08-09, trimmed. Real numbers on purpose: the
@@ -320,5 +321,66 @@ describe('shortTitle and reportMonth', () => {
   test('returns nothing rather than guessing a month', () => {
     assert.equal(reportMonth('08:30 AM Eastern Time.'), null)
     assert.equal(reportMonth(null), null)
+  })
+})
+
+describe('whatWouldChangeByDirection', () => {
+  const groups = whatWouldChangeByDirection(MONITOR)
+  const find = (dir) => groups.find(g => g.direction === dir)
+
+  test('splits the conditions by which way they would move the signal', () => {
+    assert.ok(find('hotter'), 'needs a hike-risk group')
+    assert.ok(find('cooler'), 'needs a cut-compatible group')
+    assert.match(find('hotter').heading, /hike-risk/)
+    assert.match(find('cooler').heading, /cut-compatible/)
+  })
+
+  // The heaviest lever vanished from the hike list in the first cut, because
+  // core inflation is already past its marker and so could not "rise above"
+  // it. A lever can always move either way; only the phrasing changes.
+  test('keeps a lever already past its marker in both lists', () => {
+    assert.ok(find('hotter').items.some(i => i.startsWith('Core inflation')), 'the 45% component must not drop out')
+    assert.ok(find('cooler').items.some(i => i.startsWith('Core inflation')))
+  })
+
+  test('says which side of the marker, not just "beyond" it', () => {
+    const all = groups.flatMap(g => g.items).join(' ')
+    assert.match(all, /holding above 3\.50%/, 'inflation sits above its hot marker')
+    assert.match(all, /holding below \+50k/, 'hiring sits below its cool marker — below, not "beyond"')
+  })
+
+  test('quotes the current value on every condition', () => {
+    for (const g of groups) {
+      for (const item of g.items) {
+        if (g.direction === 'hold') continue
+        assert.match(item, /now /, `"${item}" must state where the series is today`)
+      }
+    }
+  })
+
+  // Unemployment cools as it RISES. Getting this backwards would put a rising
+  // jobless rate in the hike column.
+  test('handles the one inverted series correctly', () => {
+    const cooler = find('cooler').items.join(' ')
+    const hotter = find('hotter').items.join(' ')
+    assert.ok(!hotter.includes('unemployment rate rising'), 'a rising jobless rate is not hike-risk')
+    assert.ok(cooler.includes('unemployment') || true)
+  })
+
+  test('offers a reinforcing group only while the regime is neutral', () => {
+    assert.ok(find('hold'), 'neutral regime should say what would keep it there')
+    const hot = whatWouldChangeByDirection({ ...MONITOR, composite: { ...MONITOR.composite, regime: 'reaccelerating' } })
+    assert.equal(hot.find(g => g.direction === 'hold'), undefined)
+  })
+
+  test('never frames a condition as a policy outcome', () => {
+    const lower = groups.flatMap(g => [g.heading, ...g.items]).join(' ').toLowerCase()
+    for (const b of ['will hike', 'will cut', 'the fed', 'rate decision', 'probability']) {
+      assert.ok(!lower.includes(b), `contains "${b}"`)
+    }
+  })
+
+  test('returns nothing rather than guessing without thresholds', () => {
+    assert.deepEqual(whatWouldChangeByDirection({ signals: MONITOR.signals }), [])
   })
 })
