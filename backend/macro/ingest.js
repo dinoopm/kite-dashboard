@@ -83,13 +83,19 @@ async function ingestSeries(seriesId, observations, { vintageDate = null } = {})
   if (!observations?.length) return { seriesId, inserted: 0, revised: 0, skipped: 0 };
   const since = observations[0].observation_date;
   const stored = await latestStored(seriesId, since);
-  const vintage = vintageDate || today();
+  const fallback = vintageDate || today();
 
   const rows = [];
   let revised = 0;
   for (const o of observations) {
     const date = String(o.observation_date).slice(0, 10);
     const value = o.value == null ? null : Number(o.value);
+    // With FRED_API_KEY the JSON API returns `realtime_start`: the date the
+    // SOURCE published this value. Without a key the CSV carries no vintage
+    // information at all, so the best available stamp is the day we first saw
+    // the value — which is a weaker claim, and the UI says "first seen" rather
+    // than "vintage" so the two are not confused.
+    const vintage = o.realtime_start ? String(o.realtime_start).slice(0, 10) : fallback;
     if (!stored.has(date)) {
       rows.push({ series_id: seriesId, observation_date: date, vintage_date: vintage, value });
       continue;

@@ -244,10 +244,22 @@ export default function MacroDecisionMonitor() {
                   <td style={{ ...cell, textAlign: 'right', color: GREY, fontSize: '0.72rem' }}>
                     {ind.latestDate || '—'}
                     {ind.sixMonthsAgoDate && <div style={{ fontSize: '0.63rem' }}>from {ind.sixMonthsAgoDate}</div>}
-                    {/* Latest vintage, not first print — stated rather than
-                        assumed, since a revised figure and an original one are
-                        different numbers for the same month. */}
-                    {ind.vintageDate && <div style={{ fontSize: '0.6rem', opacity: 0.75 }}>vintage {ind.vintageDate}</div>}
+                    {/* "first seen", not "vintage". Without FRED_API_KEY the
+                        CSV feed carries no vintage information, so the honest
+                        stamp is the day WE first saw this value — not the day
+                        BEA or BLS published it. Calling that a vintage claims
+                        knowledge we do not have, and reading a 2026-08-09
+                        stamp as a source revision date is what made this look
+                        inconsistent. With an API key the source's own
+                        realtime_start is stored instead. */}
+                    {ind.vintageDate && (
+                      <div style={{ fontSize: '0.6rem', opacity: 0.75 }}
+                           title={d.vintagesAvailable
+                             ? 'Source vintage: the date the statistical agency published this value.'
+                             : 'The date this dashboard first recorded this value. Not the agency\'s revision date — set FRED_API_KEY for true source vintages.'}>
+                        {d.vintagesAvailable ? 'vintage' : 'first seen'} {ind.vintageDate}
+                      </div>
+                    )}
                   </td>
                 </tr>
               )
