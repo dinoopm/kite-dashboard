@@ -105,6 +105,12 @@ const BLOCKED_SIGNALS = [
     blockedReason: 'Not scoreable on Indian data: the premise is a YEAR of going nowhere, so one firing needs 252 sessions before it, and nse_bhavcopy holds ~82. Becomes measurable here around mid-2027. It HAS been measured on US history instead — backend/baseBreakoutStudy.js, 498 S&P 500 names over 2014-2026, 2,358 firings at the tight setting: 22-day median excess over the index +0.48% (t=4.1), decaying smoothly to nothing as the base is allowed to widen, and no effect at all at 5 or 10 days. Real but small, and the universe is today\'s index members, so survivorship bias flatters it by an unknown amount. Treat as a research filter, not an edge.',
   },
   {
+    name: 'us_macro_regime',
+    label: 'US macro regime (cooling / neutral / re-accelerating)',
+    source: 'recorded',
+    blockedReason: 'A market-wide claim, not a per-symbol one, so signals/scorecard.js — which measures each symbol against an index — cannot express it, the same reason expiry_volatility sits here. It IS recorded before the outcome exists: dailyJobs writes macro_signal_snapshots every day. What it is not yet is SCORED, and the binding constraint is sample size of the right unit. A regime is a STATE that persists for months, and this repo\'s first rule is that signals fire on transitions, not states — counting "re-accelerating" on each of five consecutive months turns one call into five heavily overlapping rows and inflates n fivefold. The honest unit is the transition, of which live recording yields roughly 4-8 a year. A credible sample needs the ALFRED vintage reconstruction (FRED_API_KEY + macro/ingest.js runIngest({ mode: "backfill", asOf }) walked back through history), which would give on the order of 60-90 transitions since 2000 using data as it was actually known at the time rather than as later revised. Until that exists, treat the panel as a data display, not as evidence about anything.',
+  },
+  {
     name: 'expiry_volatility',
     label: 'Monthly expiry volatility',
     source: 'recorded',

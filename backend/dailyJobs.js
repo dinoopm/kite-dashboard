@@ -99,7 +99,7 @@ function registerStopProposals(fn) { stopProposalsFn = fn; }
  * to also stop recording price signals.
  */
 async function runDailyJobs({ force = false } = {}) {
-  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null, stops: null };
+  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null, stops: null, macro: null };
 
   // Trades first, and on EVERY tick rather than once a day. Kite exposes only
   // the CURRENT day's fills, so a day this does not run is a day whose trades
@@ -191,6 +191,40 @@ async function runDailyJobs({ force = false } = {}) {
       out.stops = { error: err.message };
       console.warn('[daily] stop proposals failed (will retry next tick):', err.message);
     }
+  }
+
+  // Macro: ingest the official series, then record today's regime BEFORE the
+  // outcome exists — the same standard as the picks snapshot, and the only
+  // reason the panel will ever be more than a data display. Completion is
+  // decided by asking macro_signal_snapshots whether today has a row, so a
+  // restart neither redoes the work nor skips it.
+  //
+  // Failing softly on a missing table is deliberate: this runs on servers
+  // where migrate_macro_monitor.js has not been applied, and the picks
+  // recorder must not stop because the macro tables do not exist yet.
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const { count, error } = await supabase.from('macro_signal_snapshots')
+      .select('snap_date', { count: 'exact', head: true }).eq('snap_date', today);
+    if (error) throw new Error(`macro_signal_snapshots: ${error.message}`);
+    if (!force && count > 0) {
+      out.macro = { skipped: 'already recorded today', snapDate: today };
+    } else {
+      const { runIngest } = require('./macro/ingest');
+      const { buildMonitor, recordSnapshot } = require('./macro/monitor');
+      const ingested = await runIngest({ mode: 'recent' });
+      const monitor = await buildMonitor();
+      const snapDate = await recordSnapshot(monitor);
+      out.macro = {
+        snapDate, regime: monitor.composite.regime, bias: monitor.composite.bias,
+        confidence: monitor.confidence.level, dataPath: monitor.dataPath,
+        revisions: ingested.results.reduce((n, r) => n + r.revised, 0),
+      };
+      console.log(`[daily] macro regime ${snapDate}: ${monitor.composite.regime} (${monitor.composite.bias}), confidence ${monitor.confidence.level}`);
+    }
+  } catch (err) {
+    out.macro = { error: err.message };
+    console.warn('[daily] macro monitor failed (will retry next tick):', err.message);
   }
 
   return out;

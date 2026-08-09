@@ -1,3 +1,4 @@
+import MacroDecisionMonitor from '../../components/MacroDecisionMonitor'
 import RiskRegimePanel from '../../components/RiskRegimePanel'
 import TreasuryChart from '../../components/TreasuryChart'
 
@@ -14,6 +15,7 @@ export default function UsMacro() {
         </p>
       </div>
 
+      <MacroDecisionMonitor />
       <RiskRegimePanel />
       <TreasuryChart />
     </div>

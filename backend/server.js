@@ -5280,6 +5280,53 @@ app.get('/api/data-health', async (req, res) => {
   }
 });
 
+// ─── Macro Decision Monitor ──────────────────────────────────────────────────
+// Six months of official US macro data (FRED, redistributing BLS/BEA/EIA/Fed)
+// turned into five sub-signals and one regime read. Deliberately NOT mounted
+// under /api/us, which is the Alpaca equity router — this is macro data, not a
+// symbol endpoint.
+//
+// Cached for 6h and coalesced: the underlying series update once a month
+// (daily for oil and breakevens), so re-deriving per page view is pure egress
+// against a public good.
+const { buildMonitor } = require('./macro/monitor');
+let macroMonitorCache = null; // { data, ts }
+const MACRO_MONITOR_TTL = 6 * 60 * 60 * 1000;
+let macroMonitorRunning = null;
+app.get('/api/macro/monitor', async (req, res) => {
+  try {
+    if (!req.query.force && macroMonitorCache && Date.now() - macroMonitorCache.ts < MACRO_MONITOR_TTL) {
+      return res.json({ ...macroMonitorCache.data, cached: true });
+    }
+    if (!macroMonitorRunning) {
+      macroMonitorRunning = buildMonitor().finally(() => { macroMonitorRunning = null; });
+    }
+    const data = await macroMonitorRunning; // concurrent requests share one run
+    macroMonitorCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[macro/monitor]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Written read of the SAME computed regime — POST so it is never fetched by a
+// stray page load. The model narrates already-computed output and is handed
+// only the metrics, signals, thresholds, freshness and caveats; it never sees
+// a raw series, so it cannot derive a figure that disagrees with the panel.
+app.post('/api/macro/narrative', async (req, res) => {
+  try {
+    const monitor = macroMonitorCache?.data || await buildMonitor();
+    const { generateNarrative } = require('./macro/narrative');
+    const out = await generateNarrative(monitor);
+    if (!out.text) return res.status(503).json({ error: out.error || 'narrative unavailable' });
+    res.json({ narrative: out.text, asOf: monitor.anchorDate, generatedAt: out.generatedAt });
+  } catch (err) {
+    console.error('[macro/narrative]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // The other half of the picks validation: score the snapshots the server
 // actually published (picks/scorecard.js) rather than reconstructed picks.
 // Cheap next to /backtest — no engine re-runs — but still cached, since the
