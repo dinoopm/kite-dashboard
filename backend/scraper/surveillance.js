@@ -10,12 +10,9 @@ dotenv.config({ path: envPath });
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 
-if (!supabaseUrl || !supabaseKey) {
-  console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in environment");
-  process.exit(1);
-}
-
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Built lazily so this file can be required by its test without a live config;
+// the credential check happens in the run guard at the bottom instead.
+const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 const NAV_TIMEOUT = 60000;
@@ -24,6 +21,33 @@ const MAX_ATTEMPTS = 3;
 const RETRY_BACKOFF_MS = [10000, 30000]; // waits between attempts 1→2 and 2→3
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Read a report response, and NEVER reject.
+ *
+ * A puppeteer Response is a live handle onto a browser target, and its
+ * accessors are not safe once that target goes away — a closed browser, an
+ * aborted request, a redirect. `response.url()` and `response.status()` throw
+ * in those cases, not merely `.json()`.
+ *
+ * The original handlers only guarded `.json()`, so a throw from url()/status()
+ * rejected the async listener's promise with nothing awaiting it. Node kills
+ * the process on an unhandled rejection with exit code 1 — which is how this
+ * job failed on 2026-07-04, 07-18 and 08-08. The 08-08 run died 32 seconds in,
+ * while the retry path alone sleeps 40, so scrapeWithRetry never got its
+ * remaining attempts and a blocked run failed the workflow instead of exiting
+ * 0 with "no stocks found". The rejection was never on the chain it awaited.
+ */
+async function readReport(response, pattern) {
+  try {
+    if (!response || typeof response.url !== 'function' || typeof response.status !== 'function') return null;
+    if (!pattern.test(response.url())) return null;
+    if (response.status() !== 200) return null;
+    return (await response.json()) ?? null;
+  } catch {
+    return null;   // detached target, non-JSON body, redirect — all "no data"
+  }
+}
 
 // Poll until `get()` returns something truthy, or the timeout expires. Used to
 // wait on the intercepted XHR rather than for the page to go network-idle: NSE
@@ -58,10 +82,13 @@ async function scrapeOnce() {
     // Intercept the JSON API call the page makes internally. Both the camelCase
     // and kebab-case spellings are matched — NSE has served each.
     let asmData = null;
-    page.on('response', async response => {
-      if (/\/api\/report-?asm/i.test(response.url()) && response.status() === 200) {
-        try { asmData = await response.json(); } catch (e) { /* not JSON */ }
-      }
+    // Not an async listener: the returned promise would be unawaited, so any
+    // rejection inside it becomes an unhandled rejection. readReport cannot
+    // reject, and the trailing catch covers the impossible case.
+    page.on('response', (response) => {
+      readReport(response, /\/api\/report-?asm/i)
+        .then(d => { if (d) asmData = d; })
+        .catch(() => { });
     });
 
     console.log("[Surveillance] Loading ASM report page...");
@@ -95,11 +122,10 @@ async function scrapeOnce() {
 
     // ─── 2. Scrape GSM ─────────────────────────────────────────
     let gsmData = null;
-    page.on('response', async response => {
-      const url = response.url();
-      if ((/\/api\/report-?gsm/i.test(url) || url.includes('/api/gsm')) && response.status() === 200) {
-        try { gsmData = await response.json(); } catch (e) { /* not JSON */ }
-      }
+    page.on('response', (response) => {
+      readReport(response, /\/api\/(report-?gsm|gsm)/i)
+        .then(d => { if (d) gsmData = d; })
+        .catch(() => { });
     });
 
     // The regulations page is what actually calls /api/reportGSM; /reports/gsm
@@ -173,14 +199,32 @@ async function scrapeOnce() {
   }
 }
 
+/**
+ * Did this scrape get BOTH reports?
+ *
+ * The two are fetched from different NSE pages and are blocked independently,
+ * so "193 rows" is not evidence of a good scrape — it is evidence of a good
+ * ASM scrape and says nothing about GSM.
+ */
+function isCompleteScrape(stocks) {
+  if (!stocks?.length) return false;
+  return stocks.some(s => s.measure === 'ASM') && stocks.some(s => s.measure === 'GSM');
+}
+
 // Retry the whole scrape. NSE blocks datacenter IPs intermittently, and a fresh
 // browser (new session and cookies) is usually what gets through on a later try.
+//
+// A COMPLETE scrape ends the loop; a partial one is kept but retried, because
+// ASM and GSM come from separate pages that are blocked separately, and a
+// partial result is not a smaller success — see syncSurveillance.
 async function scrapeWithRetry() {
+  let best = [];
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       const stocks = await scrapeOnce();
-      if (stocks.length > 0) return stocks;
-      console.warn(`[Surveillance] Attempt ${attempt}/${MAX_ATTEMPTS} returned no stocks.`);
+      if (isCompleteScrape(stocks)) return stocks;
+      if (stocks.length > best.length) best = stocks;
+      console.warn(`[Surveillance] Attempt ${attempt}/${MAX_ATTEMPTS} incomplete (${stocks.length} rows, measures: ${[...new Set(stocks.map(s => s.measure))].join(',') || 'none'}).`);
     } catch (err) {
       console.warn(`[Surveillance] Attempt ${attempt}/${MAX_ATTEMPTS} failed:`, err.message);
     }
@@ -190,15 +234,23 @@ async function scrapeWithRetry() {
       await sleep(wait);
     }
   }
-  return [];
+  return best;
 }
 
 async function syncSurveillance() {
   try {
     const affectedStocks = await scrapeWithRetry();
 
-    if (affectedStocks.length === 0) {
-      console.warn(`[Surveillance] No stocks found after ${MAX_ATTEMPTS} attempts; leaving existing data untouched.`);
+    // The sync REPLACES the table — delete, then insert — and picks/engine.js
+    // hard-excludes every symbol in it. So a partial scrape is not a partial
+    // update, it is a silent deletion: an ASM-only run would drop ~82 GSM
+    // names and let them straight back into the published picks, reporting
+    // success while doing it. Leaving yesterday's complete list in place is
+    // strictly better than replacing it with a confident subset, because the
+    // surveillance list changes slowly and is a safety gate.
+    if (!isCompleteScrape(affectedStocks)) {
+      const measures = [...new Set(affectedStocks.map(s => s.measure))].join(', ') || 'none';
+      console.warn(`[Surveillance] Incomplete after ${MAX_ATTEMPTS} attempts (${affectedStocks.length} rows, measures: ${measures}) — leaving existing data untouched rather than replacing the exclusion list with a subset.`);
       return;
     }
 
@@ -225,4 +277,24 @@ async function syncSurveillance() {
   }
 }
 
-syncSurveillance();
+// Only run when invoked directly, so the test can require this file.
+if (require.main === module) {
+  if (!supabaseUrl || !supabaseKey) {
+    console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in environment");
+    process.exit(1);
+  }
+
+  // Last line of defence, and deliberately non-fatal. Puppeteer emits stray
+  // rejections from targets that close mid-flight, and this job's whole
+  // purpose is to tolerate NSE misbehaving. A weekly scraper that leaves the
+  // existing surveillance list untouched has done the right thing; killing the
+  // process turns a handled outage into a red workflow and trains everyone to
+  // ignore the alert. Logged loudly so a genuine bug is still visible.
+  process.on('unhandledRejection', (reason) => {
+    console.warn('[Surveillance] Ignored stray rejection:', reason?.message || reason);
+  });
+
+  syncSurveillance();
+}
+
+module.exports = { readReport, isCompleteScrape, syncSurveillance, scrapeWithRetry };
