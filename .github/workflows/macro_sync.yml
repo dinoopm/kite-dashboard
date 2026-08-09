@@ -4,11 +4,17 @@ name: Macro Data Sync
 # is up, which for a locally-run backend means "while the laptop is on". This
 # keeps macro_observations current regardless.
 #
-# 12:30 UTC is after the 08:30 ET window that BLS and BEA publish into, so a
-# release-day run picks the new print up the same day.
+# BLS and BEA publish at 08:30 ET, which is 12:30 UTC in summer and 13:30 UTC
+# in winter — and FRED needs time to ingest after that. A single 12:30 UTC run
+# therefore fired AT the release in summer and an hour BEFORE it in winter, so
+# a release-day print would not have landed until the following day.
+#
+# Two runs instead: 15:00 UTC catches the morning release once FRED has it
+# under either offset, and 20:00 UTC catches anything late plus the daily oil
+# and breakeven updates.
 on:
   schedule:
-    - cron: '30 12 * * 1-5'
+    - cron: '0 15,20 * * 1-5'
   workflow_dispatch:
     inputs:
       mode:

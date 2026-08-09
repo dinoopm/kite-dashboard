@@ -224,12 +224,32 @@ if (require.main === module) {
   const mode = arg === 'backfill' ? 'backfill' : 'recent';
 
   runIngest({ mode, asOf })
-    .then((r) => {
+    .then(async (r) => {
       for (const x of r.results) {
         console.log(`  ${x.seriesId.padEnd(15)} +${x.inserted} new, ${x.revised} revised, ${x.skipped} unchanged`);
       }
       const failed = Object.keys(r.errors);
       console.log(`[macro-ingest] ${r.mode} from ${r.start}: ${r.results.length} series${failed.length ? `, ${failed.length} FAILED` : ''}`);
+
+      // Record the regime too, unless this is a historical vintage run.
+      //
+      // Ingesting without snapshotting keeps the OBSERVATIONS current but
+      // leaves the track record full of holes on any day the server happened
+      // to be off — and a snapshot is a claim made before the outcome exists,
+      // so a day missed is a day that cannot be recovered. That is the exact
+      // failure that cost stock_pick_snapshots 2026-07-16 and 07-17. Upserted
+      // on snap_date, so running alongside dailyJobs is harmless.
+      if (!asOf) {
+        try {
+          const { buildMonitor, recordSnapshot } = require('./monitor');
+          const monitor = await buildMonitor();
+          const snapDate = await recordSnapshot(monitor);
+          console.log(`[macro-ingest] regime ${snapDate}: ${monitor.composite.regime} (${monitor.composite.bias}), confidence ${monitor.confidence.level}`);
+        } catch (e) {
+          console.error('[macro-ingest] snapshot failed:', e.message);
+          process.exit(1);
+        }
+      }
       if (failed.length) process.exit(1);
     })
     .catch((err) => { console.error('[macro-ingest]', err.message); process.exit(1); });
