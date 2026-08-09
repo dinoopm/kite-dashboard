@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   directionWord, confidenceConstraint, signalTriad, countdown, explain,
   whatWouldChange, freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
+  explainShort, componentInterpretation, shortTitle, reportMonth,
 } from './macroRead.js'
 
 // The live payload from 2026-08-09, trimmed. Real numbers on purpose: the
@@ -60,7 +61,7 @@ describe('confidenceConstraint', () => {
   test('names the weakest dimension, not the average', () => {
     const c = confidenceConstraint(MONITOR.confidence)
     assert.equal(c.key, 'agreement')
-    assert.match(c.text, /disagree/)
+    assert.match(c.text, /mixed indicator signals/, 'plain wording lands faster than "indicators disagree (34%)"')
   })
 
   test('says everything is fine when nothing is weak', () => {
@@ -250,5 +251,74 @@ describe('contextReason', () => {
 
   test('says nothing for a scored series', () => {
     assert.equal(contextReason({ key: 'corePce', scored: true }), null)
+  })
+})
+
+
+describe('explainShort', () => {
+  test('carries the whole screen in one sentence', () => {
+    const t = explainShort(MONITOR)
+    assert.ok(t.split('.').filter(x => x.trim()).length === 1, 'must be one sentence')
+    assert.match(t, /core inflation/i)
+    assert.match(t, /wage growth/i)
+    assert.match(t, /near neutral/)
+  })
+
+  test('the short and long forms name the same two drivers', () => {
+    const short = explainShort(MONITOR).toLowerCase()
+    const long = explain(MONITOR).toLowerCase()
+    for (const phrase of ['core inflation', 'wage growth']) {
+      assert.ok(short.includes(phrase) && long.includes(phrase), `"${phrase}" must appear in both`)
+    }
+  })
+
+  test('never asserts a central-bank action', () => {
+    const lower = explainShort(MONITOR).toLowerCase()
+    for (const b of ['will hike', 'will cut', 'the fed', 'forecast']) assert.ok(!lower.includes(b))
+  })
+
+  test('degrades without a score', () => {
+    assert.match(explainShort({ composite: { score: null } }), /Not enough current data/)
+  })
+})
+
+describe('componentInterpretation', () => {
+  // A bar and a number alone leave the reader to invent the reason. Each line
+  // is built from the same values that produced the contribution, so the two
+  // cannot drift apart.
+  test('explains every scored component from its own numbers', () => {
+    assert.match(componentInterpretation('inflation', MONITOR), /3\.76% annualized/)
+    assert.match(componentInterpretation('labour', MONITOR), /\+20k a month/)
+    assert.match(componentInterpretation('labour', MONITOR), /edged lower/)
+    assert.match(componentInterpretation('wages', MONITOR), /3\.15% year-over-year/)
+    assert.match(componentInterpretation('expectations', MONITOR), /2\.28%/)
+    assert.match(componentInterpretation('oil', MONITOR), /30\.88%/)
+  })
+
+  test('reports momentum separately from level for inflation', () => {
+    assert.match(componentInterpretation('inflation', MONITOR), /three-month pace is slower/)
+  })
+
+  test('says why a component is unscored rather than going blank', () => {
+    const stale = { ...MONITOR, signals: { ...MONITOR.signals, oil: { score: null, reason: 'oil series too stale to score' } } }
+    assert.match(componentInterpretation('oil', stale), /too stale/)
+  })
+})
+
+describe('shortTitle and reportMonth', () => {
+  test('strips parentheticals that add width but no meaning', () => {
+    assert.equal(shortTitle('CPI (Inflation) Report'), 'CPI Report')
+    assert.equal(shortTitle('GDP Second Estimate'), 'GDP Second Estimate')
+  })
+
+  test('pulls the reference month out of the calendar detail', () => {
+    assert.equal(reportMonth('08:30 AM Eastern Time. Report for July 2026.'), 'July 2026')
+    assert.equal(reportMonth('08:30 AM Eastern Time. Estimate for Q2 2026.'), 'Q2 2026')
+  })
+
+  // A release labelled with the wrong month is worse than one that says nothing.
+  test('returns nothing rather than guessing a month', () => {
+    assert.equal(reportMonth('08:30 AM Eastern Time.'), null)
+    assert.equal(reportMonth(null), null)
   })
 })

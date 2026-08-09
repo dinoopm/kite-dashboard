@@ -70,14 +70,17 @@ function directionWord(score) {
  */
 function confidenceConstraint(confidence) {
   if (!confidence) return null;
+  // Plain phrasing over precise phrasing: "mixed indicator signals" lands
+  // immediately, where "indicators disagree (34%)" makes the reader work out
+  // what 34% is a percentage OF before it means anything.
   const dims = [
-    { key: 'agreement', v: confidence.agreement, text: 'indicators disagree' },
-    { key: 'freshness', v: confidence.freshness, text: 'data is behind schedule' },
-    { key: 'completeness', v: confidence.completeness, text: 'some series are missing' },
+    { key: 'agreement', v: confidence.agreement, text: 'Limited by mixed indicator signals' },
+    { key: 'freshness', v: confidence.freshness, text: 'Limited by data behind its release schedule' },
+    { key: 'completeness', v: confidence.completeness, text: 'Limited by missing series' },
   ].filter(d => Number.isFinite(d.v));
   if (!dims.length) return null;
   const worst = dims.reduce((a, b) => (b.v < a.v ? b : a));
-  if (worst.v >= 0.75) return { key: null, text: 'all inputs fresh and broadly agreeing', value: worst.v };
+  if (worst.v >= 0.75) return { key: null, text: 'All inputs fresh and broadly agreeing', value: worst.v };
   return { key: worst.key, text: worst.text, value: worst.v };
 }
 
@@ -161,6 +164,110 @@ function explain(monitor) {
 }
 
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+/**
+ * One sentence, for the reader who will not read four.
+ *
+ * The long version stays available behind "More detail" — this is the line
+ * that has to carry the screen if nothing else is read.
+ */
+function explainShort(monitor) {
+  const c = monitor?.composite;
+  if (!c || c.score == null) return 'Not enough current data to read a regime.';
+  const { pressure, offset } = signalTriad(monitor);
+  const regime = c.regime === 'neutral' ? 'near neutral'
+    : c.regime === 'cooling' ? 'on the cooling side'
+      : 'on the re-accelerating side';
+
+  if (pressure && offset) {
+    return `${cap(COMPONENT_PHRASE[pressure.key] || pressure.key)} is still firm, but ${COMPONENT_PHRASE[offset.key] || offset.key} is offsetting it, keeping the policy signal ${regime}.`;
+  }
+  if (pressure) return `${cap(COMPONENT_PHRASE[pressure.key] || pressure.key)} is adding pressure with nothing offsetting it, putting the policy signal ${regime}.`;
+  if (offset) return `${cap(COMPONENT_PHRASE[offset.key] || offset.key)} is easing with nothing pushing back, putting the policy signal ${regime}.`;
+  return `The policy signal is ${regime}.`;
+}
+
+/**
+ * Why one component contributes what it does, in a sentence.
+ *
+ * Derived from the same values that produced the score, so a bar can never
+ * show a number the text does not account for.
+ */
+function componentInterpretation(key, monitor) {
+  const s = monitor?.signals?.[key];
+  const T = monitor?.thresholds;
+  if (!s) return '';
+  if (s.score == null) return s.reason ? cap(s.reason) : 'No current reading.';
+  const dt = s.detail || {};
+
+  switch (key) {
+    case 'inflation': {
+      const a6 = dt.annualized6m, a3 = dt.annualized3m;
+      if (!Number.isFinite(a6)) return 'No current reading.';
+      const level = a6 > (T?.inflation?.hot6m ?? 3.5) ? 'remains above the preferred range'
+        : a6 < (T?.inflation?.cool6m ?? 2.0) ? 'is running below target' : 'is close to target';
+      const mom = Number.isFinite(a3)
+        ? (a3 < a6 ? ', though the three-month pace is slower' : a3 > a6 ? ', and the three-month pace is faster' : '')
+        : '';
+      return `Core inflation ${level} at ${n2(a6)}% annualized over six months${mom}.`;
+    }
+    case 'labour': {
+      const pay = dt.avg3mChangeThousands, un = dt.unemploymentChangePp;
+      const parts = [];
+      if (Number.isFinite(pay)) parts.push(`payroll momentum is averaging ${fmtK(pay)} a month`);
+      if (Number.isFinite(un)) parts.push(`unemployment has ${un > 0 ? 'edged higher' : un < 0 ? 'edged lower' : 'held flat'} by ${n2(Math.abs(un))}pp over six months`);
+      return parts.length ? `${cap(parts.join(' while '))}.` : 'No current reading.';
+    }
+    case 'wages': {
+      const v = dt.yoyPct;
+      if (!Number.isFinite(v)) return 'No current reading.';
+      const cool = T?.wages?.yoyCool ?? 3.5;
+      return v < cool
+        ? `Wage growth at ${n2(v)}% year-over-year is below the ${n2(cool)}% pace considered consistent with target.`
+        : `Wage growth at ${n2(v)}% year-over-year is at or above the ${n2(cool)}% pace considered consistent with target.`;
+    }
+    case 'expectations': {
+      const v = dt.latest, ch = dt.changePp;
+      if (!Number.isFinite(v)) return 'No current reading.';
+      const anchored = v > (T?.expectations?.levelHot ?? 2.6) ? 'drifting above the anchored range' : 'within the anchored range';
+      const drift = Number.isFinite(ch) ? `, ${ch > 0 ? 'up' : ch < 0 ? 'down' : 'unchanged'} ${n2(Math.abs(ch))}pp over six months` : '';
+      return `Long-run market expectations are ${anchored} at ${n2(v)}%${drift}.`;
+    }
+    case 'oil': {
+      const v = dt.roc6mPct;
+      if (!Number.isFinite(v)) return 'No current reading.';
+      return v > (T?.oil?.rocHot ?? 25)
+        ? `Oil is up ${n2(v)}% over six months, creating upside headline-inflation risk.`
+        : v < (T?.oil?.rocCool ?? -15)
+          ? `Oil is down ${n2(Math.abs(v))}% over six months, easing headline inflation.`
+          : `Oil is ${signed(v)}% over six months, roughly range-bound.`;
+    }
+    default: return '';
+  }
+}
+
+/** "CPI (Inflation) Report" → "CPI Report". Parentheticals add width, not meaning. */
+function shortTitle(title) {
+  if (!title) return null;
+  return String(title).replace(/\s*\([^)]*\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * The reference month a release covers, pulled from the calendar's own detail
+ * text. Returns null rather than guessing — a release covering the wrong month
+ * is worse than one that does not say.
+ */
+function reportMonth(detail) {
+  if (!detail) return null;
+  const m = String(detail).match(/(?:Report|Estimate|Data)\s+for\s+([A-Z][a-z]+\s+\d{4}|Q[1-4]\s+\d{4})/);
+  return m ? m[1] : null;
+}
+
+// Shown on the score, because a small negative number invites exactly the
+// wrong reading — that it is a probability.
+const SCORE_TOOLTIP =
+  'The macro score summarises the weighted contributions of inflation, labour, wages, expectations and oil over the current six-month window. '
+  + 'It is not a probability and not a forecast of the Federal Reserve\'s decision.';
 
 /**
  * What would move the reading, computed against the thresholds that produced it.
@@ -312,8 +419,9 @@ function contextReason(ind) {
 }
 
 export {
-  REGIME_WORD, POLICY_WORD, COMPONENT_LABEL, COMPONENT_PHRASE,
+  REGIME_WORD, POLICY_WORD, COMPONENT_LABEL, COMPONENT_PHRASE, SCORE_TOOLTIP,
   directionWord, confidenceConstraint, signalTriad, countdown,
-  explain, whatWouldChange, freshnessStatus, sixMonthRead,
-  interpretIndicator, contextReason, signed, fmtK,
+  explain, explainShort, componentInterpretation, whatWouldChange,
+  freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
+  shortTitle, reportMonth, signed, fmtK,
 };

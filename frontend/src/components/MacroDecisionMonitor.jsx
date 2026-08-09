@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import {
-  REGIME_WORD, POLICY_WORD, COMPONENT_LABEL,
+  REGIME_WORD, POLICY_WORD, COMPONENT_LABEL, SCORE_TOOLTIP,
   directionWord, confidenceConstraint, signalTriad, countdown,
-  explain, whatWouldChange, freshnessStatus, sixMonthRead,
-  interpretIndicator, contextReason, signed,
+  explain, explainShort, componentInterpretation, whatWouldChange,
+  freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
+  shortTitle, reportMonth, signed,
 } from '../lib/macroRead.js'
 
 // ─── Macro Decision Monitor ──────────────────────────────────────────────────
@@ -82,7 +83,7 @@ function ScoreScale({ score, coolingMax, reaccelMin }) {
         <div style={{ position: 'absolute', left: `calc(${pos}% - 1px)`, top: -2, bottom: -2, width: 2, background: 'var(--text-primary)' }} />
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', color: GREY, marginTop: '0.2rem' }}>
-        <span>−1 cooling</span><span>neutral band</span><span>+1 re-accelerating</span>
+        <span>Cooling</span><span>Neutral range</span><span>Re-accelerating</span>
       </div>
     </div>
   )
@@ -108,6 +109,7 @@ export default function MacroDecisionMonitor() {
   const [err, setErr] = useState(null)
   const [loading, setLoading] = useState(true)
   const [openRow, setOpenRow] = useState(null)
+  const [detailOpen, setDetailOpen] = useState(false)
 
   useEffect(() => {
     let on = true
@@ -161,7 +163,7 @@ export default function MacroDecisionMonitor() {
           <div style={{ fontSize: '1.5rem', fontWeight: 700, color: tone, lineHeight: 1.2 }}>
             {REGIME_WORD[regimeKey] || 'Unknown'}
           </div>
-          <div style={{ fontSize: '0.7rem', color: GREY }}>of the last six months of data</div>
+          <div style={{ fontSize: '0.7rem', color: GREY }}>Based on the last six months of data</div>
         </div>
 
         <div>
@@ -171,7 +173,7 @@ export default function MacroDecisionMonitor() {
           </div>
           {/* Permanent, not a tooltip: the single most misreadable line here. */}
           <div style={{ fontSize: '0.68rem', color: GREY }}>
-            from a {signed(d.composite.score, 2)} composite · not a Fed forecast
+            Macro score: {signed(d.composite.score, 3)} · not a Fed forecast
           </div>
         </div>
 
@@ -179,11 +181,15 @@ export default function MacroDecisionMonitor() {
           <div style={label}>Next catalyst</div>
           {next ? (
             <>
-              <div style={{ fontSize: '0.95rem', fontWeight: 600, lineHeight: 1.3 }}>{next.title}</div>
-              <div style={{ fontSize: '0.72rem', color: GREY }}>
-                {longDate(next.date)} · {countdown(next.daysAway)}
+              <div style={{ fontSize: '1.05rem', fontWeight: 700, lineHeight: 1.3 }}>{shortTitle(next.title)}</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-primary)' }}>
+                {longDate(next.date)} · <span style={{ color: AMBER }}>{countdown(next.daysAway)}</span>
               </div>
-              {next.detail && <div style={{ fontSize: '0.66rem', color: GREY, marginTop: '0.15rem' }}>{next.detail}</div>}
+              {reportMonth(next.detail) && (
+                <div style={{ fontSize: '0.66rem', color: GREY, marginTop: '0.1rem' }}>
+                  Report month: {reportMonth(next.detail)}
+                </div>
+              )}
             </>
           ) : (
             <div style={{ fontSize: '0.75rem', color: AMBER }}>
@@ -193,16 +199,29 @@ export default function MacroDecisionMonitor() {
         </div>
       </div>
 
-      {/* Derived explanation. */}
-      <p style={{ margin: '0 0 0.8rem', fontSize: '0.86rem', lineHeight: 1.65, maxWidth: '70ch' }}>
-        {explain(d)}
-      </p>
+      {/* One sentence carries the screen; the fuller reading is one click away.
+          Both derived, so they can never disagree with each other. */}
+      <div style={{ margin: '0 0 0.85rem', maxWidth: '76ch' }}>
+        <p style={{ margin: 0, fontSize: '0.9rem', lineHeight: 1.6 }}>{explainShort(d)}</p>
+        <button
+          onClick={() => setDetailOpen(!detailOpen)}
+          aria-expanded={detailOpen}
+          style={{ background: 'none', border: 'none', padding: '0.25rem 0 0', cursor: 'pointer', color: GREY, fontSize: '0.72rem' }}
+        >
+          <span aria-hidden="true">{detailOpen ? '▾' : '▸'}</span> {detailOpen ? 'Less detail' : 'More detail'}
+        </button>
+        {detailOpen && (
+          <p style={{ margin: '0.35rem 0 0', fontSize: '0.8rem', lineHeight: 1.65, color: 'var(--text-secondary)' }}>
+            {explain(d)}
+          </p>
+        )}
+      </div>
 
       {/* Signal status triad. */}
       <div style={{ display: 'grid', gap: '0.3rem', marginBottom: '0.9rem' }}>
         {[
-          ['Main pressure', triad.pressure, triad.pressure?.value],
-          ['Main offset', triad.offset, triad.offset?.value],
+          ['Upside pressure', triad.pressure, triad.pressure?.value],
+          ['Cooling offset', triad.offset, triad.offset?.value],
         ].map(([name, item, value]) => (
           <div key={name} style={{ display: 'grid', gridTemplateColumns: '1.2rem 8.5rem 1fr auto', gap: '0.5rem', alignItems: 'baseline', fontSize: '0.78rem' }}>
             <span aria-hidden="true" style={{ color: toneFor(value) }}>{markFor(value)}</span>
@@ -215,9 +234,9 @@ export default function MacroDecisionMonitor() {
         ))}
         <div style={{ display: 'grid', gridTemplateColumns: '1.2rem 8.5rem 1fr', gap: '0.5rem', alignItems: 'baseline', fontSize: '0.78rem' }}>
           <span aria-hidden="true" style={{ color: AMBER }}>{MARK.flat}</span>
-          <span style={{ color: GREY }}>Next risk</span>
+          <span style={{ color: GREY }}>Next catalyst</span>
           <span style={{ fontWeight: 600 }}>
-            {triad.risk ? `${triad.risk.title} · ${countdown(triad.risk.daysAway)}` : 'no scheduled catalyst'}
+            {triad.risk ? `${shortTitle(triad.risk.title)} · ${countdown(triad.risk.daysAway)}` : 'no scheduled catalyst'}
           </span>
         </div>
       </div>
@@ -225,9 +244,13 @@ export default function MacroDecisionMonitor() {
       {/* ─── SECONDARY: score and confidence ──────────────────────────────── */}
       <div style={{ display: 'grid', gap: '1.25rem', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', marginBottom: '0.4rem' }}>
         <div>
-          <div style={label}>Score</div>
+          <div style={label} title={SCORE_TOOLTIP}>Macro score</div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem' }}>
-            <span style={{ fontSize: '1.2rem', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{signed(d.composite.score, 3)}</span>
+            <span
+              style={{ fontSize: '1.2rem', fontWeight: 700, fontVariantNumeric: 'tabular-nums', cursor: 'help' }}
+              tabIndex={0}
+              title={SCORE_TOOLTIP}
+            >{signed(d.composite.score, 3)}</span>
             <span style={{ fontSize: '0.82rem', color: tone }}>{directionWord(d.composite.score)}</span>
           </div>
           <ScoreScale score={d.composite.score ?? 0} coolingMax={band.coolingMax} reaccelMin={band.reaccelMin} />
@@ -238,9 +261,13 @@ export default function MacroDecisionMonitor() {
             {d.confidence.level}
           </div>
           {/* Name the binding constraint rather than printing three percentages. */}
-          <div style={{ fontSize: '0.72rem', color: GREY, lineHeight: 1.5 }}>
-            {conf?.key ? `Limited by: ${conf.text} (${Math.round(conf.value * 100)}%)` : conf?.text || '—'}
-            {d.composite.coverage < 1 && ` · ${Math.round(d.composite.coverage * 100)}% of weight scored`}
+          <div style={{ fontSize: '0.75rem', color: GREY, lineHeight: 1.5 }}>{conf?.text || '—'}</div>
+          {/* The three numbers behind that sentence, small and after it — the
+              words do the work, the figures are for anyone checking. */}
+          <div style={{ display: 'flex', gap: '0.9rem', fontSize: '0.63rem', color: GREY, marginTop: '0.25rem', fontVariantNumeric: 'tabular-nums' }}>
+            <span>Freshness {Math.round(d.confidence.freshness * 100)}%</span>
+            <span>Agreement {Math.round(d.confidence.agreement * 100)}%</span>
+            <span>Coverage {Math.round(d.composite.coverage * 100)}%</span>
           </div>
         </div>
       </div>
@@ -270,10 +297,18 @@ export default function MacroDecisionMonitor() {
                     {c.contribution == null ? 'n/a' : signed(c.contribution, 2)}
                   </span>
                 </div>
-                <div style={{ fontSize: '0.64rem', color: partial ? AMBER : GREY, paddingLeft: '1.6rem', marginTop: '0.1rem' }}>
-                  {sig.usedSeries?.length ? sig.usedSeries.join(' + ') : (sig.reason || 'no inputs')}
-                  {sig.inputsTotal > 0 && ` · ${sig.inputsUsed} of ${sig.inputsTotal} series`}
-                  {partial && sig.excluded?.length ? ` · ${sig.excluded.join(', ')} excluded` : ''}
+                <div style={{ paddingLeft: '1.6rem', marginTop: '0.12rem' }}>
+                  <div style={{ fontSize: '0.64rem', color: partial ? AMBER : GREY, fontFamily: 'ui-monospace, monospace' }}>
+                    {sig.usedSeries?.length ? sig.usedSeries.join(' + ') : (sig.reason || 'no inputs')}
+                    {sig.inputsTotal > 0 && ` · ${sig.inputsUsed} of ${sig.inputsTotal} series`}
+                    {partial && sig.excluded?.length ? ` · ${sig.excluded.join(', ')} excluded` : ''}
+                  </div>
+                  {/* Never a bar and a number alone: every contribution states
+                      the reading that produced it, derived from the same
+                      values, so the two cannot drift apart. */}
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginTop: '0.1rem', maxWidth: '72ch' }}>
+                    {componentInterpretation(c.key, d)}
+                  </div>
                 </div>
               </div>
             )
