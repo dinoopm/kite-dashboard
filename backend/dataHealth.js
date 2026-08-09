@@ -133,11 +133,21 @@ async function fetchIndexDates(period1) {
 // dozen rows instead of the whole table. Feeds with no such guarantee (a stock
 // only appears in volume_gainers on days it surged) are read in full, which is
 // affordable because those tables are far smaller.
+// `checkGaps: false` for feeds whose write days are not the index's trading
+// days. The macro recorder runs on its own schedule — GitHub Actions on
+// weekdays, dailyJobs whenever the server is up — so every weekend would show
+// as a "missing session" and the banner would cry wolf permanently. Freshness
+// is still checked, which is the question that matters: has the automation
+// stopped?
 const FEEDS = [
   { table: 'nse_bhavcopy',           col: 'trade_date', grace: 1, label: 'Bhavcopy (prices)',   probe: 'RELIANCE' },
   { table: 'nse_52_week_high_low',   col: 'trade_date', grace: 2, label: '52-week highs/lows',  probe: 'RELIANCE' },
   { table: 'volume_gainers',         col: 'trade_date', grace: 2, label: 'Volume gainers' },
   { table: 'stock_pick_snapshots',   col: 'snap_date',  grace: 2, label: 'Published picks' },
+  // A stalled macro sync is invisible otherwise: the panel keeps rendering
+  // last week's regime with no indication that nothing has updated it. Three
+  // sessions of grace covers a long weekend plus one missed run.
+  { table: 'macro_signal_snapshots', col: 'snap_date',  grace: 3, label: 'Macro regime', checkGaps: false },
 ];
 
 /**
@@ -156,7 +166,8 @@ async function checkDataHealth({ since = '2026-04-01' } = {}) {
     try {
       const dates = await fetchDates(f.table, f.col, f.probe);
       const declared = ACKNOWLEDGED_GAPS[f.table];
-      const { gaps, acknowledged } = partitionGaps(findGaps(dates, indexDates), declared);
+      const found = f.checkGaps === false ? [] : findGaps(dates, indexDates);
+      const { gaps, acknowledged } = partitionGaps(found, declared);
       const fresh = checkFreshness(dates[dates.length - 1], indexDates, { graceSessions: f.grace });
       feeds.push({
         table: f.table, label: f.label,
@@ -197,5 +208,5 @@ function logDataHealth(report) {
 
 module.exports = {
   checkDataHealth, logDataHealth, findGaps, checkFreshness,
-  partitionGaps, ACKNOWLEDGED_GAPS,
+  partitionGaps, ACKNOWLEDGED_GAPS, FEEDS,
 };

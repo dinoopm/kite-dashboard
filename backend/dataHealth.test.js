@@ -122,3 +122,24 @@ describe('checkFreshness', () => {
     assert.equal(f.sessionsBehind, null);
   });
 });
+
+describe('feeds whose write days are not trading days', () => {
+  const { FEEDS } = require('./dataHealth');
+
+  // The macro recorder runs on GitHub Actions weekdays plus dailyJobs whenever
+  // the server is up, so its write days do not line up with NSE sessions.
+  // Gap-checking it would flag every weekend forever and the banner would stop
+  // meaning anything — the failure mode ACKNOWLEDGED_GAPS exists to prevent.
+  test('the macro regime feed is watched for freshness but not for gaps', () => {
+    const macro = FEEDS.find(f => f.table === 'macro_signal_snapshots');
+    assert.ok(macro, 'macro_signal_snapshots must be monitored — a stalled sync is otherwise invisible');
+    assert.equal(macro.checkGaps, false);
+    assert.ok(macro.grace >= 3, 'needs to tolerate a long weekend plus one missed run');
+  });
+
+  test('the price feeds are still gap-checked', () => {
+    for (const t of ['nse_bhavcopy', 'nse_52_week_high_low']) {
+      assert.notEqual(FEEDS.find(f => f.table === t).checkGaps, false, `${t} must keep its gap check`);
+    }
+  });
+});
