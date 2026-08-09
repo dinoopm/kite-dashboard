@@ -83,6 +83,35 @@ function findClosest(observations, targetDate, toleranceDays) {
   return best;
 }
 
+/**
+ * The observation for a specific MONTH, matched on the period date.
+ *
+ * Monthly series are stamped on the 1st, so a nearest-within-45-days search
+ * will happily accept the neighbouring month: with May missing, April sits 30
+ * days from the May target and June 31, so April wins and a three-month
+ * average quietly spans four. Exact year-month is the only safe match.
+ *
+ * When the exact month is absent this falls back to the nearest EARLIER
+ * observation and says so via `exact: false`, never to a later one — a later
+ * observation shortens the window while still being labelled six months.
+ */
+function findMonth(rows, targetDate) {
+  const want = String(targetDate).slice(0, 7);
+  for (const r of rows) {
+    if (r.observation_date.slice(0, 7) === want) {
+      return { value: r.value, date: r.observation_date, offsetDays: 0, exact: true };
+    }
+  }
+  let earlier = null;
+  for (const r of rows) {
+    if (r.observation_date < targetDate) earlier = r; else break;
+  }
+  if (!earlier) return null;
+  const offsetDays = Math.round(
+    (Date.parse(`${targetDate}T00:00:00Z`) - Date.parse(`${earlier.observation_date}T00:00:00Z`)) / DAY_MS);
+  return { value: earlier.value, date: earlier.observation_date, offsetDays, exact: false };
+}
+
 /** Percent rate of change of a level. Null base means no answer, not infinity. */
 function roc(latest, base) {
   if (latest == null || base == null || !Number.isFinite(latest) || !Number.isFinite(base) || base === 0) return null;
@@ -134,7 +163,8 @@ function computeMetrics(observations, { frequency = 'monthly', transform, anchor
     latest: null, latestDate: null, ageDays: null,
     sixMonthsAgo: null, sixMonthsAgoDate: null,
     rocPct: null, changePp: null, annualized3m: null, annualized6m: null,
-    yoyPct: null, avg3mChange: null, lastChange: null, observations: rows.length,
+    yoyPct: null, avg3mChange: null, lastChange: null, monthlyChanges: [],
+    observations: rows.length,
   };
   if (!rows.length) return empty;
 
@@ -146,6 +176,12 @@ function computeMetrics(observations, { frequency = 'monthly', transform, anchor
   // Anchoring on today would shorten the window by the release lag — core PCE
   // publishes about a month late, so "six months back from today" is seven
   // months of data for that series and six for oil.
+  // Monthly series match on the exact period month; daily series fall back to
+  // nearest-within-tolerance, which is right for them because a target date
+  // routinely lands on a weekend or a holiday.
+  const isMonthly = frequency === 'monthly' || frequency === 'quarterly';
+  const lookup = (targetIso) => (isMonthly ? findMonth(rows, targetIso) : findClosest(rows, targetIso, tol));
+
   const back = (m) => {
     const d = new Date(`${last.observation_date}T00:00:00Z`);
     const day = d.getUTCDate();
@@ -153,10 +189,10 @@ function computeMetrics(observations, { frequency = 'monthly', transform, anchor
     d.setUTCMonth(d.getUTCMonth() - m);
     const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
     d.setUTCDate(Math.min(day, lastDay));
-    return findClosest(rows, d.toISOString().slice(0, 10), tol);
+    return lookup(d.toISOString().slice(0, 10));
   };
 
-  const six = findClosest(rows, sixMonthsBefore(last.observation_date), tol);
+  const six = lookup(sixMonthsBefore(last.observation_date));
   const three = back(3);
   const twelve = back(12);
 
@@ -180,10 +216,30 @@ function computeMetrics(observations, { frequency = 'monthly', transform, anchor
   } else if (transform === 'rate') {
     out.changePp = six ? changePp(last.value, six.value) : null;
   } else if (transform === 'count') {
-    const prev = rows.length >= 2 ? rows[rows.length - 2] : null;
-    out.lastChange = prev ? last.value - prev.value : null;
-    const threeBack = rows.length >= 4 ? rows[rows.length - 4] : null;
-    out.avg3mChange = threeBack ? (last.value - threeBack.value) / 3 : null;
+    // Date-matched, not positional. rows[length-4] assumes the series has no
+    // gaps and no duplicate months; one missing month silently turns a
+    // "3-month average" into a 4-month one at the same denominator. Every
+    // other window in this file matches on the period date, and this one now
+    // does too.
+    const steps = [back(0), back(1), back(2), back(3)];
+    const monthly = [];
+    for (let i = 0; i < 3; i++) {
+      const now = steps[i], prev = steps[i + 1];
+      // Both ends must be the exact month, or the "monthly change" spans two
+      // months at one month's label and the average is wrong by a whole
+      // period. Better to report nothing.
+      if (!now || !prev || now.exact === false || prev.exact === false) continue;
+      monthly.push({ date: now.date, from: prev.date, change: now.value - prev.value });
+    }
+    // Oldest first, so the UI reads "May +63k · Jun +20k · Jul -23k".
+    out.monthlyChanges = monthly.reverse();
+    out.lastChange = monthly.length ? monthly[monthly.length - 1].change : null;
+    // Averaged over the three first differences — identical to
+    // (latest - threeMonthsBack) / 3 when no month is missing, and correct
+    // rather than merely plausible when one is.
+    out.avg3mChange = out.monthlyChanges.length === 3
+      ? out.monthlyChanges.reduce((s, m) => s + m.change, 0) / 3
+      : null;
   }
 
   return out;
@@ -230,6 +286,6 @@ function releasesBehind(latestDate, { frequency = 'monthly', releaseLagDays = 0,
 
 module.exports = {
   TRANSFORMS, TOLERANCE_DAYS,
-  parseFredValue, sixMonthsBefore, findClosest,
+  parseFredValue, sixMonthsBefore, findClosest, findMonth,
   roc, changePp, annualizedRate, computeMetrics, releasesBehind,
 };

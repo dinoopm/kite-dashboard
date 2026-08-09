@@ -44,6 +44,8 @@ const TRANSFORM_HELP = {
   count: 'Average monthly change over the last three months, in the series own units.',
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
 const fmt = (v, d = 2, suffix = '') => (v == null || !Number.isFinite(v) ? '—' : `${v.toFixed(d)}${suffix}`)
 const signed = (v, d = 2, suffix = '') => (v == null || !Number.isFinite(v) ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(d)}${suffix}`)
 const toneOf = (v) => (v == null ? GREY : v > 0.05 ? RED : v < -0.05 ? GREEN : AMBER)
@@ -105,7 +107,12 @@ export default function MacroDecisionMonitor() {
   const regime = REGIME_STYLE[d.composite.regime] || REGIME_STYLE.unknown
   const conf = d.confidence.level
   const confColor = conf === 'high' ? GREEN : conf === 'medium' ? AMBER : RED
-  const scored = d.indicators.filter(i => i.scored)
+  // Scored series first, then the context-only ones. They stay on screen —
+  // Michigan expectations and headline CPI are worth seeing — but carrying a
+  // tag, because listing them identically to the scored series is what made a
+  // reviewer conclude a stale survey print was dragging the Expectations
+  // component. It never fed it.
+  const rows = [...d.indicators.filter(i => i.scored), ...d.indicators.filter(i => !i.scored)]
 
   const cell = { padding: '0.45rem 0.7rem', fontSize: '0.8rem', fontVariantNumeric: 'tabular-nums' }
   const th = { ...cell, color: GREY, textTransform: 'uppercase', fontSize: '0.68rem', letterSpacing: '0.05em', textAlign: 'left', fontWeight: 600 }
@@ -153,19 +160,32 @@ export default function MacroDecisionMonitor() {
         )}
       </div>
 
-      {/* Contribution breakdown */}
+      {/* Contribution breakdown. A component computed from a subset of its
+          declared inputs says so — a full-looking score built on half its
+          series is the thing this panel must never render silently. */}
       <div style={{ display: 'grid', gap: '0.4rem', marginBottom: '1rem' }}>
-        {d.composite.contributions.map(c => (
-          <div key={c.key} style={{ display: 'grid', gridTemplateColumns: 'minmax(90px, 1fr) 2.6fr auto', gap: '0.6rem', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.75rem', color: GREY }}>
-              {SIGNAL_LABELS[c.key]} <span style={{ opacity: 0.6 }}>{Math.round(c.weight * 100)}%</span>
-            </span>
-            <Bar contribution={c.contribution} />
-            <span style={{ fontSize: '0.75rem', fontVariantNumeric: 'tabular-nums', color: toneOf(c.score), minWidth: 52, textAlign: 'right' }}>
-              {c.score == null ? 'n/a' : signed(c.score)}
-            </span>
-          </div>
-        ))}
+        {d.composite.contributions.map(c => {
+          const sig = d.signals[c.key] || {}
+          const partial = sig.inputsTotal > 0 && sig.inputsUsed < sig.inputsTotal
+          return (
+            <div key={c.key}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(90px, 1fr) 2.6fr auto', gap: '0.6rem', alignItems: 'center' }}>
+                <span style={{ fontSize: '0.75rem', color: GREY }}>
+                  {SIGNAL_LABELS[c.key]} <span style={{ opacity: 0.6 }}>{Math.round(c.weight * 100)}%</span>
+                </span>
+                <Bar contribution={c.contribution} />
+                <span style={{ fontSize: '0.75rem', fontVariantNumeric: 'tabular-nums', color: toneOf(c.score), minWidth: 52, textAlign: 'right' }}>
+                  {c.score == null ? 'n/a' : signed(c.score)}
+                </span>
+              </div>
+              <div style={{ fontSize: '0.63rem', color: partial ? AMBER : GREY, paddingLeft: '0.1rem', marginTop: '0.1rem' }}>
+                {sig.usedSeries?.length ? sig.usedSeries.join(' + ') : (sig.reason || 'no inputs')}
+                {sig.inputsTotal > 0 && ` · based on ${sig.inputsUsed} of ${sig.inputsTotal} series`}
+                {partial && sig.excluded?.length ? ` (${sig.excluded.join(', ')} excluded)` : ''}
+              </div>
+            </div>
+          )
+        })}
       </div>
 
       {/* Indicators */}
@@ -180,7 +200,7 @@ export default function MacroDecisionMonitor() {
             </tr>
           </thead>
           <tbody>
-            {scored.map(ind => {
+            {rows.map(ind => {
               const h = headlineFor(ind)
               return (
                 <tr key={ind.seriesId} style={{ borderTop: '1px solid var(--border)' }}>
@@ -191,11 +211,22 @@ export default function MacroDecisionMonitor() {
                       title={TRANSFORM_HELP[ind.transform]}
                     >
                       {ind.label}
+                      {!ind.scored && <span style={{ color: GREY, fontWeight: 400 }}> · context only, not scored</span>}
                     </button>
                     <div style={{ fontSize: '0.65rem', color: GREY }}>
-                      {ind.source} · {ind.seriesId}
+                      {ind.source} · <span style={{ fontFamily: 'ui-monospace, monospace' }}>{ind.seriesId}</span>
                       {ind.releasesBehind > 0 && <span style={{ color: AMBER }}> · {ind.releasesBehind} release behind</span>}
                     </div>
+                    {/* The three first differences behind a "3m avg / month".
+                        Total nonfarm and private payrolls diverge — over
+                        May-Jul 2026, PAYEMS averaged +20k while USPRIV averaged
+                        +40.3k — so the underlying months have to be visible for
+                        the headline to be checkable. */}
+                    {ind.monthlyChanges?.length > 0 && (
+                      <div style={{ fontSize: '0.63rem', color: GREY, marginTop: '0.15rem', fontVariantNumeric: 'tabular-nums' }}>
+                        {ind.monthlyChanges.map(c => `${MONTHS[+c.date.slice(5, 7) - 1]} ${c.change >= 0 ? '+' : ''}${Math.round(c.change)}k`).join(' · ')}
+                      </div>
+                    )}
                     {openHelp === ind.seriesId && (
                       <div style={{ fontSize: '0.68rem', color: GREY, marginTop: '0.3rem', maxWidth: 420, lineHeight: 1.5 }}>
                         {TRANSFORM_HELP[ind.transform]} {ind.note}

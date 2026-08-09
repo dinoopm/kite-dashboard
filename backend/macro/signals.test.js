@@ -256,3 +256,72 @@ describe('buildSignals', () => {
     assert.equal(out.confidence.level, 'low');
   });
 });
+
+describe('staleness gating', () => {
+  const fresh = (extra) => ({ releasesBehind: 0, frequency: 'monthly', ...extra });
+  const stale = (extra) => ({ releasesBehind: 3, frequency: 'monthly', ...extra });
+
+  // The rule the audit asked for: a series too far behind must not contribute
+  // at full weight just because nobody checked. Confidence alone described the
+  // problem only after the score had been computed from bad inputs.
+  test('a stale series is dropped from its signal, not scored', () => {
+    const s = wageSignal({ wages: stale({ yoyPct: 4.8 }) });
+    assert.equal(s.score, null);
+    assert.match(s.reason, /stale/);
+    assert.equal(s.inputsUsed, 0);
+    assert.equal(s.inputsTotal, 1);
+  });
+
+  test('a fresh series scores exactly as before the gate existed', () => {
+    assert.equal(wageSignal({ wages: fresh({ yoyPct: 4.8 }) }).score, wageSignal({ wages: { yoyPct: 4.8 } }).score);
+  });
+
+  test('labour drops only the stale half and reports the surviving input', () => {
+    const s = labourSignal({ payrolls: stale({ avg3mChange: 260 }), unemployment: fresh({ changePp: 0.5 }) });
+    assert.deepEqual(s.usedSeries, ['UNRATE']);
+    assert.equal(s.inputsUsed, 1);
+    assert.equal(s.inputsTotal, 2);
+    assert.ok(s.score < 0, 'must reflect the fresh unemployment reading alone');
+  });
+
+  test('inflation falls through a stale core PCE to core CPI', () => {
+    const s = inflationSignal({
+      corePce: stale({ seriesId: 'PCEPILFE', annualized6m: 3.6, annualized3m: 4.2 }),
+      coreCpi: fresh({ seriesId: 'CPILFESL', annualized6m: 2.0, annualized3m: 2.0 }),
+    });
+    assert.equal(s.used, 'CPILFESL');
+    assert.equal(s.fellBackToCpi, true);
+  });
+
+  // Otherwise the notice fires every day and stops meaning anything: core PCE
+  // and core CPI are a preference chain, and exactly one is ever scored.
+  test('a healthy inflation reading does not report partial inputs', () => {
+    const s = inflationSignal({
+      corePce: fresh({ seriesId: 'PCEPILFE', annualized6m: 3.76, annualized3m: 2.89 }),
+      coreCpi: fresh({ seriesId: 'CPILFESL', annualized6m: 2.58, annualized3m: 2.29 }),
+    });
+    assert.equal(s.inputsUsed, 1);
+    assert.equal(s.inputsTotal, 1);
+    assert.deepEqual(s.excluded, []);
+  });
+
+  test('the gate is configurable without touching thresholds', () => {
+    const m = { wages: { releasesBehind: 3, yoyPct: 4.8 } };
+    assert.equal(wageSignal(m).score, null);
+    assert.ok(wageSignal(m, { maxForScoring: 5 }).score != null);
+  });
+
+  // Michigan is context, never an input. A reviewer read the panel as though a
+  // stale survey print was dragging Expectations; it never fed it at all.
+  test('the Michigan survey is reported beside Expectations but never scored', () => {
+    const withSurvey = expectationsSignal({
+      expectations: fresh({ latest: 2.28, changePp: 0.1, frequency: 'daily' }),
+      expectationsSurvey: stale({ latest: 4.6, latestDate: '2026-06-01' }),
+    });
+    const without = expectationsSignal({ expectations: fresh({ latest: 2.28, changePp: 0.1, frequency: 'daily' }) });
+    assert.equal(withSurvey.score, without.score, 'the survey must not move the score');
+    assert.deepEqual(withSurvey.usedSeries, ['T5YIFR']);
+    assert.equal(withSurvey.detail.survey.scored, false);
+    assert.equal(withSurvey.detail.survey.seriesId, 'MICH');
+  });
+});

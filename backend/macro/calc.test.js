@@ -245,3 +245,97 @@ describe('releasesBehind', () => {
     assert.equal(releasesBehind(null, { frequency: 'monthly', releaseLagDays: 30 }), null);
   });
 });
+
+// ─── Reference-data checks ───────────────────────────────────────────────────
+// Values pulled from FRED on 2026-08-09 and asserted exactly, so a future
+// refactor that reintroduces positional indexing or an off-by-one month fails
+// here rather than on the dashboard.
+describe('against verified FRED reference data', () => {
+  const monthly = (pairs) => pairs.map(([d, v]) => ({ observation_date: d, value: v }));
+
+  // Core PCE, 2017=100, SA. The base MUST be 2025-12, exactly six months
+  // before the 2026-06 latest — not 2025-11, and not a positional offset.
+  test('core PCE six-month annualized lands on the December base', () => {
+    const m = computeMetrics(monthly([
+      ['2025-11-01', 127.469], ['2025-12-01', 127.886], ['2026-01-01', 128.455],
+      ['2026-02-01', 128.961], ['2026-03-01', 129.343], ['2026-04-01', 129.663],
+      ['2026-05-01', 130.094], ['2026-06-01', 130.266],
+    ]), { frequency: 'monthly', transform: 'index', anchorDate: '2026-08-09' });
+
+    assert.equal(m.sixMonthsAgoDate, '2025-12-01', 'base month must be December, not November');
+    assert.equal(m.sixMonthsAgo, 127.886);
+    assert.ok(Math.abs(m.annualized6m - 3.7567) < 0.01, `expected 3.76 from the December base, got ${m.annualized6m}`);
+  });
+
+  // Same code path, same base month, independently checkable: core CPI.
+  test('core CPI six-month annualized lands on the same December base', () => {
+    const m = computeMetrics(monthly([
+      ['2025-11-01', 331.043], ['2025-12-01', 331.814], ['2026-01-01', 332.793],
+      ['2026-02-01', 333.512], ['2026-03-01', 334.165], ['2026-04-01', 335.423],
+      ['2026-05-01', 336.121], ['2026-06-01', 336.065],
+    ]), { frequency: 'monthly', transform: 'index', anchorDate: '2026-08-09' });
+
+    assert.equal(m.sixMonthsAgoDate, '2025-12-01');
+    assert.ok(Math.abs(m.annualized6m - 2.5786) < 0.01, `expected 2.58, got ${m.annualized6m}`);
+  });
+
+  test('unemployment six-month change is in percentage points', () => {
+    const m = computeMetrics(monthly([
+      ['2026-01-01', 4.3], ['2026-02-01', 4.2], ['2026-03-01', 4.2],
+      ['2026-04-01', 4.2], ['2026-05-01', 4.3], ['2026-06-01', 4.2], ['2026-07-01', 4.1],
+    ]), { frequency: 'monthly', transform: 'rate', anchorDate: '2026-08-09' });
+
+    assert.equal(m.sixMonthsAgoDate, '2026-01-01');
+    assert.ok(Math.abs(m.changePp - -0.2) < 1e-9, `expected -0.20pp, got ${m.changePp}`);
+  });
+
+  // Average hourly earnings, computed from the LEVEL series. Compounding the
+  // rounded one-decimal monthly prints [0.3,0.2,0.2,0.2,0.3,0.1] gives ~2.62%;
+  // the levels give 2.55%. The levels are right — the monthly prints are
+  // rounded to a hundredth of a percent and the error accumulates over six of
+  // them.
+  test('wage growth comes from the level series, not the rounded monthly prints', () => {
+    const m = computeMetrics(monthly([
+      ['2026-01-01', 37.15], ['2026-02-01', 37.27], ['2026-03-01', 37.35],
+      ['2026-04-01', 37.41], ['2026-05-01', 37.49], ['2026-06-01', 37.60], ['2026-07-01', 37.62],
+    ]), { frequency: 'monthly', transform: 'index', anchorDate: '2026-08-09' });
+
+    assert.equal(m.sixMonthsAgoDate, '2026-01-01');
+    assert.ok(Math.abs(m.annualized6m - 2.546) < 0.01, `expected 2.55 from levels, got ${m.annualized6m}`);
+  });
+
+  // Total nonfarm. The 3-month average must be the mean of the last three
+  // month-over-month FIRST DIFFERENCES of the level series.
+  test('total nonfarm payrolls average the last three monthly changes', () => {
+    const m = computeMetrics(monthly([
+      ['2026-03-01', 158650], ['2026-04-01', 158798], ['2026-05-01', 158861],
+      ['2026-06-01', 158881], ['2026-07-01', 158858],
+    ]), { frequency: 'monthly', transform: 'count', anchorDate: '2026-08-09' });
+
+    assert.deepEqual(m.monthlyChanges.map(c => c.change), [63, 20, -23]);
+    assert.ok(Math.abs(m.avg3mChange - 20) < 1e-9, `expected +20.0k, got ${m.avg3mChange}`);
+    assert.equal(m.lastChange, -23);
+  });
+
+  // The distinction the payrolls card has to make visible: the same three
+  // months on PRIVATE payrolls average double the total-nonfarm figure,
+  // because government was shedding jobs.
+  test('private payrolls over the same months average 40.3k, not 20k', () => {
+    const m = computeMetrics(monthly([
+      ['2026-03-01', 135317], ['2026-04-01', 135467], ['2026-05-01', 135528],
+      ['2026-06-01', 135558], ['2026-07-01', 135588],
+    ]), { frequency: 'monthly', transform: 'count', anchorDate: '2026-08-09' });
+
+    assert.deepEqual(m.monthlyChanges.map(c => c.change), [61, 30, 30]);
+    assert.ok(Math.abs(m.avg3mChange - 40.333) < 0.01, `expected 40.3k, got ${m.avg3mChange}`);
+  });
+
+  // The reason the average is now date-matched rather than rows[length-4].
+  test('a missing month does not silently become a four-month average', () => {
+    const m = computeMetrics(monthly([
+      ['2026-03-01', 158650], ['2026-04-01', 158798],
+      /* May missing */ ['2026-06-01', 158881], ['2026-07-01', 158858],
+    ]), { frequency: 'monthly', transform: 'count', anchorDate: '2026-08-09' });
+    assert.equal(m.avg3mChange, null, 'an incomplete window must report nothing, not a wrong average');
+  });
+});

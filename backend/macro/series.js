@@ -55,7 +55,12 @@ const SERIES = [
   {
     id: 'PAYEMS',
     key: 'payrolls',
-    label: 'Nonfarm payrolls',
+    // Named in full because the distinction is not cosmetic: total nonfarm and
+    // private payrolls (USPRIV) tell different stories in the same month. Over
+    // May-Jul 2026, PAYEMS averaged +20k/month while USPRIV averaged +40.3k —
+    // government shedding jobs against private hiring. A card labelled just
+    // "Nonfarm payrolls" leaves a reader unable to tell which they are seeing.
+    label: 'Total nonfarm payrolls',
     originalSource: 'BLS',
     frequency: 'monthly',
     unit: 'Thousands of persons',
@@ -123,9 +128,17 @@ const SERIES = [
     frequency: 'monthly',
     unit: 'Percent',
     transform: 'rate',
+    // Preliminary lands mid-month for the CURRENT month, final at month end,
+    // so a lag of 0 expects the current month and FRED holding only the prior
+    // one reads as a release behind. That is the state worth surfacing: the
+    // series' FRED update genuinely trails its own publication. Refreshed
+    // around both release windows rather than on a generic monthly tick, so a
+    // preliminary is not missed for a fortnight.
     releaseLagDays: 0,
+    refreshDaysOfMonth: [16, 17, 18, 28, 29, 30, 31],
     revisionRisk: 'medium',
-    note: 'Survey-based and preliminary mid-month, revised at month end. Carried for the narrative — households and markets often disagree, and that disagreement is worth showing rather than averaging away.',
+    scored: false,
+    note: 'Survey-based: preliminary mid-month, final at month end. NOT scored — carried for the narrative only, because households and markets routinely disagree and averaging that away hides the more interesting fact. The Expectations score is the market-based 5y5y breakeven (T5YIFR) alone.',
   },
   // Headline measures. Not scored: including them alongside core would count
   // energy twice, once in the oil signal and again inside headline inflation.

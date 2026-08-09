@@ -80,11 +80,48 @@ const THRESHOLDS = {
   // Measured in releases MISSED (see calc.releasesBehind), not calendar days —
   // a release lag is not staleness. Two missed releases is a real outage: for
   // a monthly series that is a whole quarter with no update.
-  staleness: { maxReleasesBehind: 2 },
+  //
+  // `maxForScoring` is the harder gate: a series that far behind is DROPPED
+  // from its signal and the surviving inputs carry it, rather than a months-old
+  // print contributing at full weight because nothing checked. Confidence
+  // alone was not enough — it described the problem after the score had
+  // already been computed from bad inputs.
+  staleness: { maxReleasesBehind: 2, maxForScoring: 1 },
 };
 
 const clamp = (v, lo = -1, hi = 1) => Math.max(lo, Math.min(hi, v));
 const num = (v) => (v != null && Number.isFinite(v) ? v : null);
+
+/**
+ * Is this series current enough to be scored at all?
+ *
+ * A series with no `releasesBehind` is treated as usable — the field is
+ * computed by monitor.js and its absence means "not measured here", as in the
+ * unit tests, not "stale". Refusing to score on a missing diagnostic would
+ * make the engine fail closed on its own instrumentation.
+ */
+function isScorable(metric, { maxForScoring = THRESHOLDS.staleness.maxForScoring } = {}) {
+  if (!metric) return false;
+  const behind = num(metric.releasesBehind);
+  return behind == null || behind <= maxForScoring;
+}
+
+/**
+ * Which of a signal's declared inputs actually contributed.
+ *
+ * Reported on every signal so a component computed from a subset says so
+ * instead of looking like a full reading — the difference between "wages are
+ * cooling" and "wages are cooling, on one of the two series that should say
+ * so" is the whole point of showing it.
+ */
+function inputReport(declared, used) {
+  return {
+    inputsUsed: used.length,
+    inputsTotal: declared.length,
+    usedSeries: used,
+    excluded: declared.filter(d => !used.includes(d)),
+  };
+}
 
 /**
  * Map a reading onto [-1, +1] given the values that count as fully cool and
@@ -107,11 +144,23 @@ function scale(value, coolAt, hotAt) {
  * stretches where only CPI has the newest month. Which one was used is
  * reported, never silent — the two run at different levels.
  */
-function inflationSignal({ corePce, coreCpi } = {}) {
+function inflationSignal({ corePce, coreCpi } = {}, opts = {}) {
   const T = THRESHOLDS.inflation;
-  const s = num(corePce?.annualized6m) != null ? corePce
-    : num(coreCpi?.annualized6m) != null ? coreCpi : null;
-  if (!s) return { score: null, used: null, reason: 'no core inflation index available' };
+  const declared = ['PCEPILFE', 'CPILFESL'];
+  const usable = (m) => num(m?.annualized6m) != null && isScorable(m, opts);
+  // A stale core PCE falls through to core CPI rather than being scored — the
+  // fallback already exists for the two-week publication gap, and staleness is
+  // the same problem for longer.
+  const s = usable(corePce) ? corePce : usable(coreCpi) ? coreCpi : null;
+  if (!s) {
+    const anyPresent = num(corePce?.annualized6m) != null || num(coreCpi?.annualized6m) != null;
+    return {
+      score: null,
+      used: null,
+      reason: anyPresent ? 'core inflation series too stale to score' : 'no core inflation index available',
+      ...inputReport(declared, []),
+    };
+  }
 
   const level = scale(s.annualized6m, T.cool6m, T.hot6m);
   const momentum = num(s.annualized3m) != null
@@ -123,12 +172,21 @@ function inflationSignal({ corePce, coreCpi } = {}) {
     score: clamp(score),
     used: s.seriesId ?? null,
     referenceMonth: s.latestDate ?? null,
+    // Core PCE and core CPI are a PREFERENCE CHAIN, not two inputs to combine:
+    // this signal always scores exactly one index. Reporting "1 of 2, CPILFESL
+    // excluded" on a perfectly healthy reading would cry partial-inputs every
+    // single day and make the notice worthless when it matters.
+    ...inputReport([s.seriesId], [s.seriesId]),
+    fellBackToCpi: s.seriesId === 'CPILFESL',
+    preferredSeries: 'PCEPILFE',
     detail: {
       annualized6m: s.annualized6m ?? null,
       annualized3m: s.annualized3m ?? null,
+      baseDate: s.sixMonthsAgoDate ?? null,
+      baseValue: s.sixMonthsAgo ?? null,
       levelScore: level,
       momentumScore: momentum,
-      fellBackToCpi: num(corePce?.annualized6m) == null,
+      fellBackToCpi: s.seriesId === 'CPILFESL',
     },
   };
 }
@@ -139,22 +197,34 @@ function inflationSignal({ corePce, coreCpi } = {}) {
  * Positive is a TIGHT market, i.e. inflationary pressure. See the sign note at
  * the top of the file.
  */
-function labourSignal({ payrolls, unemployment } = {}) {
+function labourSignal({ payrolls, unemployment } = {}, opts = {}) {
   const T = THRESHOLDS.labour;
-  const pay = num(payrolls?.avg3mChange) != null
-    ? scale(payrolls.avg3mChange, T.payrollsCool, T.payrollsHot) : null;
-  const un = num(unemployment?.changePp) != null
-    ? scale(unemployment.changePp, T.unemploymentCoolPp, T.unemploymentHotPp) : null;
+  const declared = ['PAYEMS', 'UNRATE'];
+  const payOk = num(payrolls?.avg3mChange) != null && isScorable(payrolls, opts);
+  const unOk = num(unemployment?.changePp) != null && isScorable(unemployment, opts);
 
-  if (pay == null && un == null) return { score: null, reason: 'no labour data' };
-  if (pay == null) return { score: un, detail: { unemploymentOnly: true, unemploymentScore: un } };
-  if (un == null) return { score: pay, detail: { payrollsOnly: true, payrollsScore: pay } };
+  const pay = payOk ? scale(payrolls.avg3mChange, T.payrollsCool, T.payrollsHot) : null;
+  const un = unOk ? scale(unemployment.changePp, T.unemploymentCoolPp, T.unemploymentHotPp) : null;
+  const used = [payOk && 'PAYEMS', unOk && 'UNRATE'].filter(Boolean);
+
+  if (pay == null && un == null) {
+    return { score: null, reason: 'no current labour data', ...inputReport(declared, used) };
+  }
+  // Dropping one input hands its share to the other rather than scoring it
+  // zero — a missing series is not a neutral reading.
+  const detail = {
+    payrollsScore: pay, unemploymentScore: un,
+    avg3mChangeThousands: payrolls?.avg3mChange ?? null,
+    payrollsSeriesId: 'PAYEMS',
+    monthlyChanges: payrolls?.monthlyChanges ?? [],
+    unemploymentChangePp: unemployment?.changePp ?? null,
+  };
+  if (pay == null) return { score: un, ...inputReport(declared, used), detail: { ...detail, unemploymentOnly: true } };
+  if (un == null) return { score: pay, ...inputReport(declared, used), detail: { ...detail, payrollsOnly: true } };
   return {
     score: clamp(pay * (1 - T.unemploymentWeight) + un * T.unemploymentWeight),
-    detail: {
-      payrollsScore: pay, unemploymentScore: un,
-      avg3mChangeThousands: payrolls.avg3mChange, unemploymentChangePp: unemployment.changePp,
-    },
+    ...inputReport(declared, used),
+    detail,
   };
 }
 
@@ -163,12 +233,17 @@ function labourSignal({ payrolls, unemployment } = {}) {
  * of low-wage hiring lowers the average without anyone taking a pay cut — so
  * this is weighted below the labour block rather than treated as a clean read.
  */
-function wageSignal({ wages } = {}) {
+function wageSignal({ wages } = {}, opts = {}) {
   const T = THRESHOLDS.wages;
-  if (num(wages?.yoyPct) == null) return { score: null, reason: 'no wage data' };
+  const declared = ['CES0500000003'];
+  if (num(wages?.yoyPct) == null) return { score: null, reason: 'no wage data', ...inputReport(declared, []) };
+  if (!isScorable(wages, opts)) return { score: null, reason: 'wage series too stale to score', ...inputReport(declared, []) };
   return {
     score: scale(wages.yoyPct, T.yoyCool, T.yoyHot),
-    detail: { yoyPct: wages.yoyPct, changePp: wages.changePp ?? null },
+    ...inputReport(declared, declared),
+    // annualized6m is computed from the LEVEL series, not from the rounded
+    // one-decimal monthly prints — compounding those accumulates error.
+    detail: { yoyPct: wages.yoyPct, annualized6m: wages.annualized6m ?? null, baseDate: wages.sixMonthsAgoDate ?? null },
   };
 }
 
@@ -177,23 +252,49 @@ function wageSignal({ wages } = {}) {
  * than the six-month move, because the whole point of an anchor is that it
  * should not drift; hence the smaller weight on change.
  */
-function expectationsSignal({ expectations } = {}) {
+function expectationsSignal({ expectations, expectationsSurvey } = {}, opts = {}) {
   const T = THRESHOLDS.expectations;
-  if (num(expectations?.latest) == null) return { score: null, reason: 'no breakeven data' };
+  // Only the market-based breakeven is SCORED. The Michigan survey is carried
+  // for the narrative — households and markets routinely disagree, and that
+  // disagreement is worth showing rather than averaging into one number — so
+  // it is declared here as context, never as a weighted input. Folding it in
+  // would be a recalibration, not a correctness fix.
+  const declared = ['T5YIFR'];
+  if (num(expectations?.latest) == null) return { score: null, reason: 'no breakeven data', ...inputReport(declared, []) };
+  if (!isScorable(expectations, opts)) return { score: null, reason: 'breakeven series too stale to score', ...inputReport(declared, []) };
+
   const level = scale(expectations.latest, T.levelCool, T.levelHot);
   const change = num(expectations.changePp) != null
     ? scale(expectations.changePp, T.changeCoolPp, T.changeHotPp) : null;
   return {
     score: clamp(change == null ? level : level * (1 - T.changeWeight) + change * T.changeWeight),
-    detail: { latest: expectations.latest, changePp: expectations.changePp ?? null, levelScore: level, changeScore: change },
+    ...inputReport(declared, declared),
+    detail: {
+      latest: expectations.latest, changePp: expectations.changePp ?? null,
+      levelScore: level, changeScore: change,
+      // Surfaced so the panel can show the survey beside the market read
+      // without implying it moved the score.
+      survey: num(expectationsSurvey?.latest) == null ? null : {
+        seriesId: 'MICH', latest: expectationsSurvey.latest,
+        latestDate: expectationsSurvey.latestDate ?? null,
+        releasesBehind: expectationsSurvey.releasesBehind ?? null,
+        scored: false,
+      },
+    },
   };
 }
 
 /** Oil — the lightest weight: fast into headline, weak and slow into core. */
-function oilSignal({ oil } = {}) {
+function oilSignal({ oil } = {}, opts = {}) {
   const T = THRESHOLDS.oil;
-  if (num(oil?.rocPct) == null) return { score: null, reason: 'no oil data' };
-  return { score: scale(oil.rocPct, T.rocCool, T.rocHot), detail: { roc6mPct: oil.rocPct } };
+  const declared = ['DCOILWTICO'];
+  if (num(oil?.rocPct) == null) return { score: null, reason: 'no oil data', ...inputReport(declared, []) };
+  if (!isScorable(oil, opts)) return { score: null, reason: 'oil series too stale to score', ...inputReport(declared, []) };
+  return {
+    score: scale(oil.rocPct, T.rocCool, T.rocHot),
+    ...inputReport(declared, declared),
+    detail: { roc6mPct: oil.rocPct, baseDate: oil.sixMonthsAgoDate ?? null },
+  };
 }
 
 const BIAS = { cooling: 'cut-compatible', neutral: 'hold-compatible', reaccelerating: 'hike-risk' };
@@ -300,20 +401,20 @@ function confidence(signals = {}, composite = {}, metrics = {}) {
 }
 
 /** The whole engine: metrics in, signals + composite + confidence out. */
-function buildSignals(metrics = {}) {
+function buildSignals(metrics = {}, opts = {}) {
   const signals = {
-    inflation: inflationSignal(metrics),
-    labour: labourSignal(metrics),
-    wages: wageSignal(metrics),
-    expectations: expectationsSignal(metrics),
-    oil: oilSignal(metrics),
+    inflation: inflationSignal(metrics, opts),
+    labour: labourSignal(metrics, opts),
+    wages: wageSignal(metrics, opts),
+    expectations: expectationsSignal(metrics, opts),
+    oil: oilSignal(metrics, opts),
   };
   const composite = compositeScore(signals);
   return { signals, composite, confidence: confidence(signals, composite, metrics) };
 }
 
 module.exports = {
-  THRESHOLDS, scale,
+  THRESHOLDS, scale, isScorable, inputReport,
   inflationSignal, labourSignal, wageSignal, expectationsSignal, oilSignal,
   compositeScore, confidence, buildSignals,
 };
