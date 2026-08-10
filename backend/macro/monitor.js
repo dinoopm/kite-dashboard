@@ -13,6 +13,7 @@
 // The FOMC weighs financial stability, credit conditions, global growth and
 // politics, none of which are inputs here.
 
+const YahooFinance = require('yahoo-finance2').default;
 const { createClient } = require('@supabase/supabase-js');
 const { SERIES, SCORED_SERIES } = require('./series');
 const { computeMetrics, releasesBehind } = require('./calc');
@@ -20,6 +21,7 @@ const { buildSignals, THRESHOLDS } = require('./signals');
 const { fetchMany, hasApiKey } = require('./fred');
 const { readSeries } = require('./ingest');
 
+const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 // Two and a half years: enough for a 12-month comparison plus room for the
@@ -52,6 +54,40 @@ async function loadFromFred(since) {
   const out = {};
   for (const s of SERIES) out[s.id] = series[s.id]?.observations || [];
   return { observations: out, errors };
+}
+
+/**
+ * Live WTI, for freshness only — never for the scored six-month measure.
+ *
+ * DCOILWTICO is spot at Cushing, settled, and reaches FRED about five days
+ * late. CL=F is the front-month futures contract, quoted continuously. They
+ * track each other but are DIFFERENT INSTRUMENTS, so running the six-month
+ * window on the futures series would bake contract-roll jumps into the rate of
+ * change — over six months that is worth more than the lag it would fix.
+ *
+ * So the score stays on one consistent instrument, and this is shown beside it
+ * with `wouldChangeScore` computed honestly: if the live price would move the
+ * oil component across a threshold, that is worth knowing, and if it would not
+ * — which is the usual case, because the component clamps — then the lag is
+ * not costing anything and the panel should say so rather than imply staleness.
+ */
+async function liveOil(sixMonthsAgoValue) {
+  try {
+    const q = await yf.quote('CL=F', {}, { validateResult: false });
+    const price = q?.regularMarketPrice;
+    if (!Number.isFinite(price)) return null;
+    const rocPct = sixMonthsAgoValue ? ((price / sixMonthsAgoValue) - 1) * 100 : null;
+    return {
+      symbol: 'CL=F',
+      instrument: 'WTI front-month futures',
+      price,
+      quotedAt: q.regularMarketTime ? new Date(q.regularMarketTime).toISOString() : null,
+      delayMin: q.exchangeDataDelayedBy ?? null,
+      rocPct,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** The next scheduled macro event, from the existing macro_events calendar. */
@@ -134,6 +170,23 @@ async function buildMonitor({ anchorDate = null, preferDb = true } = {}) {
   const { signals, composite, confidence } = buildSignals(metrics);
   const releases = await nextRelease();
 
+  // Live WTI alongside the settled series, so the panel is current on the one
+  // input that moves daily. It does NOT feed the score — see liveOil — but it
+  // does say whether it would, which is the question worth answering: a lag
+  // that cannot change the reading is not a staleness problem.
+  const oilIndicator = indicators.find(i => i.seriesId === 'DCOILWTICO');
+  const live = await liveOil(oilIndicator?.sixMonthsAgo);
+  if (live && oilIndicator) {
+    const T = THRESHOLDS.oil;
+    const liveScore = live.rocPct == null ? null
+      : Math.max(-1, Math.min(1, ((live.rocPct - T.rocCool) / (T.rocHot - T.rocCool)) * 2 - 1));
+    const scored = signals.oil?.score;
+    live.scoreIfUsed = liveScore;
+    live.wouldChangeScore = liveScore != null && scored != null && Math.abs(liveScore - scored) > 0.005;
+    oilIndicator.live = live;
+    metrics.oil.live = live;
+  }
+
   const staleSeries = indicators
     .filter(i => i.scored && i.releasesBehind != null && i.releasesBehind > 0)
     .map(i => `${i.label} (${i.releasesBehind} release${i.releasesBehind > 1 ? 's' : ''} behind, latest ${i.latestDate})`);
@@ -161,6 +214,9 @@ async function buildMonitor({ anchorDate = null, preferDb = true } = {}) {
       ...(staleSeries.length ? [`Stale: ${staleSeries.join(', ')}.`] : []),
       ...(Object.keys(fetchErrors).length ? [`Fetch failed for: ${Object.keys(fetchErrors).join(', ')}.`] : []),
       ...(dataPath === 'fred-live' ? ['Served live from FRED — macro_observations is empty or unreachable, so no stored vintages back these numbers.'] : []),
+      ...(indicators.find(i => i.seriesId === 'DCOILWTICO')?.live
+        ? [`Oil shows a live ${indicators.find(i => i.seriesId === 'DCOILWTICO').live.symbol} quote for reference, but the SCORE uses FRED's settled Cushing spot series — they are different instruments, and running a six-month window on front-month futures would bake contract-roll jumps into the rate of change.${indicators.find(i => i.seriesId === 'DCOILWTICO').live.wouldChangeScore ? ' The live price WOULD move the oil component if it were used.' : ' At the current price it would not change the oil component.'}`]
+        : []),
       ...(hasApiKey() ? [] : ['FRED_API_KEY is not set, so vintage (as-known-at-the-time) data is unavailable and the regime cannot yet be reconstructed historically.']),
     ],
   };

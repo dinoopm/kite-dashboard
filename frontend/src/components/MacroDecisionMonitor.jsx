@@ -395,6 +395,15 @@ export default function MacroDecisionMonitor() {
                           {ind.monthlyChanges?.length > 0 && (
                             <div>Monthly: {ind.monthlyChanges.map(c => `${MONTH[+c.date.slice(5, 7) - 1]} ${c.change >= 0 ? '+' : ''}${Math.round(c.change)}k`).join(' · ')}</div>
                           )}
+                          {ind.live && (
+                            <div style={{ marginTop: '0.25rem' }}>
+                              Live {ind.live.symbol} ({ind.live.instrument}) {ind.live.price.toFixed(2)}, {ind.live.delayMin ?? 15}-min delayed
+                              {Number.isFinite(ind.live.rocPct) && ` — ${ind.live.rocPct >= 0 ? '+' : ''}${ind.live.rocPct.toFixed(2)}% against the same six-month base`}.
+                              {' '}{ind.live.wouldChangeScore
+                                ? 'Using it WOULD move this component.'
+                                : 'Using it would not change this component, so the settled series being a few days behind costs nothing here.'}
+                            </div>
+                          )}
                           {reason && <div style={{ marginTop: '0.25rem' }}>{reason}</div>}
                           {ind.note && <div style={{ marginTop: '0.25rem' }}>{ind.note}</div>}
                         </div>
@@ -402,6 +411,15 @@ export default function MacroDecisionMonitor() {
                     </td>
                     <td style={{ ...cell, textAlign: 'right' }}>
                       {ind.latest == null ? '—' : ind.transform === 'count' ? Math.round(ind.latest).toLocaleString() : ind.latest.toFixed(2)}
+                      {/* Live quote beside the settled figure. Deliberately a
+                          different instrument and labelled as one — see
+                          liveOil() in backend/macro/monitor.js. */}
+                      {ind.live && (
+                        <div style={{ fontSize: '0.63rem', color: AMBER }}
+                             title={`${ind.live.instrument} (${ind.live.symbol}), ${ind.live.delayMin ?? 15}-min delayed. Shown for freshness; the six-month score uses the settled spot series.`}>
+                          live {ind.live.price.toFixed(2)}
+                        </div>
+                      )}
                     </td>
                     <td style={{ ...cell, textAlign: 'right' }}>
                       <div style={{ fontWeight: 600 }}>{six.value}</div>
