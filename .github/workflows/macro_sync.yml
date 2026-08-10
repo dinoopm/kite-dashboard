@@ -36,8 +36,17 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      # BOTH installs are required, and the root one is not optional padding:
+      # @supabase/supabase-js is declared in the ROOT package.json, not in
+      # backend/package.json, so `require('@supabase/supabase-js')` from a
+      # backend script resolves by walking up to the root node_modules. Install
+      # only backend and every backend script that touches the database dies at
+      # module load. That is what failed run #1 in under a second. The other two
+      # workflows have always done both, which is why they were unaffected.
       - name: Install Dependencies
-        run: cd backend && (npm ci || npm install)
+        run: |
+          npm ci || npm install
+          cd backend && (npm ci || npm install)
 
       # FRED_API_KEY is optional: without it the keyless CSV endpoint is used,
       # which carries the same observations but no vintage history.
