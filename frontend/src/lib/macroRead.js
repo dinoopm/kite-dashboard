@@ -109,6 +109,71 @@ function signalTriad(monitor) {
   };
 }
 
+/**
+ * Round contributions so the displayed values SUM to the displayed headline.
+ *
+ * The underlying arithmetic was never wrong — the raw contributions sum to the
+ * composite to within 1e-12. The problem is purely that rounding each one
+ * independently loses the identity a reader checks by eye. On 2026-08-10 the
+ * cards read +0.14, -0.08, -0.15, -0.01, +0.05, which totals -0.05 against a
+ * headline of -0.058.
+ *
+ * More decimal places does not fix this, which is worth stating because it is
+ * the obvious first idea. The same values render as:
+ *
+ *   2dp  sum -0.05    headline -0.06
+ *   3dp  sum -0.059   headline -0.058
+ *   4dp  sum -0.0582  headline -0.0581
+ *
+ * Independent rounding can always drift; the error just moves to a smaller
+ * decimal. The only way to guarantee the identity is to round to the headline's
+ * total on purpose — the largest-remainder (Hare-Niemeyer) method: floor
+ * everything, then hand the leftover units to whichever entries were rounded
+ * down the hardest. Every displayed value stays within one unit of its true
+ * value, and the column adds up exactly.
+ */
+function distributeRounding(values, decimals = 3) {
+  const scale = 10 ** decimals;
+  const clean = values.map(v => (Number.isFinite(v) ? v : null));
+  const present = clean.filter(v => v != null);
+  if (!present.length) return clean;
+
+  // The headline is rounded from the true total, not from the rounded parts —
+  // it is the number the parts must be made to agree with.
+  const target = Math.round(present.reduce((a, b) => a + b, 0) * scale);
+
+  const scaled = clean.map(v => (v == null ? null : v * scale));
+  const floors = scaled.map(v => (v == null ? null : Math.floor(v)));
+  const sumFloors = floors.reduce((a, b) => a + (b ?? 0), 0);
+
+  // Each remainder is in [0,1), so `need` is between 0 and the number of
+  // entries — one unit at most per entry, which is what bounds the distortion.
+  let need = target - sumFloors;
+
+  const order = clean
+    .map((v, i) => ({ i, rem: v == null ? -1 : scaled[i] - floors[i] }))
+    .filter(x => x.rem >= 0)
+    .sort((a, b) => b.rem - a.rem);
+
+  const out = floors.slice();
+  // Hand a unit to the largest remainders first; if `need` is negative (the
+  // total rounded down past the floors) take units from the smallest.
+  for (let k = 0; need > 0 && k < order.length; k++, need--) out[order[k].i] += 1;
+  for (let k = order.length - 1; need < 0 && k >= 0; k--, need++) out[order[k].i] -= 1;
+
+  return out.map(v => (v == null ? null : v / scale));
+}
+
+/**
+ * Contributions with a `display` value that is safe to render and to add up.
+ * `display` is what the UI must show; `contribution` stays the true number.
+ */
+function displayContributions(monitor, decimals = 3) {
+  const cs = monitor?.composite?.contributions || [];
+  const rounded = distributeRounding(cs.map(c => c.contribution), decimals);
+  return cs.map((c, i) => ({ ...c, display: rounded[i] }));
+}
+
 /** `in 2 days` / `today` / `tomorrow`, computed at render so it cannot go stale. */
 function countdown(daysAway) {
   if (daysAway == null || !Number.isFinite(daysAway)) return null;
@@ -521,6 +586,7 @@ function contextReason(ind) {
 export {
   REGIME_WORD, POLICY_WORD, COMPONENT_LABEL, COMPONENT_PHRASE, SCORE_TOOLTIP,
   directionWord, confidenceConstraint, signalTriad, countdown,
+  distributeRounding, displayContributions,
   explain, explainShort, componentInterpretation, whatWouldChange,
   whatWouldChangeByDirection, levers,
   freshnessStatus, sixMonthRead, interpretIndicator, contextReason,

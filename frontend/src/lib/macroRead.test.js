@@ -4,7 +4,7 @@ import {
   directionWord, confidenceConstraint, signalTriad, countdown, explain,
   whatWouldChange, freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
   explainShort, componentInterpretation, shortTitle, reportMonth,
-  whatWouldChangeByDirection,
+  whatWouldChangeByDirection, distributeRounding, displayContributions,
 } from './macroRead.js'
 
 // The live payload from 2026-08-09, trimmed. Real numbers on purpose: the
@@ -382,5 +382,89 @@ describe('whatWouldChangeByDirection', () => {
 
   test('returns nothing rather than guessing without thresholds', () => {
     assert.deepEqual(whatWouldChangeByDirection({ signals: MONITOR.signals }), [])
+  })
+})
+
+describe('distributeRounding', () => {
+  const sumAt = (vals, dp) => +vals.reduce((a, b) => a + b, 0).toFixed(dp)
+
+  // The live payload on 2026-08-10. Independently rounded it read
+  // +0.14 -0.08 -0.15 -0.01 +0.05 = -0.05 against a headline of -0.058.
+  const LIVE = [0.13500000000000004, -0.0785714285714285, -0.15, -0.014555555555555655, 0.05]
+
+  test('the displayed parts sum to the displayed headline', () => {
+    const dp = 3
+    const shown = distributeRounding(LIVE, dp)
+    assert.equal(sumAt(shown, dp), +LIVE.reduce((a, b) => a + b, 0).toFixed(dp))
+    assert.equal(sumAt(shown, dp), -0.058)
+  })
+
+  // Worth pinning as a fact, because "just add a decimal place" is the obvious
+  // first idea and it does not work — the error only moves to a smaller column.
+  test('naive per-value rounding fails at every precision', () => {
+    for (const dp of [2, 3, 4]) {
+      const naive = LIVE.map(v => +v.toFixed(dp))
+      const headline = +LIVE.reduce((a, b) => a + b, 0).toFixed(dp)
+      assert.notEqual(sumAt(naive, dp), headline, `naive rounding unexpectedly matched at ${dp}dp`)
+    }
+  })
+
+  test('no displayed value drifts more than one unit from the truth', () => {
+    const dp = 3
+    const shown = distributeRounding(LIVE, dp)
+    for (let i = 0; i < LIVE.length; i++) {
+      assert.ok(Math.abs(shown[i] - LIVE[i]) <= 1 / 10 ** dp + 1e-9,
+        `entry ${i} moved ${Math.abs(shown[i] - LIVE[i])}, more than one unit`)
+    }
+  })
+
+  // The identity has to hold for any payload, not just today's.
+  test('holds for a thousand random vectors at 2, 3 and 4 decimals', () => {
+    let seed = 42
+    const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+    for (let t = 0; t < 1000; t++) {
+      const n = 2 + Math.floor(rnd() * 6)
+      const vals = Array.from({ length: n }, () => (rnd() - 0.5) * 0.9)
+      const dp = [2, 3, 4][t % 3]
+      const shown = distributeRounding(vals, dp)
+      assert.equal(sumAt(shown, dp), +vals.reduce((a, b) => a + b, 0).toFixed(dp),
+        `mismatch at ${dp}dp for [${vals.join(', ')}]`)
+    }
+  })
+
+  test('handles a single value, and all-zero', () => {
+    assert.equal(sumAt(distributeRounding([-0.058], 3), 3), -0.058)
+    assert.deepEqual(distributeRounding([0, 0, 0], 3), [0, 0, 0])
+  })
+
+  // A dropped component carries null, not zero — it must pass through
+  // untouched and must not absorb a rounding unit.
+  test('leaves an unavailable component null', () => {
+    const out = distributeRounding([0.135, null, -0.15], 3)
+    assert.equal(out[1], null)
+    assert.equal(sumAt(out.filter(v => v != null), 3), +(0.135 - 0.15).toFixed(3))
+  })
+
+  test('returns everything untouched when nothing is available', () => {
+    assert.deepEqual(distributeRounding([null, null], 3), [null, null])
+  })
+})
+
+describe('displayContributions', () => {
+  test('adds a display value that sums to the headline score', () => {
+    const shown = displayContributions(MONITOR, 3)
+    const sum = +shown.reduce((a, c) => a + (c.display || 0), 0).toFixed(3)
+    assert.equal(sum, +MONITOR.composite.score.toFixed(3))
+  })
+
+  test('keeps the true contribution alongside the display value', () => {
+    const shown = displayContributions(MONITOR, 3)
+    const infl = shown.find(c => c.key === 'inflation')
+    assert.equal(infl.contribution, 0.135, 'the raw figure must not be overwritten')
+    assert.ok(Number.isFinite(infl.display))
+  })
+
+  test('survives a payload with no contributions', () => {
+    assert.deepEqual(displayContributions({}, 3), [])
   })
 })

@@ -3,6 +3,7 @@ import {
   REGIME_WORD, POLICY_WORD, COMPONENT_LABEL, SCORE_TOOLTIP,
   directionWord, confidenceConstraint, signalTriad, countdown,
   explain, explainShort, componentInterpretation, whatWouldChangeByDirection,
+  displayContributions,
   freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
   shortTitle, reportMonth, signed,
 } from '../lib/macroRead.js'
@@ -42,6 +43,10 @@ const TONE_COLOR = { ok: GREEN, warn: AMBER, bad: RED, muted: GREY }
 const MARK = { up: '▲', down: '▼', flat: '◆', none: '○' }
 const markFor = (v) => (v == null ? MARK.none : v > 0.005 ? MARK.up : v < -0.005 ? MARK.down : MARK.flat)
 const toneFor = (v) => (v == null ? GREY : v > 0.005 ? RED : v < -0.005 ? GREEN : AMBER)
+
+// One precision for the score, the triad and the contribution column. They are
+// reconciled against each other, so they must be rendered at the same scale.
+const SCORE_DP = 3
 
 const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const longDate = (iso) => {
@@ -143,6 +148,9 @@ export default function MacroDecisionMonitor() {
   const triad = signalTriad(d)
   const conf = confidenceConstraint(d.confidence)
   const changeGroups = whatWouldChangeByDirection(d)
+  // Rounded so the column adds up to the headline — see distributeRounding.
+  // Same precision as the score above it, or the two cannot agree.
+  const contributions = displayContributions(d, SCORE_DP)
   const next = d.releases?.next
   const scored = d.indicators.filter(i => i.scored)
   const context = d.indicators.filter(i => !i.scored)
@@ -241,7 +249,7 @@ export default function MacroDecisionMonitor() {
             <span style={{ color: GREY }}>{name}</span>
             <span style={{ fontWeight: 600 }}>{item ? item.label : 'none'}</span>
             <span style={{ fontVariantNumeric: 'tabular-nums', color: toneFor(value) }}>
-              {value == null ? '—' : signed(value, 2)}
+              {value == null ? '—' : signed(value, SCORE_DP)}
             </span>
           </div>
         ))}
@@ -289,7 +297,7 @@ export default function MacroDecisionMonitor() {
       <div style={{ marginTop: '0.9rem' }}>
         <div style={{ ...label, marginBottom: '0.45rem' }}>Component contributions</div>
         <div style={{ display: 'grid', gap: '0.55rem' }}>
-          {d.composite.contributions.map(c => {
+          {contributions.map(c => {
             const sig = d.signals[c.key] || {}
             const partial = sig.inputsTotal > 0 && sig.inputsUsed < sig.inputsTotal
             return (
@@ -302,12 +310,12 @@ export default function MacroDecisionMonitor() {
                   </span>
                   <div
                     role="img"
-                    aria-label={`${COMPONENT_LABEL[c.key] || c.key}, weight ${Math.round(c.weight * 100)} percent, contributing ${c.contribution == null ? 'nothing' : signed(c.contribution, 2)} to the composite`}
+                    aria-label={`${COMPONENT_LABEL[c.key] || c.key}, weight ${Math.round(c.weight * 100)} percent, contributing ${c.display == null ? 'nothing' : signed(c.display, SCORE_DP)} to the composite`}
                   >
                     <ContributionBar contribution={c.contribution} />
                   </div>
-                  <span style={{ fontSize: '0.76rem', fontVariantNumeric: 'tabular-nums', color: toneFor(c.contribution), minWidth: 48, textAlign: 'right' }}>
-                    {c.contribution == null ? 'n/a' : signed(c.contribution, 2)}
+                  <span style={{ fontSize: '0.76rem', fontVariantNumeric: 'tabular-nums', color: toneFor(c.contribution), minWidth: 54, textAlign: 'right' }}>
+                    {c.display == null ? 'n/a' : signed(c.display, SCORE_DP)}
                   </span>
                 </div>
                 <div style={{ paddingLeft: '1.6rem', marginTop: '0.12rem' }}>
