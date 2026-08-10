@@ -89,16 +89,29 @@ function ScoreScale({ score, coolingMax, reaccelMin }) {
   )
 }
 
+/**
+ * Contribution as a bar growing from the centre: cooling left, pressure right.
+ *
+ * Both halves are flex containers and the fill carries an explicit height.
+ * That is not belt-and-braces — the first version made only the LEFT half a
+ * flex container, so its child was stretched to the track height by
+ * align-items: stretch, while the right half was a plain block whose child had
+ * a width and no height and therefore collapsed to nothing. Every positive
+ * (red) contribution rendered as an empty track: inflation at +0.14 and oil at
+ * +0.05 were invisible, and the panel looked as though only cooling forces
+ * existed — the exact opposite of the reading it was reporting.
+ */
 function ContributionBar({ contribution }) {
   const pct = contribution == null ? 0 : Math.min(100, (Math.abs(contribution) / 0.5) * 100)
   const positive = (contribution || 0) >= 0
+  const fill = (color) => ({ width: `${pct}%`, height: '100%', background: color })
   return (
-    <div style={{ display: 'flex', height: 8, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
+    <div style={{ display: 'flex', alignItems: 'stretch', height: 8, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
       <div style={{ width: '50%', display: 'flex', justifyContent: 'flex-end' }}>
-        {!positive && <div style={{ width: `${pct}%`, background: GREEN }} />}
+        {!positive && <div style={fill(GREEN)} />}
       </div>
-      <div style={{ width: '50%' }}>
-        {positive && <div style={{ width: `${pct}%`, background: RED }} />}
+      <div style={{ width: '50%', display: 'flex', justifyContent: 'flex-start' }}>
+        {positive && <div style={fill(RED)} />}
       </div>
     </div>
   )
