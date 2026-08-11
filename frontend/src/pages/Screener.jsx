@@ -395,6 +395,22 @@ export default function Screener() {
     setActiveScreenId(screen.id)
   }, [])
 
+  /**
+   * Presets load differently from saved screens, deliberately: a preset changes
+   * WHAT is asked, never WHERE. India's screener defaults to holdings, and
+   * `loadScreen` resets scope to holdings for any object without one — which
+   * would silently discard a sector or theme the user had chosen. The
+   * conditions are cloned too, because they come from a module constant and
+   * editing a loaded preset must not mutate PRESET_SCREENS for the session.
+   */
+  const loadPreset = useCallback((preset) => {
+    setConditions(preset.conditions.map(c => ({ ...c })))
+    setResult(null)
+    setJobStatus(null)
+    setError(null)
+    setActiveScreenId(preset.id)
+  }, [])
+
   const deleteScreen = useCallback(async (id) => {
     if (!window.confirm('Delete this saved screen?')) return
     try {
@@ -514,23 +530,50 @@ export default function Screener() {
         </button>
       </div>
 
-      {/* Preset screens — load a condition set with one click. Scope is left
-          as-is so the same question can be asked of holdings or a sector. */}
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1rem' }}>
-        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 700 }}>Presets</span>
-        {PRESET_SCREENS.map(p => (
-          <button
-            key={p.id}
-            onClick={() => setConditions(p.conditions.map(c => ({ ...c })))}
-            title={p.conditions.map(c => `${c.field} ${c.op} ${c.value}`).join('  ·  ')}
-            style={{
-              background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)',
-              borderRadius: '8px', padding: '0.35rem 0.8rem', cursor: 'pointer', fontSize: '0.78rem',
-            }}
-          >
-            {p.name}
-          </button>
-        ))}
+      {/* Preset screens. Same card layout as Saved screens below, and as the US
+          screener: the chip row this replaced hid every condition in a title
+          tooltip, so the only way to learn what a preset asked was to click it
+          and lose whatever was already built — and nothing showed which one was
+          loaded. */}
+      <h3 style={{ margin: '0.5rem 0 0.75rem' }}>Preset screens</h3>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
+        {PRESET_SCREENS.map(p => {
+          const isActive = p.id === activeScreenId
+          return (
+            <div
+              key={p.id}
+              className="glass-panel"
+              style={{
+                padding: '0.7rem 1rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap',
+                border: isActive ? '1px solid var(--accent)' : undefined,
+                background: isActive ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : undefined,
+              }}
+            >
+              {isActive && <span style={{ color: 'var(--accent)', fontSize: '0.9rem', lineHeight: 1 }} title="Currently loaded">●</span>}
+              <strong style={{ minWidth: '180px' }}>{p.name}</strong>
+              <span style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.05em', border: '1px solid var(--accent)', borderRadius: '4px', padding: '0.1rem 0.4rem' }}>
+                Preset
+              </span>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flex: 1 }}>
+                {(p.conditions || []).map(describeCondition).join('  AND  ')}
+              </span>
+              <button
+                onClick={() => loadPreset(p)}
+                disabled={isActive}
+                style={{
+                  background: isActive ? 'var(--accent)' : 'transparent',
+                  border: '1px solid var(--accent)',
+                  color: isActive ? '#0f172a' : 'var(--accent)',
+                  borderRadius: '6px', padding: '0.25rem 0.8rem',
+                  cursor: isActive ? 'default' : 'pointer', fontSize: '0.78rem',
+                  fontWeight: isActive ? 700 : 400,
+                }}
+              >
+                {isActive ? 'Loaded' : 'Load'}
+              </button>
+            </div>
+          )
+        })}
       </div>
 
       {running && (
