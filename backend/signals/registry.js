@@ -24,6 +24,7 @@
 // rather than omitted and forgotten.
 
 const { rollingMax } = require('../backtest/indicators');
+const { bandwidthSeries, squeezeMask, MIN_BARS: SQUEEZE_MIN_BARS } = require('../screener/squeeze');
 const { MIN_BARS: VCP_MIN_BARS } = require('../screener/vcp');
 
 /** Did SuperTrend flip from BEAR to BULL on bar i? */
@@ -52,6 +53,32 @@ function breakout(window) {
   };
 }
 
+/**
+ * Did a Bollinger squeeze BEGIN on bar i?
+ *
+ * The screener field is the state — coiled or not, true for every bar the
+ * compression lasts. This is the transition, and the difference is the whole
+ * reason both exist: a squeeze running twenty bars is ONE call, and recording
+ * the state daily would file it twenty times and make n look like evidence.
+ *
+ * The mask is computed once per symbol and cached on the series object, since
+ * detectAll walks every bar and recomputing a 30-bar rolling minimum per bar
+ * would make recording quadratic.
+ */
+function squeezeStart(S, i) {
+  if (!S._bbSqueezeMask) {
+    const bbw = bandwidthSeries(S.closes);
+    S._bbSqueezeMask = squeezeMask(bbw);
+    S._bbw = bbw;
+  }
+  const mask = S._bbSqueezeMask;
+  if (!mask[i] || mask[i - 1]) return null;
+  return {
+    close: S.closes[i],
+    bandwidth: S._bbw[i] == null ? null : +S._bbw[i].toFixed(2),
+  };
+}
+
 // Signals derived from daily OHLCV. `source: 'reconstructed'` is an admission,
 // not a formality: these are recomputed from stored bhavcopy rather than
 // captured the day they fired. Bhavcopy closes are not revised and no
@@ -75,6 +102,14 @@ const PRICE_SIGNALS = [
     minBars: 25,
     source: 'reconstructed',
     detect: breakout(20),
+  },
+  {
+    name: 'bb_squeeze',
+    label: 'Bollinger squeeze begins',
+    description: 'Bollinger bandwidth (20,2) reaches within 5% of its 30-day low, on a bar it was not already there. Fires on the transition into compression, not on every bar of it.',
+    minBars: SQUEEZE_MIN_BARS + 1,
+    source: 'reconstructed',
+    detect: squeezeStart,
   },
   {
     name: 'breakout_55d',
@@ -149,5 +184,5 @@ function detectAll(S, { fromDate = null } = {}) {
 
 module.exports = {
   PRICE_SIGNALS, RECORDED_SIGNALS, BLOCKED_SIGNALS, ALL_SIGNALS,
-  signalMeta, detectAll, supertrendFlipUp, breakout,
+  signalMeta, detectAll, supertrendFlipUp, breakout, squeezeStart,
 };

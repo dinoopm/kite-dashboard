@@ -37,6 +37,21 @@ const PRESET_SCREENS = [
   { id: 'p-vcp', name: 'VCP setups', conditions: [
     { field: 'vcpSetup', op: 'is', value: 'YES' },
   ] },
+  // Bollinger squeeze: bandwidth at (or within 5% of) its 30-day low. The
+  // folklore is that compressed volatility precedes a breakout, and unlike the
+  // base-breakout preset above, these thresholds have NOT yet been swept — the
+  // 20/2/30/5% settings come from the chart, not from a measurement. Registered
+  // as `bb_squeeze` so the scorecard starts building a track record from the
+  // first firing rather than after a year of acting on it.
+  //
+  // Paired with a trend filter on purpose: a squeeze says a move is coming,
+  // never which way, and screening for it alone returns as many breakdowns as
+  // breakouts.
+  { id: 'p-bbsqueeze', name: 'Bollinger squeeze (coiled)', conditions: [
+    { field: 'bbSqueeze', op: 'is', value: 'YES' },
+    { field: 'bbSqueezeAge', op: 'gte', value: 3 },
+    { field: 'pctVsSma200', op: 'gt', value: 0 },
+  ] },
 ]
 
 // Columns shown in the results table (subset of the field catalog, in order).

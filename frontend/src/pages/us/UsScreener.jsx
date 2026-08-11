@@ -25,6 +25,10 @@ const PRESET_SCREENS = [
   // days; only 22.
   { id: 'p-basebreak', name: 'Year-long base → fresh BUY', scope: { type: 'sp500' }, conditions: [{ field: 'range52wPct', op: 'lte', value: 30 }, { field: 'ret1Y', op: 'lte', value: 15 }, { field: 'ret1Y', op: 'gte', value: -15 }, { field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 10 }] },
   { id: 'p-vcp', name: 'VCP setups', scope: { type: 'sp500' }, conditions: [{ field: 'vcpSetup', op: 'is', value: 'YES' }] },
+  // See the note on the same preset in pages/Screener.jsx: thresholds are the
+  // chart's, not yet swept, and the trend filter is there because a squeeze
+  // predicts a move without predicting its direction.
+  { id: 'p-bbsqueeze', name: 'Bollinger squeeze (coiled)', scope: { type: 'sp500' }, conditions: [{ field: 'bbSqueeze', op: 'is', value: 'YES' }, { field: 'bbSqueezeAge', op: 'gte', value: 3 }, { field: 'pctVsSma200', op: 'gt', value: 0 }] },
 ];
 
 const RESULT_COLUMNS = [

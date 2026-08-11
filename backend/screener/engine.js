@@ -4,6 +4,7 @@
 // user-defined conditions against that row. All conditions are ANDed.
 const { buildSeries, rollingMax, rollingMin } = require('../backtest/indicators');
 const { computeVcpScore } = require('./vcp');
+const { squeezeState, MIN_BARS: SQUEEZE_MIN_BARS } = require('./squeeze');
 
 // Field catalog — drives both the UI's condition builder (dropdowns, operator
 // choices, value inputs) and server-side validation. `group` is only a UI hint.
@@ -49,6 +50,12 @@ const SCREENER_FIELDS = [
   { key: 'signal1050Age', label: 'Bars since 10/50 signal',     type: 'number', group: 'Signals' },
   { key: 'smaCross',    label: 'SMA 50/200 state',         type: 'enum', enumValues: ['GOLDEN', 'DEATH'], group: 'Trend' },
   { key: 'breakout20d', label: 'Above prior 20d high',     type: 'enum', enumValues: ['YES', 'NO'], group: 'Levels' },
+  // Bollinger bandwidth and the squeeze. `bbSqueeze` is a STATE — true for
+  // every bar the compression lasts — which is the right question for a
+  // screener. The transition is a separate thing, recorded as a signal.
+  { key: 'bbBandwidth', label: 'Bollinger bandwidth %',    type: 'number', group: 'Volatility' },
+  { key: 'bbSqueeze',   label: 'BB squeeze (30d low)',     type: 'enum', enumValues: ['YES', 'NO'], group: 'Volatility' },
+  { key: 'bbSqueezeAge', label: 'Bars in squeeze',         type: 'number', group: 'Volatility' },
   { key: 'breakout55d', label: 'Above prior 55d high',     type: 'enum', enumValues: ['YES', 'NO'], group: 'Levels' },
   { key: 'vcpScore', label: 'VCP score (0-100)', type: 'number', group: 'Patterns' },
   { key: 'vcpSetup', label: 'VCP setup',         type: 'enum', enumValues: ['YES', 'NO'], group: 'Patterns' },
@@ -158,6 +165,18 @@ function computeScreenerRow(candles) {
     ...(() => {
       const v = computeVcpScore({ closes: S.closes, highs: S.highs, lows: S.lows, volumes: S.volumes, atr14: S.atr14 });
       return { vcpScore: v.vcpScore, vcpSetup: v.vcpSetup };
+    })(),
+    // Null rather than 'NO' when there is not enough history: a stock that
+    // cannot be judged is not a stock that is judged negatively, and a
+    // screener condition on 'NO' should not silently sweep it in.
+    ...(() => {
+      if (n < SQUEEZE_MIN_BARS) return { bbBandwidth: null, bbSqueeze: null, bbSqueezeAge: null };
+      const q = squeezeState(closes);
+      return {
+        bbBandwidth: q.bandwidth == null ? null : +q.bandwidth.toFixed(2),
+        bbSqueeze: q.squeezed == null ? null : (q.squeezed ? 'YES' : 'NO'),
+        bbSqueezeAge: q.barsInSqueeze,
+      };
     })(),
   };
 }

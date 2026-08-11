@@ -119,6 +119,10 @@ export default function TechnicalAlertsPanel({ alerts = [], summary, lastUpdated
       <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
         <SignalScore signal="breakout_20d" label="🚀 20d breakouts" />
         <SignalScore signal="supertrend_flip_up" label="⚡ Super-flips" />
+        {/* The squeeze preset claims a breakout is likely; this is the number
+            saying whether that has held. Sits next to the claim rather than on
+            a validation page nobody opens. */}
+        <SignalScore signal="bb_squeeze" label="🎯 BB squeezes" />
       </div>
 
       {/* Column Headers */}
