@@ -199,6 +199,17 @@ export default function MacroDecisionMonitor() {
         </div>
 
         <div>
+          {/* What just landed, so the panel is not still pointing at a release
+              that published hours ago — the state it used to sit in all day. */}
+          {d.releases?.latest && (
+            <div style={{ marginBottom: '0.5rem' }}>
+              <div style={label}>Just released</div>
+              <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{shortTitle(d.releases.latest.title)}</div>
+              <div style={{ fontSize: '0.68rem', color: GREEN }}>
+                published today{reportMonth(d.releases.latest.detail) ? ` · ${reportMonth(d.releases.latest.detail)}` : ''} · already in the figures below
+              </div>
+            </div>
+          )}
           <div style={label}>Next catalyst</div>
           {next ? (
             <>
@@ -392,6 +403,16 @@ export default function MacroDecisionMonitor() {
                       </button>
                       <div style={{ fontSize: '0.63rem', color: TONE_COLOR[fresh.tone] }}>
                         <span style={{ fontFamily: 'ui-monospace, monospace', color: GREY }}>{ind.seriesId}</span> · {fresh.label}
+                      </div>
+                      {/* This panel is part data board, part model. The Latest
+                          column is what the agency published; the Six-month
+                          column is computed here. Saying which is which stops a
+                          derived figure being read as an official print. */}
+                      <div style={{ fontSize: '0.6rem', color: GREY, marginTop: '0.1rem' }}>
+                        <span title="Published by the statistical agency, stored unchanged">Latest: official release</span>
+                        {' · '}
+                        <span title="Computed by this dashboard from the official levels">Six-month: derived here</span>
+                        {!ind.scored && ' · context only'}
                       </div>
                       {open && (
                         <div style={{ fontSize: '0.67rem', color: GREY, marginTop: '0.35rem', lineHeight: 1.6, maxWidth: '46ch' }}>

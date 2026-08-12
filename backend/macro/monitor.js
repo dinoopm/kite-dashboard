@@ -90,25 +90,73 @@ async function liveOil(sixMonthsAgoValue) {
   }
 }
 
-/** The next scheduled macro event, from the existing macro_events calendar. */
+/**
+ * Scheduled time of a release, in UTC, from the calendar's own detail text.
+ *
+ * US macro releases are quoted in Eastern Time, which is UTC-4 from March to
+ * November and UTC-5 otherwise. Approximating the DST boundary by month is
+ * enough here: being an hour out only matters within an hour of the release,
+ * and the alternative is a timezone dependency for one string.
+ *
+ * Returns null when the detail carries no time — an unknown time must not be
+ * treated as midnight, or every event would look already-released.
+ */
+function scheduledAtUtc(dateIso, detail) {
+  const m = String(detail || '').match(/(\d{1,2}):(\d{2})\s*(AM|PM)\s*Eastern/i);
+  if (!m || !dateIso) return null;
+  let hour = Number(m[1]) % 12;
+  if (/PM/i.test(m[3])) hour += 12;
+  const month = Number(dateIso.slice(5, 7));
+  const etOffset = month >= 3 && month <= 11 ? 4 : 5;
+  return Date.parse(`${dateIso}T00:00:00Z`) + (hour + etOffset) * 3600000 + Number(m[2]) * 60000;
+}
+
+/**
+ * What just landed and what is coming, from the existing macro_events calendar.
+ *
+ * The previous version asked only for events on or after today, so a release
+ * published at 08:30 stayed labelled "next catalyst" for the rest of the day —
+ * pointing at something that had already happened, on exactly the day the panel
+ * is read most. An event is now classified against its scheduled TIME:
+ *
+ *   latest  today's release, once its publication time has passed
+ *   next    the first event still ahead — which after 08:30 is the one AFTER
+ *           today's, not today's
+ *
+ * Before the publication time, today's event is still `next` and says it is due
+ * rather than released.
+ */
 async function nextRelease() {
   try {
+    const now = Date.now();
     const todayIso = new Date().toISOString().slice(0, 10);
     const { data, error } = await supabase.from('macro_events')
       .select('event_date,title,detail')
       .gte('event_date', todayIso)
       .order('event_date', { ascending: true })
-      .limit(2);
-    if (error || !data?.length) return { next: null, following: null };
-    const shape = (r) => ({
-      date: String(r.event_date).slice(0, 10),
-      title: r.title,
-      detail: r.detail ?? null,
-      daysAway: Math.round((Date.parse(`${String(r.event_date).slice(0, 10)}T00:00:00Z`) - Date.parse(`${todayIso}T00:00:00Z`)) / 86400000),
-    });
-    return { next: shape(data[0]), following: data[1] ? shape(data[1]) : null };
+      .limit(4);
+    if (error || !data?.length) return { latest: null, next: null, following: null };
+
+    const shape = (r) => {
+      const date = String(r.event_date).slice(0, 10);
+      const at = scheduledAtUtc(date, r.detail);
+      return {
+        date,
+        title: r.title,
+        detail: r.detail ?? null,
+        daysAway: Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${todayIso}T00:00:00Z`)) / 86400000),
+        scheduledAt: at ? new Date(at).toISOString() : null,
+        // Only claim a release happened when its own scheduled time has passed.
+        released: at != null && now >= at,
+      };
+    };
+
+    const events = data.map(shape);
+    const latest = events.find(e => e.daysAway === 0 && e.released) || null;
+    const upcoming = events.filter(e => !e.released);
+    return { latest, next: upcoming[0] || null, following: upcoming[1] || null };
   } catch {
-    return { next: null, following: null };
+    return { latest: null, next: null, following: null };
   }
 }
 

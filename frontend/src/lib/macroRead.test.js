@@ -235,9 +235,11 @@ describe('interpretIndicator', () => {
     assert.match(interpretIndicator({ key: 'payrolls', avg3mChange: 20 }, T), /moderating/i)
   })
 
-  test('reads unemployment direction correctly', () => {
-    assert.match(interpretIndicator({ key: 'unemployment', changePp: 0.4 }, T), /loosening/)
-    assert.match(interpretIndicator({ key: 'unemployment', changePp: -0.2 }, T), /tightening/)
+  // Says what the move MEANS, not just its direction — "more slack" is
+  // actionable where "loosening" needs translating.
+  test('reads unemployment direction correctly and says what it implies', () => {
+    assert.match(interpretIndicator({ key: 'unemployment', changePp: 0.4 }, T), /rising — more slack/)
+    assert.match(interpretIndicator({ key: 'unemployment', changePp: -0.2 }, T), /falling — less slack/)
   })
 
   test('returns a no-reading string rather than blank when data is missing', () => {
@@ -539,12 +541,24 @@ describe('componentInterpretation with a fresher core measure', () => {
     ],
   }
 
-  test('names the fresher reading and says it is not scored', () => {
-    const t = componentInterpretation('inflation', CPI_JULY)
+  // Leads with the figures the RELEASE reported, then the annualized pace.
+  // "Reported July at 2.42% annualized" reads as an official print and is not
+  // one — the official July numbers are the MoM and the YoY.
+  test('quotes the official prints first, then the annualized pace', () => {
+    const t = componentInterpretation('inflation', { ...CPI_JULY,
+      indicators: CPI_JULY.indicators.map(i => i.seriesId === 'CPILFESL'
+        ? { ...i, momPct: 0.215, yoyPct: 2.467 } : i) })
     assert.match(t, /3\.76% annualized/, 'still leads with the scored figure')
-    assert.match(t, /Core CPI has since reported July at 2\.42% annualized/)
+    assert.match(t, /reported July at 0\.21% month-over-month and 2\.47% year-over-year/)
+    assert.match(t, /2\.42% six-month annualized pace/)
     assert.match(t, /not scored here/)
     assert.match(t, /tracks core PCE/)
+  })
+
+  // The measure is named, so the sentence cannot be read as an official
+  // CPI/PCE headline when it is a model reading of one specific series.
+  test('names the measure the component actually scores', () => {
+    assert.match(componentInterpretation('inflation', CPI_JULY), /Core PCE, the measure this component scores/)
   })
 
   // It explains a difference in measures — it must not suggest the panel is

@@ -245,7 +245,7 @@ function explainShort(monitor) {
       : 'on the re-accelerating side';
 
   if (pressure && offset) {
-    return `${cap(COMPONENT_PHRASE[pressure.key] || pressure.key)} is still firm, but ${COMPONENT_PHRASE[offset.key] || offset.key} is offsetting it, keeping the policy signal ${regime}.`;
+    return `${cap(COMPONENT_PHRASE[pressure.key] || pressure.key)} is still firm, while softer ${COMPONENT_PHRASE[offset.key] || offset.key} reduces the pressure it creates, keeping the policy signal ${regime}.`;
   }
   if (pressure) return `${cap(COMPONENT_PHRASE[pressure.key] || pressure.key)} is adding pressure with nothing offsetting it, putting the policy signal ${regime}.`;
   if (offset) return `${cap(COMPONENT_PHRASE[offset.key] || offset.key)} is easing with nothing pushing back, putting the policy signal ${regime}.`;
@@ -303,6 +303,8 @@ function fresherCoreMeasure(monitor, scoredSeriesId) {
     label: other.seriesId === 'CPILFESL' ? 'Core CPI' : 'Core PCE',
     month: MONTH_NAME[+other.latestDate.slice(5, 7) - 1],
     annualized6m: other.annualized6m,
+    momPct: other.momPct,
+    yoyPct: other.yoyPct,
     scoredLabel: scoredSeriesId === 'PCEPILFE' ? 'core PCE' : 'core CPI',
     scoredNextPublish: nextPublishDate(scored.latestDate, scored.releaseLagDays),
   };
@@ -330,7 +332,8 @@ function componentInterpretation(key, monitor) {
       const mom = Number.isFinite(a3)
         ? (a3 < a6 ? ', though the three-month pace is slower' : a3 > a6 ? ', and the three-month pace is faster' : '')
         : '';
-      let text = `Core inflation ${level} at ${n2(a6)}% annualized over six months${mom}.`;
+      const measure = s.used === 'CPILFESL' ? 'Core CPI' : 'Core PCE';
+      let text = `${measure}, the measure this component scores, ${level} at ${n2(a6)}% annualized over six months${mom}.`;
       // The clause that answers "I saw a CPI print today, why has nothing
       // moved?" — see fresherCoreMeasure.
       const fresher = fresherCoreMeasure(monitor, s.used);
@@ -338,7 +341,16 @@ function componentInterpretation(key, monitor) {
         const when = fresher.scoredNextPublish
           ? `, whose ${fresher.month} reading publishes around ${MONTH_NAME[+fresher.scoredNextPublish.slice(5, 7) - 1].slice(0, 3)} ${+fresher.scoredNextPublish.slice(8, 10)}`
           : '';
-        text += ` ${fresher.label} has since reported ${fresher.month} at ${n2(fresher.annualized6m)}% annualized — not scored here, because the component tracks ${fresher.scoredLabel}${when}.`;
+        // Lead with the figures the release itself reported. "Reported July at
+        // 2.42% annualized" reads as an official print and is not one — the
+        // official July numbers are the MoM and YoY.
+        const official = [
+          Number.isFinite(fresher.momPct) ? `${n2(fresher.momPct)}% month-over-month` : null,
+          Number.isFinite(fresher.yoyPct) ? `${n2(fresher.yoyPct)}% year-over-year` : null,
+        ].filter(Boolean).join(' and ');
+        text += official
+          ? ` ${fresher.label} reported ${fresher.month} at ${official}, a ${n2(fresher.annualized6m)}% six-month annualized pace — not scored here, because the component tracks ${fresher.scoredLabel}${when}.`
+          : ` ${fresher.label} has since reported ${fresher.month} at a ${n2(fresher.annualized6m)}% six-month annualized pace — not scored here, because the component tracks ${fresher.scoredLabel}${when}.`;
       }
       return text;
     }
@@ -588,23 +600,23 @@ function interpretIndicator(ind, thresholds) {
     case 'coreCpi': {
       const v = ind.annualized6m;
       if (!Number.isFinite(v)) return 'No current reading';
-      if (v > (T.inflation?.hot6m ?? 3.5)) return 'Above target — inflationary';
+      if (v > (T.inflation?.hot6m ?? 3.5)) return 'Above target — still firm';
       if (v < (T.inflation?.cool6m ?? 2.0)) return 'Below target — disinflationary';
-      return 'Near target';
+      return 'Near target — no longer adding pressure';
     }
     case 'payrolls': {
       const v = ind.avg3mChange;
       if (!Number.isFinite(v)) return 'No current reading';
-      if (v < (T.labour?.payrollsCool ?? 50)) return 'Hiring moderating';
-      if (v > (T.labour?.payrollsHot ?? 200)) return 'Hiring strong — tightening';
-      return 'Hiring steady';
+      if (v < (T.labour?.payrollsCool ?? 50)) return 'Hiring moderating — labour cooling';
+      if (v > (T.labour?.payrollsHot ?? 200)) return 'Hiring strong — labour tightening';
+      return 'Hiring steady — neither adding nor easing pressure';
     }
     case 'unemployment': {
       const v = ind.changePp;
       if (!Number.isFinite(v)) return 'No current reading';
-      if (v > 0.1) return 'Labour market loosening';
-      if (v < -0.1) return 'Labour market tightening';
-      return 'Labour market steady';
+      if (v > 0.1) return 'Unemployment rising — more slack';
+      if (v < -0.1) return 'Unemployment falling — less slack than before';
+      return 'Unemployment flat — slack unchanged';
     }
     case 'wages': {
       // Scored on year-over-year, but the six-month column shows the annualized
@@ -627,9 +639,9 @@ function interpretIndicator(ind, thresholds) {
     case 'expectations': {
       const v = ind.latest;
       if (!Number.isFinite(v)) return 'No current reading';
-      if (v > (T.expectations?.levelHot ?? 2.6)) return 'Drifting above anchor';
-      if (v < (T.expectations?.levelCool ?? 2.15)) return 'Well anchored';
-      return 'Anchored';
+      if (v > (T.expectations?.levelHot ?? 2.6)) return 'Drifting above anchor — expectations slipping';
+      if (v < (T.expectations?.levelCool ?? 2.15)) return 'Well anchored — expectations not drifting';
+      return 'Anchored — expectations not drifting';
     }
     case 'expectationsSurvey': return 'Households above market-implied';
     case 'headlineCpi': return 'Includes food and energy';
