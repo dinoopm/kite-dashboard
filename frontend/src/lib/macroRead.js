@@ -252,6 +252,62 @@ function explainShort(monitor) {
   return `The policy signal is ${regime}.`;
 }
 
+const MONTH_NAME = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'];
+
+/**
+ * When a monthly series' NEXT reference month is likely to publish.
+ *
+ * Derived from the catalogue's own release lag rather than hardcoded, so it
+ * cannot drift: month M reaches the feed roughly `releaseLagDays` after the
+ * month ends. Returns null when the lag is unknown — a made-up date is worse
+ * than none, since a reader would plan around it.
+ */
+function nextPublishDate(latestDate, releaseLagDays) {
+  if (!latestDate || !Number.isFinite(releaseLagDays)) return null;
+  const d = new Date(`${String(latestDate).slice(0, 10)}T00:00:00Z`);
+  d.setUTCDate(1);
+  // First of the month AFTER the next unreported one, then the lag. Core PCE
+  // has June, so the next reading is July, which closes on 1 Aug and publishes
+  // ~30 days later. Subtracting 30 here (an earlier attempt) cancelled the lag
+  // and produced "Aug 1", four weeks early.
+  d.setUTCMonth(d.getUTCMonth() + 2);
+  d.setUTCDate(d.getUTCDate() + releaseLagDays);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * A core inflation measure that has reported a MORE RECENT month than the one
+ * being scored.
+ *
+ * This exists because of a real question: core CPI publishes about two weeks
+ * before core PCE, so for roughly half of every month a fresher and materially
+ * different inflation reading sits in the table while the bar reflects the
+ * older one. On 2026-08-12 core CPI had July at 2.42% annualized and core PCE
+ * still had June at 3.76%. Without saying so, the panel looks stale on exactly
+ * the day a CPI print lands.
+ *
+ * The scored measure does NOT change. The two sit over a point apart, so
+ * switching to whichever is freshest would swing the composite on measure
+ * choice rather than on the economy.
+ */
+function fresherCoreMeasure(monitor, scoredSeriesId) {
+  const inds = monitor?.indicators || [];
+  const scored = inds.find(i => i.seriesId === scoredSeriesId);
+  const other = inds.find(i => (i.seriesId === 'PCEPILFE' || i.seriesId === 'CPILFESL') && i.seriesId !== scoredSeriesId);
+  if (!scored?.latestDate || !other?.latestDate) return null;
+  if (!(other.latestDate > scored.latestDate)) return null;
+  if (!Number.isFinite(other.annualized6m)) return null;
+  return {
+    seriesId: other.seriesId,
+    label: other.seriesId === 'CPILFESL' ? 'Core CPI' : 'Core PCE',
+    month: MONTH_NAME[+other.latestDate.slice(5, 7) - 1],
+    annualized6m: other.annualized6m,
+    scoredLabel: scoredSeriesId === 'PCEPILFE' ? 'core PCE' : 'core CPI',
+    scoredNextPublish: nextPublishDate(scored.latestDate, scored.releaseLagDays),
+  };
+}
+
 /**
  * Why one component contributes what it does, in a sentence.
  *
@@ -274,7 +330,17 @@ function componentInterpretation(key, monitor) {
       const mom = Number.isFinite(a3)
         ? (a3 < a6 ? ', though the three-month pace is slower' : a3 > a6 ? ', and the three-month pace is faster' : '')
         : '';
-      return `Core inflation ${level} at ${n2(a6)}% annualized over six months${mom}.`;
+      let text = `Core inflation ${level} at ${n2(a6)}% annualized over six months${mom}.`;
+      // The clause that answers "I saw a CPI print today, why has nothing
+      // moved?" — see fresherCoreMeasure.
+      const fresher = fresherCoreMeasure(monitor, s.used);
+      if (fresher) {
+        const when = fresher.scoredNextPublish
+          ? `, whose ${fresher.month} reading publishes around ${MONTH_NAME[+fresher.scoredNextPublish.slice(5, 7) - 1].slice(0, 3)} ${+fresher.scoredNextPublish.slice(8, 10)}`
+          : '';
+        text += ` ${fresher.label} has since reported ${fresher.month} at ${n2(fresher.annualized6m)}% annualized — not scored here, because the component tracks ${fresher.scoredLabel}${when}.`;
+      }
+      return text;
     }
     case 'labour': {
       const pay = dt.avg3mChangeThousands, un = dt.unemploymentChangePp;
@@ -588,6 +654,7 @@ export {
   directionWord, confidenceConstraint, signalTriad, countdown,
   distributeRounding, displayContributions,
   explain, explainShort, componentInterpretation, whatWouldChange,
+  fresherCoreMeasure, nextPublishDate,
   whatWouldChangeByDirection, levers,
   freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
   shortTitle, reportMonth, signed, fmtK,

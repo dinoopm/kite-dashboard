@@ -161,6 +161,9 @@ async function buildMonitor({ anchorDate = null, preferDb = true } = {}) {
       unit: s.unit,
       transform: s.transform,
       scored: s.scored !== false,
+      // Passed through so the UI can derive when a series NEXT publishes,
+      // rather than hardcoding a date that would drift.
+      releaseLagDays: s.releaseLagDays ?? null,
       revisionRisk: s.revisionRisk,
       note: s.note,
       ...m,

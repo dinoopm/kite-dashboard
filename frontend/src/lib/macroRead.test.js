@@ -5,6 +5,7 @@ import {
   whatWouldChange, freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
   explainShort, componentInterpretation, shortTitle, reportMonth,
   whatWouldChangeByDirection, distributeRounding, displayContributions,
+  fresherCoreMeasure, nextPublishDate,
 } from './macroRead.js'
 
 // The live payload from 2026-08-09, trimmed. Real numbers on purpose: the
@@ -466,5 +467,97 @@ describe('displayContributions', () => {
 
   test('survives a payload with no contributions', () => {
     assert.deepEqual(displayContributions({}, 3), [])
+  })
+})
+
+describe('fresherCoreMeasure', () => {
+  // The exact situation on 2026-08-12: July CPI lands, core PCE still has June,
+  // and the inflation bar does not move. Without a word of explanation the
+  // panel looks stale on the one day a CPI print is news.
+  const CPI_JULY = {
+    ...MONITOR,
+    indicators: [
+      { seriesId: 'PCEPILFE', latestDate: '2026-06-01', annualized6m: 3.7567, releaseLagDays: 30, scored: true },
+      { seriesId: 'CPILFESL', latestDate: '2026-07-01', annualized6m: 2.416, releaseLagDays: 13, scored: true },
+    ],
+  }
+
+  test('spots the measure that has reported a newer month', () => {
+    const f = fresherCoreMeasure(CPI_JULY, 'PCEPILFE')
+    assert.equal(f.seriesId, 'CPILFESL')
+    assert.equal(f.month, 'July')
+    assert.ok(Math.abs(f.annualized6m - 2.416) < 1e-9)
+    assert.equal(f.scoredLabel, 'core PCE')
+  })
+
+  // Must not fire every day, or it stops being read.
+  test('says nothing when both measures share a reference month', () => {
+    const same = { ...CPI_JULY, indicators: CPI_JULY.indicators.map(i => ({ ...i, latestDate: '2026-06-01' })) }
+    assert.equal(fresherCoreMeasure(same, 'PCEPILFE'), null)
+  })
+
+  test('says nothing when the scored measure is the fresher one', () => {
+    const ahead = {
+      ...CPI_JULY,
+      indicators: [
+        { seriesId: 'PCEPILFE', latestDate: '2026-07-01', annualized6m: 3.7, releaseLagDays: 30 },
+        { seriesId: 'CPILFESL', latestDate: '2026-06-01', annualized6m: 2.5, releaseLagDays: 13 },
+      ],
+    }
+    assert.equal(fresherCoreMeasure(ahead, 'PCEPILFE'), null)
+  })
+
+  test('says nothing when the companion series is absent', () => {
+    assert.equal(fresherCoreMeasure({ indicators: [CPI_JULY.indicators[0]] }, 'PCEPILFE'), null)
+    assert.equal(fresherCoreMeasure({}, 'PCEPILFE'), null)
+  })
+
+  test('derives the next publish date from the release lag, not a hardcoded one', () => {
+    // Core PCE has June, so the next reading is July: it closes 1 Aug and
+    // publishes ~30 days later. An earlier version returned Aug 1 — four weeks
+    // early — because it subtracted the lag it had just added, and a loose
+    // "some time in August" assertion did not catch it.
+    assert.equal(nextPublishDate('2026-06-01', 30), '2026-08-31')
+    // Core CPI's 13-day lag puts July's print mid-August; the real one was
+    // 12 Aug, so the derivation is close rather than merely plausible.
+    assert.equal(nextPublishDate('2026-06-01', 13), '2026-08-14')
+  })
+
+  test('returns nothing rather than inventing a date when the lag is unknown', () => {
+    assert.equal(nextPublishDate('2026-06-01', null), null)
+    assert.equal(nextPublishDate(null, 30), null)
+  })
+})
+
+describe('componentInterpretation with a fresher core measure', () => {
+  const CPI_JULY = {
+    ...MONITOR,
+    signals: { ...MONITOR.signals, inflation: { score: 0.3, used: 'PCEPILFE', detail: { annualized6m: 3.7567, annualized3m: 2.8851 } } },
+    indicators: [
+      { seriesId: 'PCEPILFE', latestDate: '2026-06-01', annualized6m: 3.7567, releaseLagDays: 30 },
+      { seriesId: 'CPILFESL', latestDate: '2026-07-01', annualized6m: 2.416, releaseLagDays: 13 },
+    ],
+  }
+
+  test('names the fresher reading and says it is not scored', () => {
+    const t = componentInterpretation('inflation', CPI_JULY)
+    assert.match(t, /3\.76% annualized/, 'still leads with the scored figure')
+    assert.match(t, /Core CPI has since reported July at 2\.42% annualized/)
+    assert.match(t, /not scored here/)
+    assert.match(t, /tracks core PCE/)
+  })
+
+  // It explains a difference in measures — it must not suggest the panel is
+  // broken or behind, which is the misreading it exists to prevent.
+  test('never implies the panel is stale or wrong', () => {
+    const lower = componentInterpretation('inflation', CPI_JULY).toLowerCase()
+    for (const b of ['stale', 'out of date', 'incorrect', 'will hike', 'will cut', 'forecast']) {
+      assert.ok(!lower.includes(b), `contains "${b}"`)
+    }
+  })
+
+  test('leaves the sentence untouched when nothing fresher exists', () => {
+    const same = { ...CPI_JULY, indicators: CPI_JULY.indicators.map(i => ({ ...i, latestDate: '2026-06-01' })) }
+    assert.ok(!componentInterpretation('inflation', same).includes('has since reported'))
   })
 })
