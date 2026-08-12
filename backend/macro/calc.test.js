@@ -376,31 +376,46 @@ describe('headline CPI: seasonally adjusted vs not', () => {
   });
 });
 
-// ─── The disputed core PCE figure ────────────────────────────────────────────
-// Reported three times as "should be 3.69%". The formula is not in question —
-// both assertions below use the same function. The INPUT is: FRED serves
-// 127.886 for PCEPILFE 2025-12 in every vintage from 2026-02 through 2026-07,
-// checked directly via the vintage_date parameter. 127.929 appears in none of
-// them, and is not headline PCE (128.576) either.
-describe('core PCE: the formula is right, the disputed input is the difference', () => {
+// ─── Both core PCE figures are real, from different vintages ─────────────────
+//
+// This block previously asserted that 127.929 "appears in no vintage", checked
+// via fredgraph.csv?...&vintage_date=... six times. That check was worthless:
+// the KEYLESS CSV endpoint SILENTLY IGNORES vintage_date. It accepts the
+// parameter, returns 200, and serves current data every time — so six queries
+// returned the same current number and the consistency read as confirmation.
+// A parameter that is ignored rather than rejected is the worst kind, because
+// a wrong answer is indistinguishable from a corroborated one.
+//
+// With an API key the ALFRED vintages are visible, and 2025-12-01 reads:
+//
+//   as of 2026-02-27   127.918   first print
+//   as of 2026-03-27   127.929   revised
+//   as of 2026-04-30   127.886   revised again — still current
+//
+// So 3.69% was correct for the March vintage and 3.76% is correct for the
+// current one. Both are right; the disagreement was never about arithmetic.
+describe('core PCE: same formula, different vintages', () => {
   const annualize = (latest, base) => annualizedRate(latest, base, 6);
 
-  test('FRED\'s actual December value gives 3.76%', () => {
+  test('the current vintage gives 3.76%', () => {
     assert.ok(Math.abs(annualize(130.266, 127.886) - 3.7567) < 0.01);
   });
 
-  // Same function, the reviewer's base: it does produce their number. So a
-  // failure here would mean the arithmetic was wrong; it passing means the
-  // arithmetic is right and the disagreement is purely about which December
-  // value is real.
-  test('the reported base would give 3.69% through the same function', () => {
+  test('the March 2026 vintage gives 3.69% through the same function', () => {
     assert.ok(Math.abs(annualize(130.266, 127.929) - 3.687) < 0.01);
   });
 
-  // 0.043 index points, which is why this is easy to argue about and worth
-  // pinning rather than re-deriving.
-  test('the two bases differ by less than a twentieth of an index point', () => {
+  test('the first print gives a third answer again', () => {
+    assert.ok(Math.abs(annualize(130.266, 127.918) - 3.705) < 0.01);
+  });
+
+  // 0.043 index points between two vintages moves the headline by 7bps. Small
+  // revisions are not noise in an annualized rate, which is why the panel
+  // stores vintages instead of overwriting.
+  test('a revision of a twentieth of an index point moves the rate by 7bps', () => {
+    const gap = annualize(130.266, 127.886) - annualize(130.266, 127.929);
     assert.ok(Math.abs(127.929 - 127.886) < 0.05);
+    assert.ok(Math.abs(gap - 0.07) < 0.01, `expected ~7bps, got ${gap}`);
   });
 });
 

@@ -8,7 +8,11 @@
 //     is what makes an honest reconstruction possible, because a backtest that
 //     reads today's payrolls is reading a number revised twice since.
 //   · The keyless CSV endpoint (fredgraph.csv) otherwise, so the feature works
-//     before anyone registers for a key. Same data, no vintages.
+//     before anyone registers for a key. Same data, no vintages — and it does
+//     not merely lack them, it SILENTLY IGNORES a vintage_date parameter:
+//     accepts it, returns 200, serves current data. Six "vintage" queries once
+//     returned the same current value and were read as proof a figure had never
+//     existed. It had. Never treat a keyless response as vintage-aware.
 //
 // The two disagree about how they spell "no observation": the JSON API sends
 // ".", the CSV sends an empty field. parseFredValue absorbs both, and the
