@@ -403,3 +403,48 @@ describe('core PCE: the formula is right, the disputed input is the difference',
     assert.ok(Math.abs(127.929 - 127.886) < 0.05);
   });
 });
+
+// ─── The three transforms a CPI print is quoted in ───────────────────────────
+// A review compared the panel's 6-month ANNUALIZED figure against the BLS
+// year-over-year headline and concluded the dashboard was wrong. Both numbers
+// were right; they are different quantities. All three are pinned here against
+// the July 2026 print so the distinction cannot be lost again.
+describe('CPI: annualized vs year-over-year vs month-over-month', () => {
+  const monthly = (pairs) => pairs.map(([d, v]) => ({ observation_date: d, value: v }));
+  const CORE = monthly([
+    ['2025-07-01', 328.682], ['2025-08-01', 329.700], ['2025-09-01', 330.418],
+    ['2025-11-01', 331.043], ['2025-12-01', 331.814], ['2026-01-01', 332.793],
+    ['2026-02-01', 333.512], ['2026-03-01', 334.165], ['2026-04-01', 335.423],
+    ['2026-05-01', 336.121], ['2026-06-01', 336.065], ['2026-07-01', 336.789],
+  ]);
+  const m = computeMetrics(CORE, { frequency: 'monthly', transform: 'index', anchorDate: '2026-08-12' });
+
+  test('year-over-year matches the BLS headline of 2.5%', () => {
+    assert.ok(Math.abs(m.yoyPct - 2.467) < 0.01, `got ${m.yoyPct}`);
+  });
+
+  test('month-over-month matches the BLS headline of +0.2%', () => {
+    assert.ok(Math.abs(m.momPct - 0.215) < 0.01, `got ${m.momPct}`);
+  });
+
+  // The figure the panel scores. Close to YoY here by coincidence; for headline
+  // CPI the same month gives 3.85% annualized against 3.30% YoY, because the
+  // last six months ran hotter than the six before — which is the entire reason
+  // this transform is watched.
+  test('six-month annualized is its own quantity, not a YoY approximation', () => {
+    assert.ok(Math.abs(m.annualized6m - 2.416) < 0.01, `got ${m.annualized6m}`);
+    assert.notEqual(+m.annualized6m.toFixed(2), +m.yoyPct.toFixed(2));
+  });
+
+  // The same monthly move, said on the panel's own footing. BLS quotes +0.2%;
+  // annualized that is 2.62%, which is directly comparable with the 3m and 6m
+  // rates beside it instead of needing conversion in the reader's head.
+  test('the monthly move is also offered annualized', () => {
+    assert.ok(Math.abs(m.annualized1m - 2.615) < 0.01, `got ${m.annualized1m}`);
+  });
+
+  test('all three come from the same index levels, so none can drift apart', () => {
+    assert.equal(m.latest, 336.789);
+    assert.equal(m.sixMonthsAgoDate, '2026-01-01');
+  });
+});

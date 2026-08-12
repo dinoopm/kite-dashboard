@@ -400,6 +400,23 @@ export default function MacroDecisionMonitor() {
                           {ind.vintageDate && (
                             <div>{d.vintagesAvailable ? 'Source vintage' : 'First recorded here'}: {longDate(ind.vintageDate)}</div>
                           )}
+                          {/* The transforms the press actually quotes. The panel
+                              scores a 6-month annualized rate, which no CPI
+                              headline uses — so a reader checking "core CPI rose
+                              0.2%" against 2.42% annualized concludes the
+                              dashboard is wrong. Both are right and they are
+                              different quantities; showing all three makes that
+                              checkable instead of confusing. */}
+                          {(Number.isFinite(ind.momPct) || Number.isFinite(ind.yoyPct)) && (
+                            <div>
+                              As the press quotes it:
+                              {Number.isFinite(ind.momPct) && ` ${signed(ind.momPct)}% month-over-month`}
+                              {Number.isFinite(ind.annualized1m) && ` (${signed(ind.annualized1m)}% annualized)`}
+                              {Number.isFinite(ind.momPct) && Number.isFinite(ind.yoyPct) && ' ·'}
+                              {Number.isFinite(ind.yoyPct) && ` ${signed(ind.yoyPct)}% year-over-year`}
+                              {' — seasonally adjusted. Every rate here is annualized where marked, so they can be compared directly.'}
+                            </div>
+                          )}
                           {ind.monthlyChanges?.length > 0 && (
                             <div>Monthly: {ind.monthlyChanges.map(c => `${MONTH[+c.date.slice(5, 7) - 1]} ${c.change >= 0 ? '+' : ''}${Math.round(c.change)}k`).join(' · ')}</div>
                           )}

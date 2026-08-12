@@ -162,8 +162,8 @@ function computeMetrics(observations, { frequency = 'monthly', transform, anchor
   const empty = {
     latest: null, latestDate: null, ageDays: null,
     sixMonthsAgo: null, sixMonthsAgoDate: null,
-    rocPct: null, changePp: null, annualized3m: null, annualized6m: null,
-    yoyPct: null, avg3mChange: null, lastChange: null, monthlyChanges: [],
+    rocPct: null, changePp: null, annualized1m: null, annualized3m: null, annualized6m: null,
+    yoyPct: null, momPct: null, avg3mChange: null, lastChange: null, monthlyChanges: [],
     observations: rows.length,
   };
   if (!rows.length) return empty;
@@ -210,6 +210,18 @@ function computeMetrics(observations, { frequency = 'monthly', transform, anchor
     out.annualized3m = three ? annualizedRate(last.value, three.value, 3) : null;
     out.annualized6m = six ? annualizedRate(last.value, six.value, 6) : null;
     out.yoyPct = twelve ? roc(last.value, twelve.value) : null;
+    // Month-over-month, because it is half of what every CPI headline quotes
+    // and the panel otherwise reports only a transform the news never uses. A
+    // reader checking "core CPI rose 0.2%" against a 2.42% annualized figure
+    // will conclude the dashboard is wrong; both are right and they are
+    // different quantities.
+    const prevMonth = back(1);
+    out.momPct = prevMonth ? roc(last.value, prevMonth.value) : null;
+    // The same monthly move on the panel's own footing. "+0.2% month-over-month"
+    // and "2.62% annualized" are one number said two ways, and putting them side
+    // by side is what lets a reader carry a BLS headline straight onto a panel
+    // that speaks in annualized rates.
+    out.annualized1m = prevMonth ? annualizedRate(last.value, prevMonth.value, 1) : null;
     out.rocPct = six ? roc(last.value, six.value) : null;   // display only
   } else if (transform === 'price') {
     out.rocPct = six ? roc(last.value, six.value) : null;
