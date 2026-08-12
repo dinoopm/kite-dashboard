@@ -18,6 +18,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { SERIES, SCORED_SERIES } = require('./series');
 const { computeMetrics, releasesBehind } = require('./calc');
 const { buildSignals, THRESHOLDS } = require('./signals');
+const { financialRead, describeFinancial } = require('./financial');
 const { fetchMany, hasApiKey } = require('./fred');
 const { readSeries } = require('./ingest');
 
@@ -262,6 +263,10 @@ async function buildMonitor({ anchorDate = null, preferDb = true } = {}) {
   }
 
   const { signals, composite, confidence } = buildSignals(metrics);
+  // A SEPARATE read, computed after the composite and never handed to it. The
+  // FOMC weighs financial conditions and the panel's caveat used to say they
+  // simply were not measured; they are now, on their own gauge.
+  const financial = financialRead(metrics);
   const releases = await nextRelease();
 
   // Live WTI alongside the settled series, so the panel is current on the one
@@ -295,11 +300,12 @@ async function buildMonitor({ anchorDate = null, preferDb = true } = {}) {
     composite,
     confidence,
     signals,
+    financial: { ...financial, summary: describeFinancial(financial) },
     indicators,
     releases,
     thresholds: THRESHOLDS,
     caveats: [
-      'A bias read from seven data series, not a forecast of any rate decision. The FOMC also weighs financial stability, credit conditions and global growth, none of which are inputs here.',
+      'A bias read from seven data series, not a forecast of any rate decision. Financial conditions and credit are now measured too, but as a SEPARATE read below — they are deliberately not folded into this score, because "is inflation cooling?" and "is money easy?" are different questions. Global growth remains unmeasured here: no reliable free series exists for it, so it is named rather than proxied by something that would only look like it.',
       'Core PCE publishes about 30 days after its reference month and core CPI about 13, so at any moment the two describe different months — compare the reference dates before reading a divergence.',
       'Payrolls are revised in each of the next two releases and again at the annual benchmark; the seasonally-adjusted CPI and unemployment series are revised each February.',
       'Values shown are the LATEST vintage — the current best estimate, recomputed when a revision arrives — not the figure first published. Prior vintages are kept, so an as-of read is available for anything that must not use hindsight.',

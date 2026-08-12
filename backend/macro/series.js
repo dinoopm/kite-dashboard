@@ -140,6 +140,56 @@ const SERIES = [
     scored: false,
     note: 'Survey-based: preliminary mid-month, final at month end. NOT scored — carried for the narrative only, because households and markets routinely disagree and averaging that away hides the more interesting fact. The Expectations score is the market-based 5y5y breakeven (T5YIFR) alone.',
   },
+  // ─── Financial conditions ──────────────────────────────────────────────────
+  // Read as their OWN block, never folded into the inflation-labour composite.
+  // The FOMC weighs these and this panel's caveat used to say they were simply
+  // absent; they are now measured and shown separately. Merging them into the
+  // composite would change what the score answers — "is inflation cooling?" and
+  // "is money easy?" are different questions — and would break comparability
+  // with every snapshot already recorded under the current weights.
+  {
+    id: 'NFCI',
+    key: 'financialConditions',
+    label: 'Financial conditions (Chicago Fed NFCI)',
+    originalSource: 'Federal Reserve Bank of Chicago',
+    frequency: 'weekly',
+    unit: 'Index, 0 = average',
+    transform: 'rate',
+    releaseLagDays: 4,
+    revisionRisk: 'medium',
+    scored: false,
+    block: 'financial',
+    note: 'Composite of ~105 money-market, debt, equity and banking measures, normalised so 0 is the historical average and negative is looser than average. The zero anchor is a property of the index, not a threshold anyone here chose.',
+  },
+  {
+    id: 'BAMLH0A0HYM2',
+    key: 'creditSpread',
+    label: 'High-yield credit spread (ICE BofA OAS)',
+    originalSource: 'ICE Data Indices',
+    frequency: 'daily',
+    unit: 'Percentage points over Treasuries',
+    transform: 'rate',
+    releaseLagDays: 2,
+    revisionRisk: 'none',
+    scored: false,
+    block: 'financial',
+    note: 'What sub-investment-grade borrowers pay over Treasuries. The cleanest daily read on whether credit is open or closed — it widens before it is obvious anywhere else.',
+  },
+  {
+    id: 'T10Y2Y',
+    key: 'yieldCurve',
+    label: 'Yield curve (10-year minus 2-year)',
+    originalSource: 'Federal Reserve Board',
+    frequency: 'daily',
+    unit: 'Percentage points',
+    transform: 'rate',
+    releaseLagDays: 2,
+    revisionRisk: 'none',
+    scored: false,
+    block: 'financial',
+    note: 'Negative means inversion. Carried as context on the rates backdrop, not as a recession call — the lead time has historically been long and variable enough that treating it as a signal would be a claim this app cannot support.',
+  },
+
   // Headline measures. Not scored: including them alongside core would count
   // energy twice, once in the oil signal and again inside headline inflation.
   // Carried so the narrative can explain a headline/core divergence.
@@ -159,7 +209,8 @@ const SERIES = [
 ];
 
 const SCORED_SERIES = SERIES.filter(s => s.scored !== false);
+const FINANCIAL_SERIES = SERIES.filter(s => s.block === 'financial');
 const seriesById = (id) => SERIES.find(s => s.id === id) || null;
 const seriesByKey = (key) => SERIES.find(s => s.key === key) || null;
 
-module.exports = { SERIES, SCORED_SERIES, seriesById, seriesByKey };
+module.exports = { SERIES, SCORED_SERIES, FINANCIAL_SERIES, seriesById, seriesByKey };

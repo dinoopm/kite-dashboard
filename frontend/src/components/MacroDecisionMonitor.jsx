@@ -373,6 +373,39 @@ export default function MacroDecisionMonitor() {
         </Section>
       )}
 
+      {/* ─── A SEPARATE gauge, not part of the composite ──────────────────── */}
+      {d.financial?.score != null && (
+        <Section title="Financial conditions">
+          <div style={{ display: 'grid', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <span aria-hidden="true" style={{ color: toneFor(d.financial.score), fontSize: '0.75rem' }}>
+                {markFor(d.financial.score)}
+              </span>
+              <span style={{ fontSize: '1.05rem', fontWeight: 700, textTransform: 'capitalize', color: toneFor(d.financial.score) }}>
+                {d.financial.state}
+              </span>
+              <span style={{ fontSize: '0.78rem', fontVariantNumeric: 'tabular-nums', color: GREY }}>
+                {signed(d.financial.score, 2)} · {d.financial.inputsUsed} of {d.financial.inputsTotal} series
+              </span>
+            </div>
+            <p style={{ margin: 0, fontSize: '0.78rem', lineHeight: 1.6, color: 'var(--text-secondary)', maxWidth: '76ch' }}>
+              {d.financial.summary}
+            </p>
+            <div style={{ display: 'grid', gap: '0.25rem', fontSize: '0.72rem', color: GREY, fontVariantNumeric: 'tabular-nums' }}>
+              {Object.entries(d.financial.components).filter(([, v]) => v).map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', gap: '0.5rem' }}>
+                  <span style={{ fontFamily: 'ui-monospace, monospace', minWidth: 130 }}>{v.seriesId}</span>
+                  <span style={{ minWidth: 70, textAlign: 'right' }}>{v.value.toFixed(2)}</span>
+                  <span style={{ color: v.scored === false ? GREY : toneFor(v.score) }}>
+                    {v.scored === false ? 'context only' : signed(v.score, 2)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Section>
+      )}
+
       {/* ─── TERTIARY: indicator detail ───────────────────────────────────── */}
       <Section title="Indicator detail" count={d.indicators.length}>
         <div style={{ overflowX: 'auto' }}>
