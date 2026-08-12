@@ -91,6 +91,28 @@ async function liveOil(sixMonthsAgoValue) {
 }
 
 /**
+ * Which scored series a calendar event actually updates.
+ *
+ * A "next catalyst" is only a catalyst for THIS panel if it moves something the
+ * panel scores. The calendar also carries GDP estimates and FOMC meetings, and
+ * neither feeds any component here — GDP is not an input, and a rate decision
+ * is an outcome the panel deliberately refuses to predict. Showing "Next
+ * catalyst: GDP Second Estimate" on an inflation-and-labour panel points the
+ * reader at something that cannot move the number above it.
+ */
+const EVENT_UPDATES = [
+  { match: /CPI|inflation report/i, series: ['CPILFESL', 'CPIAUCSL'] },
+  { match: /employment|payroll|jobs/i, series: ['PAYEMS', 'UNRATE', 'CES0500000003'] },
+  { match: /personal income|outlays|PCE/i, series: ['PCEPILFE'] },
+  { match: /PPI|producer price/i, series: [] },   // watched, but not an input here
+];
+
+function eventUpdates(title) {
+  const hit = EVENT_UPDATES.find(e => e.match.test(String(title || '')));
+  return hit ? hit.series : [];
+}
+
+/**
  * Scheduled time of a release, in UTC, from the calendar's own detail text.
  *
  * US macro releases are quoted in Eastern Time, which is UTC-4 from March to
@@ -134,8 +156,8 @@ async function nextRelease() {
       .select('event_date,title,detail')
       .gte('event_date', todayIso)
       .order('event_date', { ascending: true })
-      .limit(4);
-    if (error || !data?.length) return { latest: null, next: null, following: null };
+      .limit(8);
+    if (error || !data?.length) return { latest: null, next: null, following: null, missingFromCalendar: [] };
 
     const shape = (r) => {
       const date = String(r.event_date).slice(0, 10);
@@ -151,12 +173,24 @@ async function nextRelease() {
       };
     };
 
-    const events = data.map(shape);
+    const events = data.map(e => ({ ...shape(e), updates: eventUpdates(e.title) }));
     const latest = events.find(e => e.daysAway === 0 && e.released) || null;
     const upcoming = events.filter(e => !e.released);
-    return { latest, next: upcoming[0] || null, following: upcoming[1] || null };
+    // Prefer the next event that moves something scored. A GDP estimate or an
+    // FOMC meeting is still shown when nothing better is scheduled, but it is
+    // labelled as not feeding the score rather than presented as the catalyst.
+    const scoring = upcoming.filter(e => e.updates.length > 0);
+    const next = scoring[0] || upcoming[0] || null;
+    return {
+      latest,
+      next,
+      following: (scoring[1] || upcoming.find(e => e !== next)) || null,
+      // Named so the panel can say the calendar is thin rather than implying
+      // the next scored release simply does not exist.
+      missingFromCalendar: ['PCEPILFE'].filter(id => !events.some(e => e.updates.includes(id))),
+    };
   } catch {
-    return { latest: null, next: null, following: null };
+    return { latest: null, next: null, following: null, missingFromCalendar: [] };
   }
 }
 

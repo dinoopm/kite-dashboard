@@ -277,6 +277,24 @@ function nextPublishDate(latestDate, releaseLagDays) {
 }
 
 /**
+ * A derived date said at the precision it actually has.
+ *
+ * The lag is a typical interval, not a schedule: deriving core PCE's July
+ * release gives Aug 31 where BEA has it on Aug 26. Naming a specific day
+ * implies a precision this estimate does not have, and someone would plan
+ * around it. "Late August" is right and stays right.
+ *
+ * When the real date IS known — because the calendar carries that release —
+ * the caller uses it instead and skips this entirely.
+ */
+function approxWhen(iso) {
+  if (!iso) return null;
+  const day = +iso.slice(8, 10);
+  const part = day <= 10 ? 'early' : day <= 20 ? 'mid' : 'late';
+  return `${part} ${MONTH_NAME[+iso.slice(5, 7) - 1]}`;
+}
+
+/**
  * A core inflation measure that has reported a MORE RECENT month than the one
  * being scored.
  *
@@ -338,19 +356,24 @@ function componentInterpretation(key, monitor) {
       // moved?" — see fresherCoreMeasure.
       const fresher = fresherCoreMeasure(monitor, s.used);
       if (fresher) {
-        const when = fresher.scoredNextPublish
-          ? `, whose ${fresher.month} reading publishes around ${MONTH_NAME[+fresher.scoredNextPublish.slice(5, 7) - 1].slice(0, 3)} ${+fresher.scoredNextPublish.slice(8, 10)}`
-          : '';
+        // A scheduled date from the calendar is exact; a derived one is not, so
+        // it is said coarsely. Never present an estimate as a schedule.
+        const scheduled = (monitor?.releases?.scheduledFor || {})[s.used];
+        const when = scheduled
+          ? `, whose ${fresher.month} reading is scheduled for ${MONTH_NAME[+scheduled.slice(5, 7) - 1]} ${+scheduled.slice(8, 10)}`
+          : fresher.scoredNextPublish
+            ? `, whose ${fresher.month} reading is due ${approxWhen(fresher.scoredNextPublish)}`
+            : '';
         // Lead with the figures the release itself reported. "Reported July at
         // 2.42% annualized" reads as an official print and is not one — the
         // official July numbers are the MoM and YoY.
         const official = [
-          Number.isFinite(fresher.momPct) ? `${n2(fresher.momPct)}% month-over-month` : null,
-          Number.isFinite(fresher.yoyPct) ? `${n2(fresher.yoyPct)}% year-over-year` : null,
+          Number.isFinite(fresher.momPct) ? `${n2(fresher.momPct)}% MoM` : null,
+          Number.isFinite(fresher.yoyPct) ? `${n2(fresher.yoyPct)}% YoY` : null,
         ].filter(Boolean).join(' and ');
         text += official
-          ? ` ${fresher.label} reported ${fresher.month} at ${official}, a ${n2(fresher.annualized6m)}% six-month annualized pace — not scored here, because the component tracks ${fresher.scoredLabel}${when}.`
-          : ` ${fresher.label} has since reported ${fresher.month} at a ${n2(fresher.annualized6m)}% six-month annualized pace — not scored here, because the component tracks ${fresher.scoredLabel}${when}.`;
+          ? ` ${fresher.label} rose ${official} in ${fresher.month}; its six-month annualized pace is ${n2(fresher.annualized6m)}%. Not scored here — the component tracks ${fresher.scoredLabel}${when}.`
+          : ` ${fresher.label} has since reported ${fresher.month} at a ${n2(fresher.annualized6m)}% six-month annualized pace. Not scored here — the component tracks ${fresher.scoredLabel}${when}.`;
       }
       return text;
     }
@@ -669,5 +692,5 @@ export {
   fresherCoreMeasure, nextPublishDate,
   whatWouldChangeByDirection, levers,
   freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
-  shortTitle, reportMonth, signed, fmtK,
+  shortTitle, reportMonth, approxWhen, signed, fmtK,
 };

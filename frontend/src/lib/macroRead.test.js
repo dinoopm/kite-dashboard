@@ -5,7 +5,7 @@ import {
   whatWouldChange, freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
   explainShort, componentInterpretation, shortTitle, reportMonth,
   whatWouldChangeByDirection, distributeRounding, displayContributions,
-  fresherCoreMeasure, nextPublishDate,
+  fresherCoreMeasure, nextPublishDate, approxWhen,
 } from './macroRead.js'
 
 // The live payload from 2026-08-09, trimmed. Real numbers on purpose: the
@@ -514,6 +514,18 @@ describe('fresherCoreMeasure', () => {
     assert.equal(fresherCoreMeasure({}, 'PCEPILFE'), null)
   })
 
+  // A derived date is stated at the precision it has. Deriving core PCE's July
+  // release gives Aug 31 where BEA schedules it for Aug 26 — naming a day
+  // implies a schedule this estimate is not, and "late August" is right for
+  // both.
+  test('says a derived date coarsely rather than to the day', () => {
+    assert.equal(approxWhen('2026-08-31'), 'late August')
+    assert.equal(approxWhen('2026-08-26'), 'late August', 'the real date and the estimate agree at this precision')
+    assert.equal(approxWhen('2026-08-05'), 'early August')
+    assert.equal(approxWhen('2026-08-14'), 'mid August')
+    assert.equal(approxWhen(null), null)
+  })
+
   test('derives the next publish date from the release lag, not a hardcoded one', () => {
     // Core PCE has June, so the next reading is July: it closes 1 Aug and
     // publishes ~30 days later. An earlier version returned Aug 1 — four weeks
@@ -549,9 +561,9 @@ describe('componentInterpretation with a fresher core measure', () => {
       indicators: CPI_JULY.indicators.map(i => i.seriesId === 'CPILFESL'
         ? { ...i, momPct: 0.215, yoyPct: 2.467 } : i) })
     assert.match(t, /3\.76% annualized/, 'still leads with the scored figure')
-    assert.match(t, /reported July at 0\.21% month-over-month and 2\.47% year-over-year/)
-    assert.match(t, /2\.42% six-month annualized pace/)
-    assert.match(t, /not scored here/)
+    assert.match(t, /rose 0\.21% MoM and 2\.47% YoY in July/)
+    assert.match(t, /six-month annualized pace is 2\.42%/)
+    assert.match(t, /Not scored here/)
     assert.match(t, /tracks core PCE/)
   })
 
