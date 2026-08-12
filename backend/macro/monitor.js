@@ -157,7 +157,7 @@ async function nextRelease() {
       .gte('event_date', todayIso)
       .order('event_date', { ascending: true })
       .limit(8);
-    if (error || !data?.length) return { latest: null, next: null, following: null, missingFromCalendar: [] };
+    if (error || !data?.length) return { latest: null, next: null, following: null, scheduledFor: {}, missingFromCalendar: [] };
 
     const shape = (r) => {
       const date = String(r.event_date).slice(0, 10);
@@ -181,16 +181,25 @@ async function nextRelease() {
     // labelled as not feeding the score rather than presented as the catalyst.
     const scoring = upcoming.filter(e => e.updates.length > 0);
     const next = scoring[0] || upcoming[0] || null;
+    // seriesId -> the next scheduled date that updates it. Lets the panel quote
+    // a real release date instead of one derived from a typical lag: core PCE's
+    // July reading derives to Aug 31 and is actually scheduled for Aug 26.
+    const scheduledFor = {};
+    for (const e of upcoming) {
+      for (const id of e.updates) if (!scheduledFor[id]) scheduledFor[id] = e.date;
+    }
+
     return {
       latest,
       next,
+      scheduledFor,
       following: (scoring[1] || upcoming.find(e => e !== next)) || null,
       // Named so the panel can say the calendar is thin rather than implying
       // the next scored release simply does not exist.
       missingFromCalendar: ['PCEPILFE'].filter(id => !events.some(e => e.updates.includes(id))),
     };
   } catch {
-    return { latest: null, next: null, following: null, missingFromCalendar: [] };
+    return { latest: null, next: null, following: null, scheduledFor: {}, missingFromCalendar: [] };
   }
 }
 

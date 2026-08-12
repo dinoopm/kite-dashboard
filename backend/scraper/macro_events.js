@@ -40,6 +40,70 @@ async function fetchCalendar() {
 
 // Official guard: every parsed "Fed Meeting (Day 1)" must appear on the Fed's
 // own calendar page as "<Month> ... <day-range starting with that day>".
+// ─── BEA: Personal Income and Outlays ────────────────────────────────────────
+//
+// This is where core PCE lands — the heaviest-weighted input on the Macro
+// Decision Monitor — and the calendar had never carried it. Without it the
+// panel could not name its own most important catalyst, and fell back to
+// naming a GDP estimate that feeds nothing it scores.
+//
+// bea.gov/news/schedule serves plain server-side HTML to a normal client, so
+// unlike the BLS pages this comes straight from the source rather than a
+// third party. The rows look like:
+//
+//   <div class="release-date">August 26</div><small ...>8:30 AM</small>
+//   ... <td class="release-title ...">Personal Income and Outlays, July 2026</td>
+//
+// The release date carries no year. Rather than assume the current one — which
+// breaks every December, when January's release belongs to the next year — the
+// year is derived from the REFERENCE month in the title: a report for month M
+// publishes in M+1.
+const BEA_SCHEDULE = 'https://www.bea.gov/news/schedule';
+
+const MONTH_NUM = {
+  January: 1, February: 2, March: 3, April: 4, May: 5, June: 6,
+  July: 7, August: 8, September: 9, October: 10, November: 11, December: 12,
+};
+
+async function fetchBeaPersonalIncome() {
+  const r = await axios.get(BEA_SCHEDULE, { headers: { 'User-Agent': UA }, timeout: 20000 });
+  const html = String(r.data);
+  const rowRe = /<div class="release-date">([A-Za-z]+)\s+(\d{1,2})<\/div>\s*<small[^>]*>([^<]*)<\/small>[\s\S]{0,600}?<td class="release-title[^"]*"[^>]*>([^<]+)<\/td>/g;
+
+  const rows = [];
+  let m;
+  while ((m = rowRe.exec(html)) !== null) {
+    const [, relMonth, relDay, time, rawTitle] = m;
+    const title = rawTitle.trim();
+    if (!/^Personal Income and Outlays/i.test(title)) continue;
+
+    const ref = title.match(/,\s*([A-Za-z]+)\s+(\d{4})/);
+    if (!ref || !MONTH_NUM[relMonth] || !MONTH_NUM[ref[1]]) continue;
+
+    // A report for month M publishes in M+1, so the release year rolls over
+    // with it. December's report is a January release of the following year.
+    const refMonth = MONTH_NUM[ref[1]];
+    const refYear = Number(ref[2]);
+    const relYear = MONTH_NUM[relMonth] < refMonth ? refYear + 1 : refYear;
+
+    rows.push({
+      event_date: `${relYear}-${String(MONTH_NUM[relMonth]).padStart(2, '0')}-${String(relDay).padStart(2, '0')}`,
+      title: 'Personal Income and Outlays (core PCE)',
+      detail: `${(time || '8:30 AM').trim()} Eastern Time. Report for ${ref[1]} ${refYear}.`,
+    });
+  }
+
+  // Same guard as the main calendar: a markup change must fail loudly rather
+  // than silently seed nothing and leave the panel pointing at GDP again.
+  // BEA publishes roughly six months ahead, and the window shortens as the
+  // year runs out, so the floor is 4 rather than a number that would fail
+  // every December. It still catches a markup change, which yields zero.
+  if (rows.length < 4) {
+    throw new Error(`Only parsed ${rows.length} BEA Personal Income releases — bea.gov markup probably changed; fix the regex before seeding.`);
+  }
+  return rows;
+}
+
 async function verifyFomc(rows) {
   const r = await axios.get('https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm', { headers: { 'User-Agent': UA }, timeout: 20000 });
   const official = r.data.replace(/\s+/g, ' ');
@@ -59,12 +123,25 @@ async function verifyFomc(rows) {
 
 async function run() {
   console.log('Fetching calendar…');
-  const rows = await fetchCalendar();
+  let rows = await fetchCalendar();
   console.log(`Parsed ${rows.length} events (${rows[0].event_date} → ${rows[rows.length - 1].event_date}).`);
 
   console.log('Cross-checking FOMC dates against federalreserve.gov…');
   const checked = await verifyFomc(rows);
   console.log(`✓ all ${checked} FOMC meetings match the official Fed calendar.`);
+
+  // BEA's own schedule, merged in. PPI is deliberately absent: bls.gov returns
+  // 403 to non-browser clients, the third-party feed does not carry it, and it
+  // feeds no scored component here — so there is no honest source for it and
+  // nothing on the panel would use it.
+  let beaRows = [];
+  try {
+    beaRows = await fetchBeaPersonalIncome();
+    console.log(`[macro-events] BEA Personal Income and Outlays: ${beaRows.length} releases (next ${beaRows.map(r => r.event_date).sort().find(d => d >= new Date().toISOString().slice(0, 10))})`);
+  } catch (e) {
+    console.error('[macro-events] BEA schedule failed:', e.message);
+  }
+  rows = [...rows, ...beaRows];
 
   const { error } = await supabase.from('macro_events').upsert(rows, { onConflict: 'event_date,title' });
   if (error) throw new Error(error.message);
