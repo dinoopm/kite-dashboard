@@ -35,6 +35,36 @@ const HIST_FETCH_DELAY_MS = 1500;
 // which tab is active so "RS vs <benchmark>" is populated on first render.
 const RRG_BENCHMARK_KEYS = new Set(["NSE:NIFTY 50", "NSE:NIFTY 500", "NSE:NIFTY MIDCAP 100"]);
 
+// ─── Headline boxes ────────────────────────────────────────────
+// The table answers "how do sectors rank against each other". It does not
+// answer "what did the market actually do", which is the first thing anyone
+// opening this page wants, and NIFTY 50 was not even visible on the Sectors
+// tab because it lives in the broad-market category.
+//
+// Nothing in these boxes is a new claim: the price is the same quote the table
+// uses and the returns are the same trailing windows `calculateHistoricalReturns`
+// already produces. No score, no threshold, no signal — so there is nothing here
+// to register or validate. Deliberately so; the momentum score and the market
+// signal stay in the table where their derivation is on screen next to them.
+//
+// One large-cap benchmark per market segment plus the other headline number
+// most people quote (SENSEX), so the strip says something different in each box
+// rather than showing five views of the same large-cap move.
+const HEADLINE_KEYS = [
+  "NSE:NIFTY 50",
+  "BSE:SENSEX",
+  "NSE:NIFTY BANK",
+  "NSE:NIFTY MIDCAP 100",
+  "NSE:NIFTY SMLCAP 100",
+];
+
+// Quotes and history are fetched only for tabs the user has opened. These boxes
+// render above the tabs on every one of them, so their instruments have to load
+// regardless of the active tab — the same exemption the RRG benchmarks get.
+// Without this, NIFTY BANK and SENSEX would sit blank until you happened to
+// click through to Broad Market.
+const ALWAYS_LOADED_KEYS = new Set([...RRG_BENCHMARK_KEYS, ...HEADLINE_KEYS]);
+
 const INDICES = [
   { key: "NSE:NIFTY 50", name: "NIFTY 50", category: "broad" },
   { key: "NSE:NIFTY NEXT 50", name: "NIFTY NEXT 50", category: "broad" },
@@ -181,6 +211,75 @@ function EndLabelsOverlay({
   );
 }
 
+// ─── One headline box ──────────────────────────────────────────
+// Price, today's move, a 30-bar shape and three trailing windows. A missing
+// figure renders as an em dash, never as 0.00% — a flat reading and an unloaded
+// one look identical in green-and-red and mean opposite things.
+const fmtPct = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`);
+const pctClass = (v) => (v == null || v === 0 ? '' : v > 0 ? 'positive' : 'negative');
+
+const HeadlineBox = memo(({ row, onClick }) => {
+  const d1 = row['1D'];
+  const hasPrice = row.price > 0;
+  // The sparkline takes its colour from the day's direction, so it agrees with
+  // the number printed directly above it. SMA50 colouring is the table's
+  // convention and would contradict the 1D badge here.
+  const lineColor = d1 == null ? '#94a3b8' : d1 >= 0 ? '#10b981' : '#ef4444';
+
+  return (
+    <div
+      className="glass-panel"
+      onClick={onClick}
+      style={{
+        padding: '0.85rem 1rem', minWidth: 0, cursor: onClick ? 'pointer' : 'default',
+        display: 'flex', flexDirection: 'column', gap: '0.4rem',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem' }}>
+        <span style={{ fontSize: '0.72rem', letterSpacing: '0.04em', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {row.name}
+        </span>
+        <span className={pctClass(d1)} style={{ fontSize: '0.8rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
+          {fmtPct(d1)}
+        </span>
+      </div>
+
+      <div style={{ fontSize: '1.3rem', fontWeight: 600, fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>
+        {hasPrice
+          ? row.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
+      </div>
+
+      <div style={{ height: 34, width: '100%' }}>
+        {row.sparkline?.length > 0 ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={row.sparkline} margin={{ top: 2, right: 0, left: 0, bottom: 2 }}>
+              <YAxis hide domain={['dataMin', 'dataMax']} />
+              <Line type="monotone" dataKey="v" stroke={lineColor} strokeWidth={1.6} dot={false} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+            loading history…
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.4rem', borderTop: '1px solid var(--border)', paddingTop: '0.4rem' }}>
+        {['1W', '1M', '1Y'].map(k => (
+          <div key={k} style={{ textAlign: 'center', flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', letterSpacing: '0.05em' }}>{k}</div>
+            <div className={pctClass(row[k])} style={{ fontSize: '0.78rem', fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+              {fmtPct(row[k])}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+HeadlineBox.displayName = 'HeadlineBox';
+
 function SectorIndices() {
   const navigate = useNavigate();
   const [data, setData] = useState(() => loadIndicesSnapshot() || INDICES.map(emptyRowFor));
@@ -277,7 +376,7 @@ function SectorIndices() {
     // Exclude synthetic indices — they have no Kite quote, so a batch request
     // would return nothing and the merge below would reset their price/1D. They
     // are populated separately from the composite endpoint.
-    const activeIndices = INDICES.filter(i => !i.synthetic && (loadedTabs.has(i.category) || RRG_BENCHMARK_KEYS.has(i.key)));
+    const activeIndices = INDICES.filter(i => !i.synthetic && (loadedTabs.has(i.category) || ALWAYS_LOADED_KEYS.has(i.key)));
     if (activeIndices.length === 0) return;
     const activeKeys = activeIndices.map(i => i.key);
 
@@ -881,6 +980,28 @@ function SectorIndices() {
     [sortedData, searchQuery]
   );
 
+  // ─── Headline strip ───────────────────────────────────────────
+  // Read off `data` rather than the tab-filtered rows: the whole point is that
+  // NIFTY 50 stays visible while the Sectors tab is open, and it is filtered
+  // out of that tab. Kept in HEADLINE_KEYS order so the strip doesn't reshuffle
+  // as rows arrive; a key that hasn't loaded yet is skipped rather than faked.
+  const headlineRows = useMemo(
+    () => HEADLINE_KEYS.map(k => data.find(r => r.id === k)).filter(Boolean),
+    [data]
+  );
+
+  // Where a row leads when clicked. Sectors have their own page; broad-market
+  // and commodity rows go to the generic instrument page. Shared by the strip
+  // and the table so the two never disagree about where NIFTY BANK lives.
+  const openIndex = useCallback((row, state) => {
+    if (!row?.token) return;
+    if (row.category === 'sector') {
+      navigate(`/sector/${encodeURIComponent(row.id)}`, state ? { state } : undefined);
+    } else {
+      navigate(`/instrument/${row.token}?symbol=${encodeURIComponent(row.id.split(':')[1])}`);
+    }
+  }, [navigate]);
+
   // ─── CSV export (visible rows) ────────────────────────────────
   const exportCSV = useCallback(() => {
     const rows = filteredData;
@@ -1004,6 +1125,20 @@ function SectorIndices() {
           <p>Real-time & Historical performance of market sectors</p>
         </div>
       </header>
+
+      {/* Headline indices — above the tabs, so they stay on screen on all three */}
+      {headlineRows.length > 0 && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: '0.75rem',
+          marginBottom: '1.25rem',
+        }}>
+          {headlineRows.map(row => (
+            <HeadlineBox key={row.id} row={row} onClick={() => openIndex(row)} />
+          ))}
+        </div>
+      )}
 
       {/* Tabs and Controls */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
@@ -1613,16 +1748,9 @@ function SectorIndices() {
           </thead>
           <tbody>
             {filteredData.length > 0 ? filteredData.map((row, idx) => {
-              const openRow = () => {
-                if (!row.token) return;
-                if (row.category === 'sector') {
-                  navigate(`/sector/${encodeURIComponent(row.id)}`, {
-                    state: { momentumScore: row.momentumScore, rrgQuadrant: row.rrgQuadrant }
-                  });
-                } else {
-                  navigate(`/instrument/${row.token}?symbol=${encodeURIComponent(row.id.split(':')[1])}`);
-                }
-              };
+              const openRow = () => openIndex(row, {
+                momentumScore: row.momentumScore, rrgQuadrant: row.rrgQuadrant,
+              });
               const delta = row.rrgMomentumDelta;
               return (
               <tr
