@@ -76,6 +76,48 @@ const INDICES = [
   { key: "IYT", name: "Transports", category: "sector" },
   { key: "GDX", name: "Gold Miners", category: "sector" },
   { key: "IGV", name: "Software", category: "sector" },
+  // ─── Thematic rows ─────────────────────────────────────────────────────────
+  // Every row above is an ETF standing in for a sector, which is exact enough
+  // for the GICS ones (XLK holds the S&P 500's Information Technology members,
+  // no more). These are looser, and worth being explicit about: GICS has no
+  // "cybersecurity", "quantum" or "space" sector, so each theme exists only as
+  // somebody's index definition and the fund IS the definition here.
+  //
+  // Two rules picked each proxy, and both were measured against this app's own
+  // /api/us/historical-full rather than assumed:
+  //
+  //   1. Prefer an index-tracking fund to an actively managed one. ARKX was the
+  //      obvious space candidate and was rejected for exactly this: its holdings
+  //      are ARK's current picks, so "how did space do" would partly mean "how
+  //      did ARK pick". UFO tracks the S-Network Space Index instead. (ROKT
+  //      tracks an index too, but trades ~30k shares/day and its index covers
+  //      deep sea alongside space.)
+  //   2. Prefer the liquid fund. A thin fund's prints are its own spread as much
+  //      as the theme's move, and thin funds skip sessions outright — HDRO, the
+  //      other hydrogen ETF, has 678 daily bars where every other fund here has
+  //      1003 over the same span. A return series with 325 missing days is not a
+  //      cheaper version of the same measurement.
+  //
+  //   CIBR  Cybersecurity      First Trust Nasdaq CEA   ~1.36M sh/day (HACK 232k)
+  //   UFO   Space              Procure / S-Network      ~479k
+  //   ITA   Aerospace-defence  iShares US A&D           ~$161M/day (PPA $31M)
+  //   QTUM  Quantum computing  Defiance                 ~$61M/day
+  //   HYDR  Hydrogen           Global X                 ~$3M/day — the thinnest
+  //   REMX  Rare earth metals  VanEck                   ~$58M/day
+  //   URA   Uranium            Global X                 ~$141M/day (URNM $20M)
+  //
+  // All seven carry the full 1003 bars, so every column on this page including
+  // 3Y is computed rather than interpolated. None is a pure-play read: a space
+  // or defence index necessarily holds names that earn most of their revenue
+  // elsewhere, and the rare-earth and uranium funds are miner baskets, which
+  // track the commodity with leverage and their own operational risk on top.
+  { key: "CIBR", name: "Cybersecurity", category: "sector" },
+  { key: "UFO", name: "Space Technology", category: "sector" },
+  { key: "ITA", name: "Aerospace & Defence", category: "sector" },
+  { key: "QTUM", name: "Quantum Computing", category: "sector" },
+  { key: "HYDR", name: "Hydrogen Energy", category: "sector" },
+  { key: "REMX", name: "Rare Earth Metals", category: "sector" },
+  { key: "URA", name: "Uranium", category: "sector" },
 ];
 
 // Empty placeholder row so unloaded-tab indices still render in the table.

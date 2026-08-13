@@ -502,6 +502,9 @@ router.get('/vcp/:symbol', async (req, res) => {
 const RRG_US_KEYS = [
   'XLK', 'XLF', 'XLV', 'XLY', 'XLP', 'XLE', 'XLI', 'XLB', 'XLRE', 'XLU', 'XLC',
   'SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GDX', 'IGV',
+  // Thematic funds — see the note on the frontend INDICES list for why each
+  // proxy was chosen. They rotate against the benchmark like any other row.
+  'CIBR', 'UFO', 'ITA', 'QTUM', 'HYDR', 'REMX', 'URA',
 ];
 
 // Labels for everything the US pages can show (indices, sectors, industries,
@@ -516,6 +519,12 @@ const US_LABELS = {
   XLC: 'Communication Services', SMH: 'Semiconductors', XBI: 'Biotech',
   KRE: 'Regional Banks', ITB: 'Homebuilders', XOP: 'Oil & Gas E&P',
   XRT: 'Retail', IYT: 'Transports', GDX: 'Gold Miners', IGV: 'Software',
+  // Thematic, and named after the theme rather than the fund because that is
+  // what the row is being read as. Each is an ETF proxy for a theme with no
+  // GICS sector behind it — see the note on the frontend INDICES list.
+  CIBR: 'Cybersecurity', UFO: 'Space Technology', ITA: 'Aerospace & Defence',
+  QTUM: 'Quantum Computing', HYDR: 'Hydrogen Energy', REMX: 'Rare Earth Metals',
+  URA: 'Uranium',
 };
 
 // Curated top holdings per ETF (drilldown constituents). Broad indices drill
@@ -768,11 +777,17 @@ const mkConstituent = (s, name) => ({ key: s, symbol: s, token: s, tradingsymbol
 // Industry/thematic ETFs whose drilldown shows real, full membership fetched
 // live (see etfHoldings.js). Broad indices and GICS sector ETFs are handled
 // above and intentionally excluded.
-const LIVE_HOLDINGS_FUNDS = new Set(['SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GDX', 'IGV', 'DIA']);
+const LIVE_HOLDINGS_FUNDS = new Set([
+  'SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GDX', 'IGV', 'DIA',
+  'CIBR', 'UFO', 'ITA', 'QTUM', 'HYDR', 'REMX', 'URA',
+]);
 
 // Industry/thematic universes the screener can scan in addition to the 11 GICS
 // sectors. Each resolves to its ETF's live holdings (see resolveUsUniverse).
-const US_INDUSTRY_ETFS = ['SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GDX', 'IGV'];
+const US_INDUSTRY_ETFS = [
+  'SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GDX', 'IGV',
+  'CIBR', 'UFO', 'ITA', 'QTUM', 'HYDR', 'REMX', 'URA',
+];
 
 // ─── Software index members (widens the IGV drilldown) ──────────────────────
 // IGV's live holdings come from StockAnalysis, whose free tier caps at the top
