@@ -261,9 +261,10 @@ describe('calculateHistoricalReturns', () => {
     return { date: d.toISOString(), close: 100, high: 100 };
   });
 
-  test('reports zero across the board for a flat series', () => {
+  test('reports zero across every window the series actually covers', () => {
     const r = calculateHistoricalReturns(daily, 100);
-    for (const k of ['1W', '1M', '3M', '6M', '1Y', '2Y', '3Y']) {
+    // 900 bars is ~2.5 years, so 3Y is deliberately absent — see below.
+    for (const k of ['1W', '1M', '3M', '6M', '1Y', '2Y']) {
       assert.equal(r[k], 0, `${k} should be flat`);
     }
   });
@@ -273,10 +274,61 @@ describe('calculateHistoricalReturns', () => {
     assert.ok(Math.abs(r['1M'] - 10) < 1e-9, `expected +10%, got ${r['1M']}`);
   });
 
-  test('returns 0 rather than dividing by a zero or empty history', () => {
-    assert.equal(calculateHistoricalReturns([], 100)['1M'], 0);
+  test('returns null rather than dividing by a zero or empty history', () => {
+    assert.equal(calculateHistoricalReturns([], 100)['1M'], null);
     const zeroed = daily.map(c => ({ ...c, close: 0 }));
-    assert.equal(calculateHistoricalReturns(zeroed, 100)['1M'], 0);
+    assert.equal(calculateHistoricalReturns(zeroed, 100)['1M'], null);
+  });
+
+  // ─── Windows the series does not reach ────────────────────────────────────
+  // The lookup finds the CLOSEST bar to the target date, which for a target
+  // before the series start is the first bar. That turned a young fund's
+  // since-inception return into its "3Y" return, printed identically in every
+  // column it could not fill. Latent for years because every row on both
+  // indices pages carries ~4 years of history; it fires the moment a recently
+  // listed fund is added.
+  test('reports null for a window that starts before the series does', () => {
+    const start = new Date();
+    start.setDate(start.getDate() - 60);
+    const young = Array.from({ length: 42 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      return { date: d.toISOString(), close: 100 + i };
+    });
+    const r = calculateHistoricalReturns(young, 141);
+
+    assert.ok(r['1W'] != null, '1W is inside the series and must be measured');
+    assert.ok(r['1M'] != null, '1M is inside the series and must be measured');
+    for (const k of ['3M', '6M', '1Y', '2Y', '3Y']) {
+      assert.equal(r[k], null, `${k} is not covered and must not be reported`);
+    }
+  });
+
+  test('does not report the same since-inception number under several labels', () => {
+    const start = new Date();
+    start.setDate(start.getDate() - 60);
+    const young = Array.from({ length: 42 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      return { date: d.toISOString(), close: 100 };
+    });
+    const r = calculateHistoricalReturns(young, 130);
+    const reported = ['3M', '6M', '1Y', '2Y', '3Y'].map(k => r[k]).filter(v => v != null);
+    assert.deepEqual(reported, [], `uncovered windows reported ${JSON.stringify(reported)}`);
+  });
+
+  // The grace window: a target landing a day or two before the first bar (a
+  // weekend, a holiday) still counts as covered, or a series with exactly one
+  // month of history would null out its own 1M column.
+  test('tolerates a target landing just before the first bar', () => {
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+    const month = Array.from({ length: 22 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      return { date: d.toISOString(), close: 100 };
+    });
+    assert.equal(calculateHistoricalReturns(month, 110)['1M'], 10);
   });
 
   test('accepts an explicit timezone without changing a flat result', () => {

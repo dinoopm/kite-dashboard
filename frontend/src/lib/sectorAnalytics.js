@@ -32,6 +32,21 @@ export function calculateHistoricalReturns(series, currentPrice, timeZone = 'Asi
 
   const dates = series.map(c => new Date(c.date).getTime());
 
+  // A lookback that starts before the series does cannot be measured. The
+  // nearest-close search below would happily return the earliest bar, so a fund
+  // listed two months ago reported its since-inception return in the 3M, 6M,
+  // 1Y, 2Y AND 3Y columns — the same number five times, each under a label that
+  // was false. Returning null instead renders as an em dash like every other
+  // absent value.
+  //
+  // The grace window exists because the target dates are calendar arithmetic
+  // ("today minus one month") and can land on a weekend or a holiday, so an
+  // exact comparison against the first traded bar would null out a series that
+  // does cover the window. Five days spans a long weekend either side.
+  const GRACE_MS = 5 * 24 * 60 * 60 * 1000;
+  const firstDate = dates.length ? dates[0] : null;
+  const reaches = (targetDate) => firstDate != null && targetDate.getTime() >= firstDate - GRACE_MS;
+
   // Nearest close to a target date, via binary search on the sorted series.
   const getPriceAtDate = (targetDate) => {
     if (dates.length === 0) return 0;
@@ -56,19 +71,21 @@ export function calculateHistoricalReturns(series, currentPrice, timeZone = 'Asi
   const d2Y = new Date(anchor); d2Y.setFullYear(anchor.getFullYear() - 2);
   const d3Y = new Date(anchor); d3Y.setFullYear(anchor.getFullYear() - 3);
 
-  const calcPct = (oldPrice) => {
-    if (!oldPrice || oldPrice === 0) return 0;
+  const calcPct = (targetDate) => {
+    if (!reaches(targetDate)) return null;
+    const oldPrice = getPriceAtDate(targetDate);
+    if (!oldPrice || oldPrice === 0) return null;
     return ((currentPrice - oldPrice) / oldPrice) * 100;
   };
 
   return {
-    '1W': calcPct(getPriceAtDate(d1W)),
-    '1M': calcPct(getPriceAtDate(d1M)),
-    '3M': calcPct(getPriceAtDate(d3M)),
-    '6M': calcPct(getPriceAtDate(d6M)),
-    '1Y': calcPct(getPriceAtDate(d1Y)),
-    '2Y': calcPct(getPriceAtDate(d2Y)),
-    '3Y': calcPct(getPriceAtDate(d3Y)),
+    '1W': calcPct(d1W),
+    '1M': calcPct(d1M),
+    '3M': calcPct(d3M),
+    '6M': calcPct(d6M),
+    '1Y': calcPct(d1Y),
+    '2Y': calcPct(d2Y),
+    '3Y': calcPct(d3Y),
   };
 }
 

@@ -129,7 +129,14 @@ function loadIndicesSnapshot() {
     const { ts, rows } = JSON.parse(raw);
     if (!Array.isArray(rows) || !ts || Date.now() - ts > SNAPSHOT_MAX_AGE_MS) return null;
     const byId = new Map(rows.map(r => [r.id, r]));
-    return INDICES.map(e => ({ ...emptyRowFor(e), ...(byId.get(e.key) || {}) }));
+    // The snapshot supplies MEASURED values; the catalogue always supplies
+    // identity. Spreading the snapshot last let a cached `name` outlive a
+    // rename for the full 7-day TTL.
+    return INDICES.map(e => {
+      const base = emptyRowFor(e);
+      const saved = byId.get(e.key);
+      return saved ? { ...base, ...saved, name: base.name, category: base.category } : base;
+    });
   } catch { return null; }
 }
 

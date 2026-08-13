@@ -114,7 +114,25 @@ const INDICES = [
   { key: "CIBR", name: "Cybersecurity", category: "sector" },
   { key: "UFO", name: "Space Technology", category: "sector" },
   { key: "ITA", name: "Aerospace & Defence", category: "sector" },
-  { key: "QTUM", name: "Quantum Computing", category: "sector" },
+  // Named for what it tracks, not what it is nicknamed. QTUM follows the
+  // BlueStar Machine Learning AND Quantum Computing Index, whose stated criteria
+  // include "embedded artificial intelligence chips" and big-data software —
+  // which is why Arm and Alibaba are members. It is near equal-weight (every
+  // position 0.26%-2.03%), so those are not a rounding tail: Alibaba at 1.22%
+  // outweighs IonQ at 0.89%. Calling the row "Quantum Computing" promised a
+  // read this fund does not deliver.
+  { key: "QTUM", name: "Quantum & Machine Learning", category: "sector" },
+  // The purer read, and much younger. WisdomTree's fund holds the pure-plays
+  // (QNT, QBTS, RGTI, IONQ) ahead of the large-cap names. Chosen over QTUP,
+  // which is purer still but 46 trading days old and trades ~$1M/day, and over
+  // CQTM at under $1M/day; the 2x daily funds (XQTM, QPUX) are excluded on
+  // principle, since a leveraged daily-reset product does not represent a
+  // theme's return over any horizon this page reports.
+  //
+  // 212 bars means 1Y, 2Y and 3Y cannot be computed and now render as dashes
+  // rather than as a since-inception number wearing a longer label. Those fill
+  // in as the fund ages.
+  { key: "WQTM", name: "Quantum Computing (pure)", category: "sector" },
   { key: "HYDR", name: "Hydrogen Energy", category: "sector" },
   { key: "REMX", name: "Rare Earth Metals", category: "sector" },
   { key: "URA", name: "Uranium", category: "sector" },
@@ -144,7 +162,15 @@ function loadIndicesSnapshot() {
     const { ts, rows } = JSON.parse(raw);
     if (!Array.isArray(rows) || !ts || Date.now() - ts > SNAPSHOT_MAX_AGE_MS) return null;
     const byId = new Map(rows.map(r => [r.id, r]));
-    return INDICES.map(e => ({ ...emptyRowFor(e), ...(byId.get(e.key) || {}) }));
+    // The snapshot supplies MEASURED values; the catalogue always supplies
+    // identity. Spreading the snapshot last let a cached `name` outlive a
+    // rename for the full 7-day TTL — relabelling QTUM changed nothing on
+    // screen until the cache expired, which reads as the edit not working.
+    return INDICES.map(e => {
+      const base = emptyRowFor(e);
+      const saved = byId.get(e.key);
+      return saved ? { ...base, ...saved, name: base.name, category: base.category } : base;
+    });
   } catch { return null; }
 }
 

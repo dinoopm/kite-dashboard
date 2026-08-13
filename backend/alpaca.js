@@ -505,6 +505,10 @@ const RRG_US_KEYS = [
   // Thematic funds — see the note on the frontend INDICES list for why each
   // proxy was chosen. They rotate against the benchmark like any other row.
   'CIBR', 'UFO', 'ITA', 'QTUM', 'HYDR', 'REMX', 'URA',
+  // WQTM is deliberately absent: RRG plots relative strength over a rolling
+  // multi-quarter window, and the fund has ~10 months of history. A tail drawn
+  // from whatever exists would place it on the chart with the same authority as
+  // a four-year series. It joins once it can be measured on the same terms.
 ];
 
 // Labels for everything the US pages can show (indices, sectors, industries,
@@ -523,8 +527,8 @@ const US_LABELS = {
   // what the row is being read as. Each is an ETF proxy for a theme with no
   // GICS sector behind it — see the note on the frontend INDICES list.
   CIBR: 'Cybersecurity', UFO: 'Space Technology', ITA: 'Aerospace & Defence',
-  QTUM: 'Quantum Computing', HYDR: 'Hydrogen Energy', REMX: 'Rare Earth Metals',
-  URA: 'Uranium',
+  QTUM: 'Quantum & Machine Learning', WQTM: 'Quantum Computing (pure)',
+  HYDR: 'Hydrogen Energy', REMX: 'Rare Earth Metals', URA: 'Uranium',
 };
 
 // Curated top holdings per ETF (drilldown constituents). Broad indices drill
@@ -779,14 +783,14 @@ const mkConstituent = (s, name) => ({ key: s, symbol: s, token: s, tradingsymbol
 // above and intentionally excluded.
 const LIVE_HOLDINGS_FUNDS = new Set([
   'SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GDX', 'IGV', 'DIA',
-  'CIBR', 'UFO', 'ITA', 'QTUM', 'HYDR', 'REMX', 'URA',
+  'CIBR', 'UFO', 'ITA', 'QTUM', 'WQTM', 'HYDR', 'REMX', 'URA',
 ]);
 
 // Industry/thematic universes the screener can scan in addition to the 11 GICS
 // sectors. Each resolves to its ETF's live holdings (see resolveUsUniverse).
 const US_INDUSTRY_ETFS = [
   'SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GDX', 'IGV',
-  'CIBR', 'UFO', 'ITA', 'QTUM', 'HYDR', 'REMX', 'URA',
+  'CIBR', 'UFO', 'ITA', 'QTUM', 'WQTM', 'HYDR', 'REMX', 'URA',
 ];
 
 // ─── Software index members (widens the IGV drilldown) ──────────────────────
