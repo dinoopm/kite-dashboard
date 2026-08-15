@@ -211,6 +211,47 @@ function isCompleteScrape(stocks) {
   return stocks.some(s => s.measure === 'ASM') && stocks.some(s => s.measure === 'GSM');
 }
 
+// GSM caps trading outright — price bands, 100% margin, trade-for-trade, and at
+// the higher stages periodic call auction — where ASM only raises margins and
+// tightens monitoring. So when a name is on both, GSM is the fact worth
+// printing. A named stage beats 'Unknown' within the same measure.
+const MEASURE_RANK = { GSM: 2, ASM: 1 };
+const rank = (r) => (MEASURE_RANK[r.measure] ?? 0) * 2 + (r.stage && r.stage !== 'Unknown' ? 1 : 0);
+
+/**
+ * Collapse the scrape to one row per symbol.
+ *
+ * `surveillance_stocks` is keyed on symbol alone, so the upsert below sends
+ * `onConflict: 'symbol'`. Postgres refuses a single statement that touches the
+ * same conflict key twice — "ON CONFLICT DO UPDATE command cannot affect row a
+ * second time" — and that is exactly how the 2026-08-15 run died: a clean
+ * scrape, all three lists parsed, 292 rows, and at least one name on two of
+ * them. The crash came after the DELETE, so it also left the exclusion list
+ * empty until the next run.
+ *
+ * Duplicates are normal input, not a scrape fault. NSE publishes long-term and
+ * short-term ASM as separate lists and a stock can sit on both, and GSM is a
+ * separate regime that applies at the same time as ASM. So they get merged
+ * rather than rejected.
+ *
+ * Which row wins only affects what gets printed: engine.js excludes on the
+ * symbol whatever the measure says, and redFlags.js reads a single row. Ties
+ * keep the first occurrence, and the scrape emits in a fixed order (ASM long,
+ * ASM short, GSM), so the same input always produces the same table.
+ *
+ * The alternative is a (symbol, measure) key, which would keep both facts. That
+ * is a DDL change plus every reader — worth doing if the stage of the weaker
+ * measure ever matters; today nothing reads it.
+ */
+function dedupeBySymbol(stocks) {
+  const bySymbol = new Map();
+  for (const row of stocks || []) {
+    const prev = bySymbol.get(row.symbol);
+    if (!prev || rank(row) > rank(prev)) bySymbol.set(row.symbol, row);
+  }
+  return [...bySymbol.values()];
+}
+
 // Retry the whole scrape. NSE blocks datacenter IPs intermittently, and a fresh
 // browser (new session and cookies) is usually what gets through on a later try.
 //
@@ -254,22 +295,26 @@ async function syncSurveillance() {
       return;
     }
 
-    console.log(`[Surveillance] Total surveillance stocks: ${affectedStocks.length}. Syncing to Supabase...`);
+    // One row per symbol before anything is written: the table is keyed on
+    // symbol, and a symbol on two lists is both legal and fatal to the upsert.
+    const rows = dedupeBySymbol(affectedStocks);
+    const merged = affectedStocks.length - rows.length;
+    console.log(`[Surveillance] Total surveillance stocks: ${rows.length}${merged ? ` (${merged} duplicate symbol row${merged === 1 ? '' : 's'} merged from ${affectedStocks.length})` : ''}. Syncing to Supabase...`);
 
     // Clear old data and upsert new list
     const { error: deleteErr } = await supabase.from('surveillance_stocks').delete().neq('symbol', 'DUMMY');
     if (deleteErr) throw new Error("Failed to clear old data: " + deleteErr.message);
 
     // Upsert in batches of 100 to avoid payload limits
-    for (let i = 0; i < affectedStocks.length; i += 100) {
-      const batch = affectedStocks.slice(i, i + 100);
+    for (let i = 0; i < rows.length; i += 100) {
+      const batch = rows.slice(i, i + 100);
       const { error: insertErr } = await supabase
         .from('surveillance_stocks')
         .upsert(batch, { onConflict: 'symbol' });
       if (insertErr) throw new Error("Supabase Insert Error: " + insertErr.message);
     }
 
-    console.log(`[Surveillance] ✅ Successfully synced ${affectedStocks.length} stocks.`);
+    console.log(`[Surveillance] ✅ Successfully synced ${rows.length} stocks.`);
 
   } catch (err) {
     console.error("[Surveillance] Fatal Error:", err);
@@ -297,4 +342,4 @@ if (require.main === module) {
   syncSurveillance();
 }
 
-module.exports = { readReport, isCompleteScrape, syncSurveillance, scrapeWithRetry };
+module.exports = { readReport, isCompleteScrape, dedupeBySymbol, syncSurveillance, scrapeWithRetry };

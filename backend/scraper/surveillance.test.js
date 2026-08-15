@@ -81,3 +81,84 @@ describe('isCompleteScrape', () => {
     assert.equal(isCompleteScrape(null), false);
   });
 });
+
+// The 2026-08-15 failure. The scrape was clean — 140 long-term ASM, 70
+// short-term ASM, 82 GSM — and the upsert died on "ON CONFLICT DO UPDATE
+// command cannot affect row a second time", because at least one name was on
+// two of those lists and `surveillance_stocks` is keyed on symbol alone.
+// Postgres rejects a statement that touches the same conflict key twice, and
+// the DELETE had already run, so the exclusion list was left empty.
+describe('dedupeBySymbol', () => {
+  const { dedupeBySymbol } = require('./surveillance');
+  const symbols = (rows) => rows.map(r => r.symbol);
+
+  test('leaves a list that is already unique alone', () => {
+    const rows = [
+      { symbol: 'A', measure: 'ASM', stage: 'Stage I' },
+      { symbol: 'B', measure: 'GSM', stage: '2' },
+    ];
+    assert.deepEqual(dedupeBySymbol(rows), rows);
+  });
+
+  // NSE publishes long-term and short-term ASM as separate lists and a stock
+  // can be on both, so this is normal input rather than a scrape fault.
+  test('collapses a symbol that is on both ASM lists', () => {
+    const out = dedupeBySymbol([
+      { symbol: 'A', measure: 'ASM', stage: 'Stage I' },
+      { symbol: 'A', measure: 'ASM', stage: 'Stage II' },
+    ]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].stage, 'Stage I');   // tie → first seen, so it is deterministic
+  });
+
+  // GSM restricts trading outright; ASM only raises margins. When a name is
+  // under both, GSM is the fact worth printing — and it must win from either
+  // input order, since only one row survives.
+  test('keeps GSM over ASM whichever came first', () => {
+    for (const rows of [
+      [{ symbol: 'A', measure: 'ASM', stage: 'Stage I' }, { symbol: 'A', measure: 'GSM', stage: '2' }],
+      [{ symbol: 'A', measure: 'GSM', stage: '2' }, { symbol: 'A', measure: 'ASM', stage: 'Stage I' }],
+    ]) {
+      const out = dedupeBySymbol(rows);
+      assert.equal(out.length, 1);
+      assert.deepEqual(out[0], { symbol: 'A', measure: 'GSM', stage: '2' });
+    }
+  });
+
+  test('prefers a named stage over Unknown within a measure', () => {
+    const out = dedupeBySymbol([
+      { symbol: 'A', measure: 'ASM', stage: 'Unknown' },
+      { symbol: 'A', measure: 'ASM', stage: 'Stage II' },
+    ]);
+    assert.deepEqual(out, [{ symbol: 'A', measure: 'ASM', stage: 'Stage II' }]);
+  });
+
+  // A measure outranks a stage: an unknown-stage GSM still beats a fully
+  // labelled ASM, because the regime is the more restrictive one.
+  test('measure outranks stage detail', () => {
+    const out = dedupeBySymbol([
+      { symbol: 'A', measure: 'ASM', stage: 'Stage I' },
+      { symbol: 'A', measure: 'GSM', stage: 'Unknown' },
+    ]);
+    assert.equal(out[0].measure, 'GSM');
+  });
+
+  // What the upsert actually needs: no conflict key appears twice, in any batch.
+  test('output has no repeated symbol, and keeps every distinct one', () => {
+    const rows = [
+      { symbol: 'A', measure: 'ASM', stage: 'Stage I' },
+      { symbol: 'B', measure: 'ASM', stage: 'Stage I' },
+      { symbol: 'A', measure: 'ASM', stage: 'Stage II' },
+      { symbol: 'C', measure: 'GSM', stage: '1' },
+      { symbol: 'B', measure: 'GSM', stage: '4' },
+    ];
+    const out = dedupeBySymbol(rows);
+    assert.equal(new Set(symbols(out)).size, out.length);
+    assert.deepEqual(symbols(out).sort(), ['A', 'B', 'C']);
+  });
+
+  test('survives an empty or missing list', () => {
+    assert.deepEqual(dedupeBySymbol([]), []);
+    assert.deepEqual(dedupeBySymbol(null), []);
+  });
+});
