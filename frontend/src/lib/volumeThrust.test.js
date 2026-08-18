@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { volumeStats, THRUST_MULT, MIN_BARS } from './volumeThrust.js'
+import { volumeStats, confirmedAt, THRUST_MULT, MIN_BARS } from './volumeThrust.js'
 
 // 40 quiet bars: 1000 lots a day, close up a rupee a day.
 const quiet = (n = 40) => Array.from({ length: n }, (_, i) => ({ close: 100 + i, volume: 1000 }))
@@ -66,5 +66,49 @@ describe('volumeStats', () => {
     const { ratio, thrust } = volumeStats(bars)
     assert.equal(ratio[30], null)
     assert.equal(thrust[30], false)
+  })
+})
+
+describe('confirmedAt', () => {
+  const withHeavyAt = (idx) => {
+    const bars = quiet(60)
+    bars[idx].volume = 4000
+    return volumeStats(bars)
+  }
+
+  test('finds a heavy up day inside the window', () => {
+    assert.equal(confirmedAt(withHeavyAt(38), 40, 5), 38)
+  })
+
+  test('ignores one outside it', () => {
+    assert.equal(confirmedAt(withHeavyAt(30), 40, 5), -1)
+  })
+
+  test('is inclusive of the bar itself', () => {
+    assert.equal(confirmedAt(withHeavyAt(40), 40, 5), 40)
+  })
+
+  test('returns the most recent qualifying bar when a run confirms', () => {
+    const bars = quiet(60)
+    bars[37].volume = 4000
+    bars[38].volume = 4000
+    assert.equal(confirmedAt(volumeStats(bars), 40, 5), 38)
+  })
+
+  // Same reason the pane draws dim bars: a continuation day is not a fresh
+  // firing, but it is still evidence that volume is behind the move.
+  test('a run continuation confirms even though it is not a firing', () => {
+    const bars = quiet(60)
+    bars[37].volume = 4000
+    bars[38].volume = 4000
+    const stats = volumeStats(bars)
+    assert.equal(stats.thrust[38], false, 'not a firing')
+    assert.equal(stats.elevated[38], true, 'but still elevated')
+    assert.equal(confirmedAt(stats, 39, 1), 38)
+  })
+
+  test('a window of zero asks only about the bar itself', () => {
+    assert.equal(confirmedAt(withHeavyAt(39), 40, 0), -1)
+    assert.equal(confirmedAt(withHeavyAt(40), 40, 0), 40)
   })
 })

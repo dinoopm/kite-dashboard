@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { createChart } from 'lightweight-charts';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 import { generateSignals } from '../lib/signalEngine';
-import { volumeStats, THRUST_MULT, AVG_PERIOD } from '../lib/volumeThrust';
+import { volumeStats, confirmedAt, THRUST_MULT, AVG_PERIOD, CONFIRM_WINDOW } from '../lib/volumeThrust';
 import SignalScore from './SignalScore';
 
 // ─── MA-crossover + RSI signal chart (TradingView Lightweight Charts) ─────────
@@ -64,6 +64,13 @@ const barTime = (b) => {
 // View = how much recent history to ZOOM to. Full 5Y is loaded up front so the
 // Slow SMA stays warm even on a 1-month view; these only pan/zoom the time axis.
 const VIEW_DAYS = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '3Y': 1095, '5Y': null };
+
+// The periods the backend registry scores (`ma_cross_up` and its two volume
+// halves). The sliders can move off these, and when they do the markers stop
+// being the rule anything has a record for — so the badges come down rather
+// than annotate a variant with someone else's evidence.
+const SCORED_FAST = 10;
+const SCORED_SLOW = 50;
 
 // `market` only affects how the volume-thrust track record is labelled. The
 // scorecard is built from nse_bhavcopy and scored against NIFTY, so on a US
@@ -183,6 +190,31 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
     return { bbw, mask, current, isSqueezeNow };
   }, [bb, bars]);
 
+  // Volume confirmation for each Buy: was there a thrust on the cross bar or in
+  // the CONFIRM_WINDOW sessions before it? This is the same question
+  // `ma_cross_volume` asks in the registry, so the marker and the badge beside
+  // it describe one rule.
+  //
+  // Confirmation is ATTACHED to the buys, never used to drop them. The
+  // dead-cat guard set that precedent in this chart: a signal the engine
+  // distrusts is drawn differently and counted apart, not hidden. Hiding it
+  // would make the filter unfalsifiable on screen — the user could not see the
+  // firings it discards, which are exactly the ones that decide whether the
+  // filter is worth having.
+  const confirmation = useMemo(() => {
+    const map = new Map();
+    for (const sig of engine.signals) {
+      if (sig.type !== 'buy' || sig.deadCat) continue;
+      const at = confirmedAt(volume, sig.index);
+      map.set(sig.index, {
+        confirmed: at >= 0,
+        barsAgo: at >= 0 ? sig.index - at : null,
+        ratio: at >= 0 ? volume.ratio[at] : volume.ratio[sig.index],
+      });
+    }
+    return map;
+  }, [engine, volume]);
+
   // Only the signals inside the zoomed window. The chart loads 5Y so the SMAs
   // stay warm, but markers (and the counts) must be scoped to what's on screen —
   // otherwise old low-price signals from years ago render clamped at the bottom
@@ -293,9 +325,17 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
       }
       const verb = sig.type === 'buy' ? 'Buy' : 'Sell';
       const dir = sig.type === 'buy' ? 'crossed above' : 'crossed below';
+      // The unconfirmed case is spelled out rather than left blank. An absent
+      // line reads as "nothing to report"; the absence of volume behind a
+      // breakout IS the report.
+      const volLine = !sig.vol ? ''
+        : sig.vol.confirmed
+          ? `<br/><span style="color:${THRUST_COLOR}">✓ Volume ${sig.vol.ratio?.toFixed(2)}× the ${AVG_PERIOD}d average${sig.vol.barsAgo ? `, ${sig.vol.barsAgo} session${sig.vol.barsAgo > 1 ? 's' : ''} earlier` : ' on the cross bar'}</span>`
+          : `<br/><span style="opacity:0.75">No volume thrust in the ${CONFIRM_WINDOW} sessions before this cross${sig.vol.ratio != null ? ` (${sig.vol.ratio.toFixed(2)}× on the day)` : ''}</span>`;
       tip.innerHTML = `<strong style="color:${sig.type === 'buy' ? BUY_COLOR : SELL_COLOR}">${verb} Signal Triggered</strong><br/>`
         + `Fast MA (${sig.fastPeriod}) ${dir} Slow MA (${sig.slowPeriod})<br/>`
-        + `RSI at ${sig.rsi.toFixed(1)}`;
+        + `RSI at ${sig.rsi.toFixed(1)}`
+        + volLine;
       tip.style.display = 'block';
       const cw = containerRef.current.clientWidth;
       const left = Math.min(Math.max(param.point.x + 14, 8), cw - 190);
@@ -487,24 +527,29 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
     const map = new Map();
     const markers = visibleSignals.map((s) => {
       const time = barTime(s.bar);
-      map.set(time, s);
+      map.set(time, { ...s, vol: confirmation.get(s.index) || null });
       // Dead-cat-bounce buys are flagged, not acted on: amber circle below the
       // bar instead of a green buy arrow.
       if (s.type === 'buy' && s.deadCat) {
         return { time, position: 'belowBar', color: DEADCAT_COLOR, shape: 'circle', text: 'DC' };
       }
       const buy = s.type === 'buy';
+      // A buy with a volume thrust behind it gets a tick, not a different
+      // shape or a hidden sibling: the marker still says "the engine fired
+      // here", with one more fact attached.
+      const conf = buy ? confirmation.get(s.index) : null;
+      const tick = conf?.confirmed ? '✓' : '';
       return {
         time,
         position: buy ? 'belowBar' : 'aboveBar',
         color: buy ? BUY_COLOR : SELL_COLOR,
         shape: buy ? 'arrowUp' : 'arrowDown',
-        text: strict ? (buy ? 'Long' : 'Short') : (buy ? 'B' : 'S'),
+        text: strict ? (buy ? `Long${tick}` : 'Short') : (buy ? `B${tick}` : 'S'),
       };
     });
     signalByTimeRef.current = map;
     candleRef.current.setMarkers(markers);
-  }, [visibleSignals, strict, bars]);
+  }, [visibleSignals, strict, bars, confirmation]);
 
   // Zoom the time axis to the chosen view (runs after chart creation since both
   // depend on `bars`, and on its own when the view button changes).
@@ -539,6 +584,11 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
 
   // Dead-cat buys are excluded from the actionable buy tally and counted apart.
   const buyCount = visibleSignals.filter(s => s.type === 'buy' && !s.deadCat).length;
+  const confirmedBuys = visibleSignals.filter(s => s.type === 'buy' && !s.deadCat && confirmation.get(s.index)?.confirmed).length;
+  // The sliders can wander off the periods the registry scores. When they do
+  // the markers are a variant with no track record, and saying so is the whole
+  // point of the badge.
+  const atScoredSettings = fastPeriod === SCORED_FAST && slowPeriod === SCORED_SLOW;
   const sellCount = visibleSignals.filter(s => s.type === 'sell').length;
   const deadCatCount = visibleSignals.filter(s => s.type === 'buy' && s.deadCat).length;
   // RSI readout — the crosshair value when hovering, else the latest bar.
@@ -636,10 +686,38 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
           </span>
         )}
         <span style={{ marginLeft: 'auto', fontSize: '0.78rem', fontWeight: 700, display: 'flex', gap: '0.75rem' }}>
-          <span style={{ color: BUY_COLOR }}>▲ {buyCount} buy</span>
+          <span style={{ color: BUY_COLOR }}>
+            ▲ {buyCount} buy
+            {volume.hasVolume && buyCount > 0 && (
+              <span style={{ color: THRUST_COLOR, fontWeight: 600 }} title={`${confirmedBuys} of ${buyCount} had a volume thrust on the cross bar or within the previous ${CONFIRM_WINDOW} sessions.`}>
+                {' '}({confirmedBuys}✓)
+              </span>
+            )}
+          </span>
           <span style={{ color: SELL_COLOR }}>▼ {sellCount} sell</span>
           {deadCatCount > 0 && <span style={{ color: DEADCAT_COLOR }} title="Golden-cross buys ignored as likely dead-cat bounces (below the 20-bar middle band after a sharp drop)">⊘ {deadCatCount} dead-cat</span>}
         </span>
+      </div>
+
+      {/* What the Buy markers above are actually worth — the two halves side by
+          side, because "volume-confirmed looks better" is only a claim until
+          the unconfirmed half is on screen next to it. */}
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.7rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+        {atScoredSettings ? (
+          <>
+            <span>{market === 'US'
+              ? `Golden-cross buys, scored on NSE data (not on US history — the record is about the rule):`
+              : 'Golden-cross buys, scored:'}</span>
+            <SignalScore signal="ma_cross_up" label="all" />
+            <SignalScore signal="ma_cross_volume" label="✓ volume-confirmed" />
+            <SignalScore signal="ma_cross_quiet" label="✗ no volume behind it" />
+          </>
+        ) : (
+          <span>
+            Markers are a custom {fastPeriod}/{slowPeriod} variant — the scored rule is {SCORED_FAST}/{SCORED_SLOW},
+            so no track record applies to what is drawn here.
+          </span>
+        )}
       </div>
 
       {/* Price chart */}

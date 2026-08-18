@@ -53,3 +53,23 @@ export function volumeStats(bars) {
 
   return { volumes, avg, ratio, elevated, thrust, hasVolume: volumes.some(v => v > 0) }
 }
+
+// Confirmation window for a golden cross, mirroring CONFIRM_WINDOW in
+// backend/signals/registry.js. Zero would be too strict to mean anything: a
+// 50-bar SMA turns days after the buying that moved it, so demanding the heavy
+// day land exactly on the crossover bar would mostly measure SMA lag.
+export const CONFIRM_WINDOW = 5
+
+/**
+ * Index of the most recent bar within `window` sessions of `i` that met the
+ * volume bar, or -1.
+ *
+ * Reads `elevated`, not `thrust`: the run guard exists to stop one episode
+ * being RECORDED four times, but for confirmation the question is only whether
+ * heavy demand volume showed up recently, and the second day of a heavy run
+ * answers that as well as the first.
+ */
+export function confirmedAt(stats, i, window = CONFIRM_WINDOW) {
+  for (let k = i; k >= Math.max(1, i - window); k--) if (stats.elevated[k]) return k
+  return -1
+}
