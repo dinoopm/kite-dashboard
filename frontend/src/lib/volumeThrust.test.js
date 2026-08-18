@@ -1,0 +1,70 @@
+import { test, describe } from 'node:test'
+import assert from 'node:assert/strict'
+import { volumeStats, THRUST_MULT, MIN_BARS } from './volumeThrust.js'
+
+// 40 quiet bars: 1000 lots a day, close up a rupee a day.
+const quiet = (n = 40) => Array.from({ length: n }, (_, i) => ({ close: 100 + i, volume: 1000 }))
+
+describe('volumeStats', () => {
+  test('the baseline excludes the bar it measures', () => {
+    const bars = quiet()
+    bars[30].volume = 5000
+    const { avg, ratio } = volumeStats(bars)
+    // Were the spike inside its own 20-bar window the average would be 1200
+    // and the ratio 4.17 — the exact dilution the backend detector avoids.
+    assert.equal(avg[30], 1000)
+    assert.equal(ratio[30], 5)
+  })
+
+  test('leaves the warm-up window unscored rather than guessing', () => {
+    const { avg, ratio, thrust } = volumeStats(quiet())
+    assert.equal(avg[19], null)
+    assert.equal(ratio[19], null)
+    assert.equal(thrust.slice(0, MIN_BARS).some(Boolean), false)
+  })
+
+  test('marks a heavy up day as a firing', () => {
+    const bars = quiet()
+    bars[30].volume = 1000 * THRUST_MULT
+    const { elevated, thrust } = volumeStats(bars)
+    assert.equal(elevated[30], true)
+    assert.equal(thrust[30], true)
+  })
+
+  test('heavy volume on a down close is not a demand thrust', () => {
+    const bars = quiet()
+    bars[30].volume = 6000
+    bars[30].close = bars[29].close - 4
+    const { elevated, thrust } = volumeStats(bars)
+    assert.equal(elevated[30], false)
+    assert.equal(thrust[30], false)
+  })
+
+  // The distinction the chart draws in two shades: a run stays elevated but
+  // fires once, so the scorecard's n counts calls rather than days.
+  test('a run of heavy up days stays elevated but fires once', () => {
+    const bars = quiet()
+    bars[30].volume = 3000
+    bars[31].volume = 4000
+    bars[32].volume = 3500
+    const { elevated, thrust } = volumeStats(bars)
+    assert.deepEqual(elevated.slice(30, 33), [true, true, true])
+    assert.deepEqual(thrust.slice(30, 33), [true, false, false])
+  })
+
+  test('reports whether the instrument has volume at all', () => {
+    assert.equal(volumeStats(quiet()).hasVolume, true)
+    // Index series come back with no volume; the pane must be able to say so
+    // instead of drawing an empty axis.
+    assert.equal(volumeStats(quiet().map(b => ({ ...b, volume: 0 }))).hasVolume, false)
+    assert.equal(volumeStats(quiet().map(b => ({ ...b, volume: null }))).hasVolume, false)
+  })
+
+  test('a zero baseline yields no ratio instead of Infinity', () => {
+    const bars = quiet().map(b => ({ ...b, volume: 0 }))
+    bars[30].volume = 5000
+    const { ratio, thrust } = volumeStats(bars)
+    assert.equal(ratio[30], null)
+    assert.equal(thrust[30], false)
+  })
+})

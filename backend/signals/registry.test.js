@@ -1,6 +1,6 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { supertrendFlipUp, breakout, detectAll, PRICE_SIGNALS, signalMeta } = require('./registry');
+const { supertrendFlipUp, breakout, volumeThrust, detectAll, PRICE_SIGNALS, signalMeta } = require('./registry');
 
 const st = (dirs) => ({ supertrend: dirs.map(d => (d ? { direction: d, value: 1 } : null)), closes: dirs.map(() => 100) });
 
@@ -111,5 +111,113 @@ describe('registry', () => {
     const vcp = signalMeta('vcp_setup');
     assert.ok(vcp, 'VCP is registered even though it cannot be scored yet');
     assert.match(vcp.blockedReason, /200-day SMA/);
+  });
+});
+
+// A series whose volume is flat at `base` except where `spikes` says otherwise,
+// and whose closes rise by default. vol20avg mirrors buildSeries exactly (the
+// 20 bars ENDING AT i-1) so these tests exercise the same arithmetic the
+// recorder will, not a convenient approximation of it.
+const volSeries = (volumes, closes) => {
+  const n = volumes.length;
+  const vol20avg = new Array(n).fill(null);
+  for (let i = 20; i < n; i++) {
+    let sum = 0;
+    for (let j = i - 20; j < i; j++) sum += volumes[j];
+    vol20avg[i] = sum / 20;
+  }
+  return { volumes, closes, vol20avg };
+};
+
+// 40 quiet bars of 1000 lots, closes drifting up a rupee a day.
+const quiet = (n = 40) => ({
+  volumes: new Array(n).fill(1000),
+  closes: Array.from({ length: n }, (_, i) => 100 + i),
+});
+
+describe('volumeThrust', () => {
+  test('fires on a heavy up day', () => {
+    const q = quiet();
+    q.volumes[30] = 2500;
+    const hit = volumeThrust(volSeries(q.volumes, q.closes), 30);
+    assert.ok(hit);
+    assert.equal(hit.volRatio, 2.5);
+    assert.equal(hit.avgVol, 1000);
+  });
+
+  test('ignores heavy volume on a DOWN close — that is distribution, not demand', () => {
+    const q = quiet();
+    q.volumes[30] = 5000;
+    q.closes[30] = q.closes[29] - 5;
+    assert.equal(volumeThrust(volSeries(q.volumes, q.closes), 30), null);
+  });
+
+  test('an unchanged close is not an up close', () => {
+    const q = quiet();
+    q.volumes[30] = 5000;
+    q.closes[30] = q.closes[29];
+    assert.equal(volumeThrust(volSeries(q.volumes, q.closes), 30), null);
+  });
+
+  test('does not fire on ordinary volume', () => {
+    const q = quiet();
+    q.volumes[30] = 1900; // 1.9x — under the bar
+    assert.equal(volumeThrust(volSeries(q.volumes, q.closes), 30), null);
+  });
+
+  // The rule the whole registry exists to enforce, in its volume form: news
+  // keeps a stock heavy for days, and that is one call, not four.
+  test('a run of heavy up days is ONE firing', () => {
+    const q = quiet();
+    q.volumes[30] = 3000;
+    q.volumes[31] = 4000;
+    q.volumes[32] = 3500;
+    const S = volSeries(q.volumes, q.closes);
+    assert.ok(volumeThrust(S, 30), 'the first day of the run');
+    assert.equal(volumeThrust(S, 31), null);
+    assert.equal(volumeThrust(S, 32), null);
+  });
+
+  test('a quiet day between two spikes makes the second one a fresh call', () => {
+    const q = quiet();
+    q.volumes[30] = 3000;
+    q.volumes[31] = 1000; // back to normal
+    q.volumes[32] = 3000;
+    const S = volSeries(q.volumes, q.closes);
+    assert.ok(volumeThrust(S, 30));
+    assert.ok(volumeThrust(S, 32));
+  });
+
+  // A heavy DOWN day does not suppress the next day's thrust, because it was
+  // never a firing itself — the guard tracks the signal, not merely the volume.
+  test('yesterday being heavy but DOWN does not swallow today', () => {
+    const q = quiet();
+    q.volumes[30] = 4000;
+    q.closes[30] = q.closes[29] - 5;
+    q.volumes[31] = 4000;
+    q.closes[31] = q.closes[30] + 8;
+    assert.ok(volumeThrust(volSeries(q.volumes, q.closes), 31));
+  });
+
+  test('says nothing while the 20-day baseline is still warming up', () => {
+    const q = quiet();
+    q.volumes[10] = 9999;
+    assert.equal(volumeThrust(volSeries(q.volumes, q.closes), 10), null);
+  });
+
+  test('survives a zero-volume baseline instead of dividing by it', () => {
+    const n = 40;
+    const volumes = new Array(n).fill(0);
+    volumes[30] = 5000;
+    const closes = Array.from({ length: n }, (_, i) => 100 + i);
+    assert.equal(volumeThrust(volSeries(volumes, closes), 30), null);
+  });
+
+  // minBars must be high enough that the run guard can read a real previous
+  // bar. At i = 21 the guard's own previous close is index 19 — fine — but at
+  // the registry's first evaluated bar everything it touches must exist.
+  test('registry minBars leaves the run guard fully warm', () => {
+    const meta = signalMeta('volume_thrust');
+    assert.ok(meta.minBars >= 22, 'needs 20 baseline + the guard bar + its own previous close');
   });
 });

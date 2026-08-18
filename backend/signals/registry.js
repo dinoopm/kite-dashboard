@@ -79,6 +79,51 @@ function squeezeStart(S, i) {
   };
 }
 
+// Relative volume, and the claim built on it: a DEMAND thrust — volume at least
+// VOLUME_THRUST_MULT × its own 20-session baseline on a day the close is up.
+//
+// Three decisions worth stating, because each one changes what the number means.
+//
+// 1. The baseline excludes the bar being measured. buildSeries' vol20avg[i] sums
+//    the 20 bars ENDING AT i-1, so a 5× day is not diluted into a 4.2× day by
+//    sitting inside its own average — and the threshold means the same thing on
+//    a quiet symbol as on a busy one.
+// 2. Volume on its own has no direction. A 3× day that closes down is
+//    distribution; pooling it with a 3× day that closes up averages two opposite
+//    claims into one meaningless one. Only the up-close case fires here. The
+//    down-volume version is a different signal and is NOT claimed by this one.
+// 3. News puts a stock "in play" for several sessions, so heavy up days arrive
+//    in runs. A run is one call, not four — see rule 1 at the top of this file —
+//    so a thrust only counts on the first day of it.
+const VOLUME_THRUST_MULT = 2;
+
+/** volume / trailing-20 average at bar i, or null while the baseline is unwarm. */
+function relativeVolume(S, i) {
+  const avg = S.vol20avg[i];
+  if (avg == null || !(avg > 0)) return null;
+  const v = S.volumes[i];
+  if (v == null) return null;
+  return v / avg;
+}
+
+/** Does bar i meet the bar (heavy volume, up close), run-position ignored? */
+function isThrustBar(S, i) {
+  const ratio = relativeVolume(S, i);
+  if (ratio == null || ratio < VOLUME_THRUST_MULT) return false;
+  const prevClose = S.closes[i - 1];
+  return prevClose != null && S.closes[i] > prevClose;
+}
+
+/** The thrust itself: bar i meets the bar and bar i-1 did not. */
+function volumeThrust(S, i) {
+  if (!isThrustBar(S, i) || isThrustBar(S, i - 1)) return null;
+  return {
+    close: S.closes[i],
+    volRatio: +relativeVolume(S, i).toFixed(2),
+    avgVol: Math.round(S.vol20avg[i]),
+  };
+}
+
 // Signals derived from daily OHLCV. `source: 'reconstructed'` is an admission,
 // not a formality: these are recomputed from stored bhavcopy rather than
 // captured the day they fired. Bhavcopy closes are not revised and no
@@ -118,6 +163,18 @@ const PRICE_SIGNALS = [
     minBars: 60,
     source: 'reconstructed',
     detect: breakout(55),
+  },
+  {
+    name: 'volume_thrust',
+    label: 'Volume thrust (2× on an up day)',
+    description: 'Volume at least 2× the trailing 20-session average on a day the close is up, and only on the first such day of a run.',
+    // 20 bars of baseline, plus one more so the previous bar can be tested for
+    // the run guard, plus one before THAT for its own up/down close. Starting a
+    // bar earlier would make the guard read an undefined close and silently
+    // treat the second day of a run as a fresh firing.
+    minBars: 22,
+    source: 'reconstructed',
+    detect: volumeThrust,
   },
 ];
 
@@ -185,4 +242,5 @@ function detectAll(S, { fromDate = null } = {}) {
 module.exports = {
   PRICE_SIGNALS, RECORDED_SIGNALS, BLOCKED_SIGNALS, ALL_SIGNALS,
   signalMeta, detectAll, supertrendFlipUp, breakout, squeezeStart,
+  volumeThrust, isThrustBar, relativeVolume, VOLUME_THRUST_MULT,
 };

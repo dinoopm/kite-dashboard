@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { createChart } from 'lightweight-charts';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 import { generateSignals } from '../lib/signalEngine';
+import { volumeStats, THRUST_MULT, AVG_PERIOD } from '../lib/volumeThrust';
+import SignalScore from './SignalScore';
 
 // ─── MA-crossover + RSI signal chart (TradingView Lightweight Charts) ─────────
 // Candlestick price with Fast/Slow SMA overlays and algorithmic Buy/Sell markers.
@@ -17,6 +19,11 @@ const BB_COLOR = '#a78bfa';   // violet — distinct from the SMA blue/orange
 const DEADCAT_COLOR = '#fbbf24'; // amber — flagged/ignored buy
 const SQUEEZE_COLOR = '#ec4899'; // magenta — BB-width squeeze highlight
 const RSI_COLOR = '#22d3ee';     // cyan — RSI oscillator (bottom sub-band)
+const VOL_UP_COLOR = 'rgba(38,166,154,0.5)';   // volume on an up close (candle teal)
+const VOL_DOWN_COLOR = 'rgba(239,83,80,0.45)'; // volume on a down close (candle red)
+const VOL_AVG_COLOR = '#94a3b8';   // slate — the 20-day volume baseline
+const THRUST_COLOR = '#a3e635';    // lime — the bar a volume thrust FIRES on
+const THRUST_DIM = 'rgba(163,230,53,0.3)'; // same run continuing — not a second call
 const BB_PERIOD = 20;
 const BB_MULT = 2;
 const SQUEEZE_LOOKBACK = 30;     // "lowest in the last 30 days" window
@@ -58,7 +65,10 @@ const barTime = (b) => {
 // Slow SMA stays warm even on a 1-month view; these only pan/zoom the time axis.
 const VIEW_DAYS = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '3Y': 1095, '5Y': null };
 
-function SignalChart({ token, symbol, fetchUrl }) {
+// `market` only affects how the volume-thrust track record is labelled. The
+// scorecard is built from nse_bhavcopy and scored against NIFTY, so on a US
+// chart the badge is evidence from a different market and has to say so.
+function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
   const [view, setView] = useState('1Y');
   const [bars, setBars] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -70,7 +80,9 @@ function SignalChart({ token, symbol, fetchUrl }) {
   const [strict, setStrict] = useState(false);
   const [showBB, setShowBB] = useState(false);
   const [showRSI, setShowRSI] = useState(true);
+  const [showVolume, setShowVolume] = useState(true);
   const [hoverRsi, setHoverRsi] = useState(null); // RSI under the crosshair
+  const [hoverRvol, setHoverRvol] = useState(null); // relative volume under the crosshair
 
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -85,6 +97,9 @@ function SignalChart({ token, symbol, fetchUrl }) {
   const rsiArrRef = useRef([]); // latest RSI series, read by the crosshair handler
   const rsiContainerRef = useRef(null); // separate RSI sub-pane (own 0–100 axis)
   const rsiChartRef = useRef(null);
+  const volRatioArrRef = useRef([]); // latest relative-volume series, read by the crosshair handler
+  const volContainerRef = useRef(null); // separate volume sub-pane (own volume axis)
+  const volChartRef = useRef(null);
   const tooltipRef = useRef(null);
   const signalByTimeRef = useRef(new Map()); // time -> signal, read by the crosshair handler
 
@@ -134,6 +149,11 @@ function SignalChart({ token, symbol, fetchUrl }) {
     () => (bars.length ? generateSignals(bars, fastPeriod, slowPeriod) : { fast: [], slow: [], mid: [], rsi: [], signals: [] }),
     [bars, fastPeriod, slowPeriod]
   );
+
+  // Volume, its 20-day baseline and the thrust markers. The maths lives in
+  // ../lib/volumeThrust and is a deliberate mirror of the backend detector, so
+  // the bars highlighted here are exactly the ones the scorecard has rows for.
+  const volume = useMemo(() => volumeStats(bars), [bars]);
 
   // Bollinger Bands recompute only when the price series changes (fixed 20, 2).
   const bb = useMemo(
@@ -247,6 +267,16 @@ function SignalChart({ token, symbol, fetchUrl }) {
       }
       setHoverRsi(param.point && rsiVal != null ? rsiVal : null);
 
+      // Same trick for relative volume, so the readout in the control panel
+      // follows the cursor across every pane-less part of the chart too.
+      let rvolVal = null;
+      const varr = volRatioArrRef.current;
+      if (param.logical != null && varr) {
+        const idx = Math.round(param.logical);
+        if (idx >= 0 && idx < varr.length) rvolVal = varr[idx];
+      }
+      setHoverRvol(param.point && rvolVal != null ? rvolVal : null);
+
       const tip = tooltipRef.current;
       if (!tip) return;
       const sig = param.time != null ? signalByTimeRef.current.get(param.time) : null;
@@ -322,6 +352,76 @@ function SignalChart({ token, symbol, fetchUrl }) {
       bbLowerSqRef.current.setData([]);
     }
   }, [bb, squeeze, showBB, bars]);
+
+  // Keep the crosshair handler's relative-volume source fresh.
+  useEffect(() => { volRatioArrRef.current = volume.ratio; }, [volume]);
+
+  // Volume sub-pane: its own lightweight-charts instance below the price chart,
+  // time-synced to it — same construction as the RSI pane, and for the same
+  // reason (volume on the price scale would be unreadable, and hovering it must
+  // show lots, not rupees).
+  //
+  // The bar colouring carries the one claim this pane makes. A bar is lime when
+  // it clears THRUST_MULT × its own trailing baseline on an up close; it is
+  // BRIGHT lime only on the first such day of a run and dim for the rest. That
+  // is not decoration: the recorder writes one emission per run, so a dim bar is
+  // a day the scorecard deliberately does not count, and drawing all of them
+  // alike would suggest five times more evidence than exists.
+  useEffect(() => {
+    if (!showVolume || !volume.hasVolume || !volContainerRef.current || !chartRef.current || bars.length === 0) return;
+    const main = chartRef.current;
+    const el = volContainerRef.current;
+    const volChart = createChart(el, {
+      width: el.clientWidth, height: el.clientHeight,
+      layout: { background: { color: BG }, textColor: '#c3cce0', fontSize: 12 },
+      grid: { vertLines: { color: GRID }, horzLines: { color: GRID } },
+      crosshair: { mode: 0 },
+      rightPriceScale: { borderColor: GRID, scaleMargins: { top: 0.15, bottom: 0 }, minimumWidth: 72 }, // match the price pane's axis width so the plots align
+      timeScale: { borderColor: GRID, visible: false, rightOffset: 6 }, // dates live on the price chart above
+    });
+    const hist = volChart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    hist.setData(bars.map((b, i) => ({
+      time: barTime(b),
+      value: b.volume || 0,
+      color: volume.thrust[i] ? THRUST_COLOR
+        : volume.elevated[i] ? THRUST_DIM
+        : (i > 0 && b.close >= bars[i - 1].close) ? VOL_UP_COLOR : VOL_DOWN_COLOR,
+    })));
+    // The baseline the multiple is measured against, drawn so the threshold is
+    // visible rather than asserted. Every bar is present (whitespace during the
+    // warmup) so this pane's time axis matches the price chart's exactly — the
+    // two sync by logical index, and a shorter series would shift sideways.
+    const avgLine = volChart.addLineSeries({
+      color: VOL_AVG_COLOR, lineWidth: 1, lineStyle: 2 /* dashed */,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      priceFormat: { type: 'volume' },
+    });
+    avgLine.setData(bars.map((b, i) => (volume.avg[i] == null ? { time: barTime(b) } : { time: barTime(b), value: volume.avg[i] })));
+    volChartRef.current = volChart;
+
+    // Two-way time-axis sync (pan/zoom together), guarded against feedback loops.
+    let syncing = false;
+    const onMain = (r) => { if (syncing || !r) return; syncing = true; try { volChart.timeScale().setVisibleLogicalRange(r); } finally { syncing = false; } };
+    const onVol = (r) => { if (syncing || !r) return; syncing = true; try { main.timeScale().setVisibleLogicalRange(r); } finally { syncing = false; } };
+    main.timeScale().subscribeVisibleLogicalRangeChange(onMain);
+    volChart.timeScale().subscribeVisibleLogicalRangeChange(onVol);
+    const lr = main.timeScale().getVisibleLogicalRange();
+    if (lr) volChart.timeScale().setVisibleLogicalRange(lr);
+
+    const ro = new ResizeObserver(() => { if (volContainerRef.current) volChart.applyOptions({ width: volContainerRef.current.clientWidth, height: volContainerRef.current.clientHeight }); });
+    ro.observe(el);
+
+    return () => {
+      ro.disconnect();
+      main.timeScale().unsubscribeVisibleLogicalRangeChange(onMain);
+      volChart.timeScale().unsubscribeVisibleLogicalRangeChange(onVol);
+      volChart.remove();
+      volChartRef.current = null;
+    };
+  }, [showVolume, bars, volume]);
 
   // RSI sub-band: push the oscillator and split the price scale so the bottom
   // ~22% is reserved for it; when off, give the candles the full height back.
@@ -447,6 +547,13 @@ function SignalChart({ token, symbol, fetchUrl }) {
   for (let i = engine.rsi.length - 1; i >= 0; i--) { if (engine.rsi[i] != null) { latestRsi = engine.rsi[i]; break; } }
   const displayRsi = hoverRsi != null ? hoverRsi : latestRsi;
   const rsiReadoutColor = displayRsi == null ? 'var(--text-secondary)' : displayRsi >= 70 ? '#ef4444' : displayRsi <= 30 ? '#10b981' : 'var(--text-secondary)';
+  // Relative-volume readout — the crosshair value when hovering, else the last
+  // bar with a warm baseline. Coloured only once it clears the threshold, so
+  // "1.4×" does not read as a signal in a pane whose signal colour is lime.
+  let latestRvol = null;
+  for (let i = volume.ratio.length - 1; i >= 0; i--) { if (volume.ratio[i] != null) { latestRvol = volume.ratio[i]; break; } }
+  const displayRvol = hoverRvol != null ? hoverRvol : latestRvol;
+  const rvolReadoutColor = displayRvol != null && displayRvol >= THRUST_MULT ? THRUST_COLOR : 'var(--text-secondary)';
   const sliderStyle = { accentColor: FAST_COLOR, cursor: 'pointer', width: '150px' };
   const capStyle = { fontSize: '0.72rem', color: 'var(--text-secondary)' };
 
@@ -494,6 +601,27 @@ function SignalChart({ token, symbol, fetchUrl }) {
           <span style={{ color: RSI_COLOR }}>━</span> RSI (14)
           {showRSI && displayRsi != null && <strong style={{ color: rsiReadoutColor }}>&nbsp;{displayRsi.toFixed(1)}</strong>}
         </label>
+        <label
+          title={volume.hasVolume
+            ? `Volume with its ${AVG_PERIOD}-day average. Lime = at least ${THRUST_MULT}× that average on an up close; bright lime is the day the signal fires, dim is a day it meets the bar without being a fresh call — the same run continuing, or the baseline still warming up.`
+            : 'This instrument reports no volume (index series carry none), so there is nothing to plot.'}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: volume.hasVolume ? 'pointer' : 'not-allowed', fontSize: '0.78rem', color: 'var(--text-secondary)', opacity: volume.hasVolume ? 1 : 0.55 }}
+        >
+          <input type="checkbox" checked={showVolume && volume.hasVolume} disabled={!volume.hasVolume} onChange={e => setShowVolume(e.target.checked)} style={{ accentColor: THRUST_COLOR, cursor: volume.hasVolume ? 'pointer' : 'not-allowed', width: '15px', height: '15px' }} />
+          <span style={{ color: THRUST_COLOR }}>▮</span> Volume ({AVG_PERIOD}d avg)
+          {!volume.hasVolume
+            ? <span style={{ opacity: 0.8 }}>— none reported</span>
+            : showVolume && displayRvol != null && <strong style={{ color: rvolReadoutColor }}>&nbsp;{displayRvol.toFixed(2)}×</strong>}
+        </label>
+        {/* The claim this pane makes, with its record attached. It is scored on
+            nse_bhavcopy against NIFTY, so a US chart says where the evidence
+            came from rather than implying it was measured on this symbol. */}
+        {showVolume && volume.hasVolume && (
+          <SignalScore
+            signal="volume_thrust"
+            label={market === 'US' ? '▮ Volume thrust (NSE record)' : '▮ Volume thrust'}
+          />
+        )}
         {showBB && squeeze.current != null && (
           <span
             title={`Bollinger Bandwidth = (Upper − Lower) ÷ Middle. A ${SQUEEZE_LOOKBACK}-bar low (squeeze) signals compressed volatility — a breakout is statistically more likely to follow.`}
@@ -536,6 +664,13 @@ function SignalChart({ token, symbol, fetchUrl }) {
         )}
       </div>
 
+      {/* Volume sub-pane (own volume axis, time-synced to the price chart above) */}
+      {showVolume && volume.hasVolume && !loading && !error && (
+        <div style={{ height: '110px', marginTop: '2px' }}>
+          <div ref={volContainerRef} style={{ width: '100%', height: '100%' }} />
+        </div>
+      )}
+
       {/* RSI sub-pane (own 0–100 axis, time-synced to the price chart above) */}
       {showRSI && !loading && !error && (
         <div style={{ height: '130px', marginTop: '2px' }}>
@@ -550,6 +685,12 @@ function SignalChart({ token, symbol, fetchUrl }) {
         {showBB && <span><span style={{ color: BB_COLOR }}>━</span> Bollinger ({BB_PERIOD}, {BB_MULT})</span>}
         {showBB && <span><span style={{ color: SQUEEZE_COLOR }}>━</span> Squeeze ({SQUEEZE_LOOKBACK}-day bandwidth low)</span>}
         {showRSI && <span><span style={{ color: RSI_COLOR }}>━</span> RSI (14) · 50 = Buy/Sell threshold, 30/70 guides</span>}
+        {showVolume && volume.hasVolume && (
+          <span>
+            <span style={{ color: THRUST_COLOR }}>▮</span> Volume thrust (≥{THRUST_MULT}× the <span style={{ color: VOL_AVG_COLOR }}>┄</span> {AVG_PERIOD}d average on an up close) ·
+            <span style={{ color: THRUST_DIM }}> ▮</span> dim = meets the bar but not a fresh call (run continuing, or baseline still warming) — counted once, not daily
+          </span>
+        )}
         <span style={{ fontStyle: 'italic', opacity: 0.8 }}>Hover a marker for the trigger detail</span>
       </div>
     </section>

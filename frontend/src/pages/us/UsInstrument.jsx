@@ -1261,7 +1261,7 @@ export default function UsInstrument() {
 
       {activeTab === 'signals' && (
         <div className="glass-panel" style={{ padding: '1rem' }}>
-          <SignalChart token={sym} symbol={sym} fetchUrl={`/api/us/historical-full/${sym}`} />
+          <SignalChart token={sym} symbol={sym} fetchUrl={`/api/us/historical-full/${sym}`} market="US" />
         </div>
       )}
 
