@@ -5,6 +5,8 @@ import {
   ResponsiveContainer, CartesianGrid, ReferenceLine, ReferenceDot,
   BarChart, Bar, Cell, LineChart, Line,
 } from 'recharts';
+import VolumePane from '../../components/VolumePane'
+import { hasTradedVolume } from '../../lib/volume';
 import { breakoutRank, breakoutLabel } from '../../lib/breakout';
 import { fmtDate } from '../../lib/formatDate';
 import { generateSignals } from '../../lib/signalEngine';
@@ -1479,7 +1481,9 @@ export default function UsInstrument() {
                       <ReferenceLine x={sessionBounds.close} stroke="#a855f7" strokeDasharray="4 4" strokeOpacity={0.7}
                         label={{ value: 'After hours', position: 'insideTopRight', fill: '#a855f7', fontSize: 10, fontWeight: 700 }} />
                     )}
-                    <XAxis dataKey="date" tickFormatter={fmtAxis} tick={{ fill: GREY, fontSize: 11 }} minTickGap={40} />
+                    {/* Labels move to the volume pane below when there is one,
+                        so the shared date axis is printed once. */}
+                    <XAxis dataKey="date" tickFormatter={fmtAxis} tick={hasTradedVolume(bars) ? false : { fill: GREY, fontSize: 11 }} height={hasTradedVolume(bars) ? 1 : undefined} minTickGap={40} />
                     <YAxis domain={['auto', 'auto']} tick={{ fill: GREY, fontSize: 11 }} width={55} tickFormatter={(v) => v.toFixed(0)} />
                     <Tooltip contentStyle={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '8px' }}
                       labelFormatter={(d) => new Date(d).toLocaleString('en-US')}
@@ -1549,6 +1553,9 @@ export default function UsInstrument() {
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
+              {/* Same data and same left/right margins as the chart above, so a
+                  bar lines up with its own bar of price. */}
+              <VolumePane data={bars} margin={{ top: 0, right: showSR ? 74 : 10, left: 0, bottom: 0 }} fmtAxisDate={fmtAxis} />
             </>
           )}
       </div>

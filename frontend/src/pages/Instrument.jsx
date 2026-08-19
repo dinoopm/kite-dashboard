@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceDot } from 'recharts'
+import VolumePane from '../components/VolumePane'
+import { hasTradedVolume } from '../lib/volume'
 import { format, parseISO } from 'date-fns'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 import AlertRow from '../components/alerts/AlertRow'
@@ -1874,7 +1876,11 @@ function Instrument() {
           })()}
 
           {/* Chart */}
-          <section className="glass-panel" style={{ height: '500px', padding: '1.5rem 1rem 1rem 1rem' }}>
+          {/* Flex column, not a calc() height on the chart: ResponsiveContainer
+              parses its height prop into a number and silently renders nothing
+              when handed "calc(100% - 90px)" — the box was the right size with
+              no SVG inside it. */}
+          <section className="glass-panel" style={{ height: '500px', padding: '1.5rem 1rem 1rem 1rem', display: 'flex', flexDirection: 'column' }}>
             {loading ? (
               <div className="loader"></div>
             ) : error ? (
@@ -1882,12 +1888,19 @@ function Instrument() {
             ) : data.length === 0 ? (
               <p>No historical data available for this timeline.</p>
             ) : (
+              <>
+              {/* Price and volume are two panes of one chart: same data, same
+                  left/right margins, so a bar sits under its own candle. The
+                  price pane drops its date labels when the volume pane is shown
+                  so the axis is printed once, at the bottom. */}
+              <div style={{ flex: 1, minHeight: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data} margin={{ top: 10, right: 78, left: 0, bottom: 0 }}>
                   <XAxis
                     dataKey="date"
                     stroke="var(--text-secondary)"
-                    tick={{ fill: 'var(--text-secondary)', fontSize: 12 }}
+                    tick={hasTradedVolume(data) ? false : { fill: 'var(--text-secondary)', fontSize: 12 }}
+                    height={hasTradedVolume(data) ? 1 : undefined}
                     tickFormatter={fmtAxisDate}
                     interval="preserveStartEnd"
                     minTickGap={56}
@@ -1996,6 +2009,9 @@ function Instrument() {
                   <Line type="monotone" name="Price" dataKey="close" stroke="var(--accent)" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
+              </div>
+              <VolumePane data={data} margin={{ top: 0, right: 78, left: 0, bottom: 0 }} fmtAxisDate={fmtAxisDate} />
+              </>
             )}
           </section>
 

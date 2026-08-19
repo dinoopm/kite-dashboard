@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createChart } from 'lightweight-charts';
+import { hasTradedVolume } from '../lib/volume';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 import { generateSignals } from '../lib/signalEngine';
 
@@ -17,6 +18,10 @@ const BB_COLOR = '#a78bfa';   // violet — distinct from the SMA blue/orange
 const DEADCAT_COLOR = '#fbbf24'; // amber — flagged/ignored buy
 const SQUEEZE_COLOR = '#ec4899'; // magenta — BB-width squeeze highlight
 const RSI_COLOR = '#22d3ee';     // cyan — RSI oscillator (bottom sub-band)
+// Volume bars take the candle colours at half opacity rather than a colour of
+// their own: they describe the same up/down day the candle above them does, and
+// a third hue here would compete with the signal markers for attention.
+const VOLUME_COLOR = '#26a69a';
 const BB_PERIOD = 20;
 const BB_MULT = 2;
 const SQUEEZE_LOOKBACK = 30;     // "lowest in the last 30 days" window
@@ -70,6 +75,7 @@ function SignalChart({ token, symbol, fetchUrl }) {
   const [strict, setStrict] = useState(false);
   const [showBB, setShowBB] = useState(false);
   const [showRSI, setShowRSI] = useState(true);
+  const [showVolume, setShowVolume] = useState(true);
   const [hoverRsi, setHoverRsi] = useState(null); // RSI under the crosshair
 
   const containerRef = useRef(null);
@@ -82,6 +88,7 @@ function SignalChart({ token, symbol, fetchUrl }) {
   const bbLowerRef = useRef(null);
   const bbUpperSqRef = useRef(null);
   const bbLowerSqRef = useRef(null);
+  const volumeRef = useRef(null);
   const rsiArrRef = useRef([]); // latest RSI series, read by the crosshair handler
   const rsiContainerRef = useRef(null); // separate RSI sub-pane (own 0–100 axis)
   const rsiChartRef = useRef(null);
@@ -227,6 +234,19 @@ function SignalChart({ token, symbol, fetchUrl }) {
     const fast = chart.addLineSeries({ color: FAST_COLOR, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     const slow = chart.addLineSeries({ color: SLOW_COLOR, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
 
+    // Volume shares the candle pane as an overlay rather than taking a pane of
+    // its own, because the question it answers here is "did this signal come on
+    // conviction?" — which is read against the bar directly above it. An empty
+    // priceScaleId gives it a private scale, so volume in millions never
+    // rescales the price axis; the scale margins pin it to the bottom ~15%.
+    const volume = chart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: '',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+    volume.priceScale().applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+
     // RSI is rendered in a SEPARATE synced pane below (own 0–100 axis), so its
     // crosshair shows RSI values — not the price scale. See the showRSI effect.
 
@@ -282,6 +302,7 @@ function SignalChart({ token, symbol, fetchUrl }) {
     bbLowerRef.current = bbLower;
     bbUpperSqRef.current = bbUpperSq;
     bbLowerSqRef.current = bbLowerSq;
+    volumeRef.current = volume;
 
     // Keep the chart sized to its container (explicit, so the time axis always
     // gets its full height and the date labels aren't clipped at the bottom).
@@ -322,6 +343,26 @@ function SignalChart({ token, symbol, fetchUrl }) {
       bbLowerSqRef.current.setData([]);
     }
   }, [bb, squeeze, showBB, bars]);
+
+  // Push (or clear) the volume histogram on toggle / reload.
+  //
+  // Bars are coloured by the day's own direction (close vs open), matching the
+  // candles above them, so a heavy red bar reads as heavy selling at a glance.
+  // An index has no traded volume — Kite reports 0 on every bar of NIFTY 50 —
+  // and hasTradedVolume keeps the series empty there rather than drawing a flat
+  // line along the axis, which would read as "nothing traded".
+  useEffect(() => {
+    if (!volumeRef.current) return;
+    if (!showVolume || !hasTradedVolume(bars)) {
+      volumeRef.current.setData([]);
+      return;
+    }
+    volumeRef.current.setData(bars.map(b => ({
+      time: barTime(b),
+      value: b.volume,
+      color: b.close >= b.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)',
+    })));
+  }, [bars, showVolume]);
 
   // RSI sub-band: push the oscillator and split the price scale so the bottom
   // ~22% is reserved for it; when off, give the candles the full height back.
@@ -488,6 +529,13 @@ function SignalChart({ token, symbol, fetchUrl }) {
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showBB} onChange={e => setShowBB(e.target.checked)} style={{ accentColor: BB_COLOR, cursor: 'pointer', width: '15px', height: '15px' }} />
           <span style={{ color: BB_COLOR }}>━</span> Bollinger Bands <span style={{ opacity: 0.7 }}>({BB_PERIOD}, {BB_MULT})</span>
+        </label>
+        <label
+          title={hasTradedVolume(bars) ? undefined : 'This instrument reports no traded volume — indices are calculated, not traded.'}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: hasTradedVolume(bars) ? 'pointer' : 'not-allowed', fontSize: '0.78rem', color: 'var(--text-secondary)', opacity: hasTradedVolume(bars) ? 1 : 0.5 }}>
+          <input type="checkbox" checked={showVolume && hasTradedVolume(bars)} disabled={!hasTradedVolume(bars)} onChange={e => setShowVolume(e.target.checked)} style={{ accentColor: VOLUME_COLOR, cursor: hasTradedVolume(bars) ? 'pointer' : 'not-allowed', width: '15px', height: '15px' }} />
+          <span style={{ color: VOLUME_COLOR }}>▮</span> Volume
+          {!hasTradedVolume(bars) && <span style={{ opacity: 0.8 }}>&nbsp;(none — index)</span>}
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showRSI} onChange={e => setShowRSI(e.target.checked)} style={{ accentColor: RSI_COLOR, cursor: 'pointer', width: '15px', height: '15px' }} />
