@@ -17,7 +17,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          # 22, not 20: @supabase/supabase-js 2.112+ declares node >=22 and its
+          # realtime client throws at createClient() on 20 ("native WebSocket
+          # not found" — WebSocket only became a global in Node 22). Every
+          # scraper here opens a Supabase client on its first line, so on 20
+          # the whole workflow dies before it fetches anything.
+          node-version: '22'
           cache: 'npm'
           
       - name: Install Dependencies
