@@ -126,6 +126,12 @@ const PRICE_SIGNALS = [
 // should be visibly unscored, not silently absent from the scorecard.
 const BLOCKED_SIGNALS = [
   {
+    name: 'analyst_target_upside',
+    label: 'Analyst target upside',
+    source: 'recorded',
+    blockedReason: 'Unscoreable today, and — unlike the price signals here — NOT fixable by waiting for bars to accumulate. Consensus targets are fetched live from Yahoo quoteSummary by /api/holdings-fundamentals and never stored, so no history of them exists. Yahoo exposes only the CURRENT consensus, and targets are revised continuously with no vintage record, which rules out reconstruction in principle: bhavcopy is not revised, so a price detector can be re-run over the past honestly, whereas "what did analysts target on 2026-03-01" is not recoverable from any source this app can reach. It also inherits a selection problem no sample size cures — coverage is not random, and a target is a sell-side artefact whose base rate is overwhelmingly bullish, so "upside > 0" selects almost the whole covered universe rather than a subset. It becomes scoreable only from the day a job starts snapshotting targets, and n then grows forward at one observation per symbol per day, never retroactively. Until then the Portfolio filter is a way to sort what you already own, not evidence that high-upside names outperform.',
+  },
+  {
     name: 'vcp_setup',
     label: 'VCP setup',
     minBars: 200 + VCP_MIN_BARS,

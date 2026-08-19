@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import EyeIcon from '../components/EyeIcon'
 import StopProposals from '../components/StopProposals'
+import SignalScore from '../components/SignalScore'
 
 // X-Ray badge palette — same tones the analytics panels use.
 const XRAY_TONES = {
@@ -39,6 +40,9 @@ function Portfolio() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
+  // Minimum analyst upside, as a percentage. Empty string = no filter, kept
+  // distinct from 0 because "at least 0%" is a real and different request.
+  const [minUpside, setMinUpside] = useState('')
   const [sortField, setSortField] = useState('tradingsymbol')
   const [sortDirection, setSortDirection] = useState('asc')
   const [activeTab, setActiveTab] = useState('equity')
@@ -163,6 +167,27 @@ function Portfolio() {
   const xrayBySymbol = {};
   for (const r of xray?.holdings || []) xrayBySymbol[r.symbol] = r;
 
+  // Upside to the mean analyst target, as a percentage of the current price.
+  // Null — not zero — when the name has no coverage or no live price, so an
+  // uncovered holding is never treated as "0% upside" and quietly ranked.
+  const upsidePctFor = (item) => {
+    const f = fundamentals[item.tradingsymbol];
+    if (!f || f.targetMean == null) return null;
+    const cur = f.currentPrice ?? item.last_price;
+    if (!cur) return null;
+    return ((f.targetMean - cur) / cur) * 100;
+  };
+
+  const minUpsideNum = minUpside === '' ? null : Number(minUpside);
+  const upsideFilterOn = minUpsideNum != null && Number.isFinite(minUpsideNum);
+
+  // Holdings the filter removes for want of coverage rather than for failing
+  // the test. Counted so the UI can say so: a list that silently shrinks looks
+  // like "nothing qualifies" when the truth is "nobody publishes a target".
+  const uncoveredHidden = upsideFilterOn
+    ? (holdings || []).filter(h => upsidePctFor(h) == null).length
+    : 0;
+
   const filteredAndSortedHoldings = (holdings || [])
     .filter(item => {
       const q = searchTerm.toLowerCase();
@@ -170,6 +195,11 @@ function Portfolio() {
         item.tradingsymbol.toLowerCase().includes(q) ||
         (companyNames[item.tradingsymbol] || '').toLowerCase().includes(q)
       );
+    })
+    .filter(item => {
+      if (!upsideFilterOn) return true;
+      const up = upsidePctFor(item);
+      return up != null && up >= minUpsideNum;
     })
     .map(item => {
       const q = (item.quantity || 0) + (item.t1_quantity || 0);
@@ -184,9 +214,11 @@ function Portfolio() {
       return { ...item, displayQuantity: q, currentValue, investment, itemPL, itemPLPercent, dayChange, dayChangePct, allocation, xrayScore: xr?.score ?? -1, xrayBadges: xr?.badges ?? [] };
     })
     .sort((a, b) => {
-      const sortVal = (h) => (sortField === 'pe' || sortField === 'targetMean')
-        ? (fundamentals[h.tradingsymbol]?.[sortField] ?? null)
-        : h[sortField];
+      const sortVal = (h) => {
+        if (sortField === 'upsidePct') return upsidePctFor(h);
+        if (sortField === 'pe' || sortField === 'targetMean') return fundamentals[h.tradingsymbol]?.[sortField] ?? null;
+        return h[sortField];
+      };
       let valA = sortVal(a);
       let valB = sortVal(b);
       if (typeof valA === 'string') valA = valA.toLowerCase();
@@ -376,6 +408,49 @@ function Portfolio() {
               outline: 'none'
             }}
           />
+          {/* Analyst-upside filter. Only on the equity tab — mutual funds have
+              no sell-side coverage, so the control would filter on a column
+              that does not exist there. */}
+          {activeTab === 'equity' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <label htmlFor="min-upside" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                Analyst upside ≥
+              </label>
+              <input
+                id="min-upside"
+                type="number"
+                inputMode="numeric"
+                step="5"
+                placeholder="any"
+                value={minUpside}
+                onChange={(e) => setMinUpside(e.target.value)}
+                title="Show only holdings whose mean analyst target is at least this far above the current price. Negative values are allowed — -10 keeps names trading up to 10% ABOVE their target."
+                style={{
+                  padding: '0.6rem 0.5rem',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border)',
+                  background: 'var(--bg-dark)',
+                  color: 'var(--text-primary)',
+                  width: '84px',
+                  outline: 'none',
+                }}
+              />
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>%</span>
+              {minUpside !== '' && (
+                <button
+                  onClick={() => setMinUpside('')}
+                  title="Clear the upside filter"
+                  style={{
+                    padding: '0.35rem 0.6rem', borderRadius: '8px', border: '1px solid var(--border)',
+                    background: 'var(--bg-card)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem',
+                  }}
+                >clear</button>
+              )}
+              {/* The filter turns a displayed number into a selection rule, so
+                  it carries its track record — which says it has none. */}
+              <SignalScore signal="analyst_target_upside" label="Target upside" />
+            </div>
+          )}
           <button
             onClick={toggleHideAmounts}
             title={hideAmounts ? 'Show amounts' : 'Hide amounts'}
@@ -520,6 +595,12 @@ function Portfolio() {
               </div>
             );
           })()}
+          {upsideFilterOn && uncoveredHidden > 0 && (
+            <p style={{ margin: '0 0 0.75rem 0', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+              Filtering on analyst upside hides {uncoveredHidden} holding{uncoveredHidden === 1 ? '' : 's'} with no
+              published target. They are excluded for want of coverage, not for failing the test.
+            </p>
+          )}
           {filteredAndSortedHoldings.length > 0 ? (
             <div style={{ overflowX: 'auto' }}>
               <table className="interactive-table">
@@ -537,7 +618,8 @@ function Portfolio() {
                     <th onClick={() => handleSort('itemPL')} style={{cursor: 'pointer'}}>P&L <SortIcon field="itemPL"/></th>
                     <th onClick={() => handleSort('dayChangePct')} style={{cursor: 'pointer'}}>Day Chg. <SortIcon field="dayChangePct"/></th>
                     <th onClick={() => handleSort('allocation')} style={{cursor: 'pointer'}}>Allocation <SortIcon field="allocation"/></th>
-                    <th onClick={() => handleSort('targetMean')} style={{cursor: 'pointer'}}>Target <SortIcon field="targetMean"/></th>
+                    <th onClick={() => handleSort('targetMean')} style={{cursor: 'pointer'}} title="Mean analyst target. Click the % beside it to sort by upside instead.">Target <SortIcon field="targetMean"/></th>
+                    <th onClick={() => handleSort('upsidePct')} style={{cursor: 'pointer'}} title="Distance from the current price to the mean analyst target, which is what the filter above tests.">Upside <SortIcon field="upsidePct"/></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -577,12 +659,16 @@ function Portfolio() {
                         {(() => {
                           const f = fundamentals[item.tradingsymbol];
                           if (!f || f.targetMean == null) return '—';
-                          const cur = f.currentPrice ?? item.last_price;
-                          const up = cur ? ((f.targetMean - cur) / cur) * 100 : null;
-                          return <>
-                            ₹{f.targetMean.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                            {up != null && <span className={up >= 0 ? 'positive' : 'negative'} style={{ fontSize: '0.72rem', marginLeft: '0.3rem' }}>{up >= 0 ? '+' : ''}{up.toFixed(0)}%</span>}
-                          </>;
+                          return <>₹{f.targetMean.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</>;
+                        })()}
+                      </td>
+                      <td>
+                        {(() => {
+                          const up = upsidePctFor(item);
+                          // An em dash, not 0% — no coverage is not agreement
+                          // that the stock is fairly priced.
+                          if (up == null) return <span style={{ color: 'var(--text-secondary)' }}>—</span>;
+                          return <span className={up >= 0 ? 'positive' : 'negative'}>{up >= 0 ? '+' : ''}{up.toFixed(0)}%</span>;
                         })()}
                       </td>
                     </tr>
