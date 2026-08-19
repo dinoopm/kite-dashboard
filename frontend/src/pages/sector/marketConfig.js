@@ -7,6 +7,13 @@
 // single implementation.
 
 // ETF tickers are opaque, so the US drill-down maps them to readable names.
+//
+// This duplicates US_LABELS in backend/alpaca.js, and the duplication has a
+// cost worth knowing: the seven thematic rows were added and renamed on the
+// backend only, so their drill-downs kept showing the bare ticker until this
+// copy caught up. The page now prefers the name the API returns, which makes
+// the backend authoritative; this map is the pre-fetch fallback, used for the
+// breadcrumb and the "Loading …" line before the response lands.
 const US_LABELS = {
   SPY: 'S&P 500', QQQ: 'Nasdaq 100', DIA: 'Dow 30', IWM: 'Russell 2000',
   VTI: 'Total Market', RSP: 'S&P 500 Equal Wt', MDY: 'S&P MidCap 400',
@@ -17,6 +24,9 @@ const US_LABELS = {
   XLC: 'Communication Services', SMH: 'Semiconductors', XBI: 'Biotech',
   KRE: 'Regional Banks', ITB: 'Homebuilders', XOP: 'Oil & Gas E&P',
   XRT: 'Retail', IYT: 'Transports', GDX: 'Gold Miners', IGV: 'Software',
+  CIBR: 'Cybersecurity', UFO: 'Space Technology', ITA: 'Aerospace & Defence',
+  QTUM: 'Quantum & Machine Learning', WQTM: 'Quantum Computing (pure)',
+  HYDR: 'Hydrogen Energy', REMX: 'Rare Earth Metals', URA: 'Uranium',
 };
 
 export const INDIA_MARKET = {

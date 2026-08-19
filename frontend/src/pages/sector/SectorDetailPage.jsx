@@ -57,7 +57,11 @@ export default function SectorDetailPage({ market }) {
   const navigate = useNavigate();
   const location = useLocation();
   const sectorKey = decodeURIComponent(sectorId);
-  const sectorName = market.sectorNameFor(sectorKey);
+  // The static per-market map is the fallback; the API carries the same label
+  // and is authoritative once it lands, so a rename on the backend shows here
+  // without the frontend copy having to be updated in step.
+  const [fetchedName, setFetchedName] = useState(null);
+  const sectorName = fetchedName || market.sectorNameFor(sectorKey);
 
   const { momentumScore: inheritedScore = null, rrgQuadrant: inheritedQuadrant = null } = location.state || {};
 
@@ -190,6 +194,7 @@ export default function SectorDetailPage({ market }) {
         // Constituents
         if (constRes.status === 'fulfilled' && constRes.value?.constituents) {
           setConstituents(constRes.value.constituents);
+          if (constRes.value.sector?.name) setFetchedName(constRes.value.sector.name);
         } else if (constRes.status === 'fulfilled' && constRes.value?.error) {
           console.warn('sector-constituents:', constRes.value.error);
         }
