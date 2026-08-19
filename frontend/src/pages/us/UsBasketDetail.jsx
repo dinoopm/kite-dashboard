@@ -612,7 +612,7 @@ export default function UsBasketDetail() {
         ) : alertsError ? (
           <div style={{ padding: '0.7rem 1rem', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: '8px', color: '#fca5a5', fontSize: '0.85rem' }}>{alertsError}</div>
         ) : (
-          <TechnicalAlertsPanel alerts={alerts || []} summary={alertsSummary} lastUpdated={alertsLastUpdated} />
+          <TechnicalAlertsPanel alerts={alerts || []} summary={alertsSummary} lastUpdated={alertsLastUpdated} market="US" />
         )
       )}
     </div>

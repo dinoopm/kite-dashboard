@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createChart } from 'lightweight-charts';
 import { hasTradedVolume } from '../lib/volume';
+import { volumeStats, confirmedAt, THRUST_MULT, AVG_PERIOD, CONFIRM_WINDOW } from '../lib/volumeThrust';
+import SignalScore from './SignalScore';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 import { generateSignals } from '../lib/signalEngine';
 
@@ -22,6 +24,12 @@ const RSI_COLOR = '#22d3ee';     // cyan — RSI oscillator (bottom sub-band)
 // their own: they describe the same up/down day the candle above them does, and
 // a third hue here would compete with the signal markers for attention.
 const VOLUME_COLOR = '#26a69a';
+// Lime marks a bar that clears the volume-thrust bar. Bright on the day the
+// signal FIRES, dim while the same run continues — the recorder writes one
+// emission per run, so drawing every heavy day alike would suggest several
+// times more evidence than exists.
+const THRUST_COLOR = '#a3e635';
+const THRUST_DIM = 'rgba(163,230,53,0.35)';
 const BB_PERIOD = 20;
 const BB_MULT = 2;
 const SQUEEZE_LOOKBACK = 30;     // "lowest in the last 30 days" window
@@ -63,7 +71,15 @@ const barTime = (b) => {
 // Slow SMA stays warm even on a 1-month view; these only pan/zoom the time axis.
 const VIEW_DAYS = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '3Y': 1095, '5Y': null };
 
-function SignalChart({ token, symbol, fetchUrl }) {
+// The periods the backend registry scores. The sliders can move off them, and
+// when they do the markers stop being the rule anything has a record for.
+const SCORED_FAST = 10;
+const SCORED_SLOW = 50;
+
+// `market` is the market this chart is SHOWING. signal_emissions is built from
+// nse_bhavcopy and scored against NIFTY, so off 'IN' the badges below say so
+// rather than lending Indian numbers to a US symbol.
+function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
   const [view, setView] = useState('1Y');
   const [bars, setBars] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -77,6 +93,7 @@ function SignalChart({ token, symbol, fetchUrl }) {
   const [showRSI, setShowRSI] = useState(true);
   const [showVolume, setShowVolume] = useState(true);
   const [hoverRsi, setHoverRsi] = useState(null); // RSI under the crosshair
+  const [hoverRvol, setHoverRvol] = useState(null); // relative volume under the crosshair
 
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -90,6 +107,7 @@ function SignalChart({ token, symbol, fetchUrl }) {
   const bbLowerSqRef = useRef(null);
   const volumeRef = useRef(null);
   const rsiArrRef = useRef([]); // latest RSI series, read by the crosshair handler
+  const volRatioArrRef = useRef([]); // latest relative-volume series, same reason
   const rsiContainerRef = useRef(null); // separate RSI sub-pane (own 0–100 axis)
   const rsiChartRef = useRef(null);
   const tooltipRef = useRef(null);
@@ -141,6 +159,34 @@ function SignalChart({ token, symbol, fetchUrl }) {
     () => (bars.length ? generateSignals(bars, fastPeriod, slowPeriod) : { fast: [], slow: [], mid: [], rsi: [], signals: [] }),
     [bars, fastPeriod, slowPeriod]
   );
+
+  // Relative volume and the thrust markers. The maths lives in ../lib/volumeThrust
+  // and mirrors the `volume_thrust` detector in backend/signals/registry.js, so
+  // the bars highlighted here are exactly the ones the scorecard has rows for.
+  const volume = useMemo(() => volumeStats(bars), [bars]);
+
+  // Volume confirmation for each Buy: a thrust on the cross bar or within the
+  // CONFIRM_WINDOW sessions before it — the question `ma_cross_volume` asks, so
+  // the marker and the badge beside it describe one rule.
+  //
+  // Confirmation is ATTACHED to the buys, never used to drop them. The dead-cat
+  // guard set that precedent in this chart: a signal the engine distrusts is
+  // drawn differently and counted apart, not hidden. Hiding it would make the
+  // filter unfalsifiable on screen — the firings it would discard are exactly
+  // the ones that decide whether it is worth having.
+  const confirmation = useMemo(() => {
+    const map = new Map();
+    for (const sig of engine.signals) {
+      if (sig.type !== 'buy' || sig.deadCat) continue;
+      const at = confirmedAt(volume, sig.index);
+      map.set(sig.index, {
+        confirmed: at >= 0,
+        barsAgo: at >= 0 ? sig.index - at : null,
+        ratio: at >= 0 ? volume.ratio[at] : volume.ratio[sig.index],
+      });
+    }
+    return map;
+  }, [engine, volume]);
 
   // Bollinger Bands recompute only when the price series changes (fixed 20, 2).
   const bb = useMemo(
@@ -267,6 +313,16 @@ function SignalChart({ token, symbol, fetchUrl }) {
       }
       setHoverRsi(param.point && rsiVal != null ? rsiVal : null);
 
+      // Same trick for relative volume, so the control-panel readout follows
+      // the cursor rather than only reporting the last bar.
+      let rvolVal = null;
+      const varr = volRatioArrRef.current;
+      if (param.logical != null && varr) {
+        const idx = Math.round(param.logical);
+        if (idx >= 0 && idx < varr.length) rvolVal = varr[idx];
+      }
+      setHoverRvol(param.point && rvolVal != null ? rvolVal : null);
+
       const tip = tooltipRef.current;
       if (!tip) return;
       const sig = param.time != null ? signalByTimeRef.current.get(param.time) : null;
@@ -283,9 +339,17 @@ function SignalChart({ token, symbol, fetchUrl }) {
       }
       const verb = sig.type === 'buy' ? 'Buy' : 'Sell';
       const dir = sig.type === 'buy' ? 'crossed above' : 'crossed below';
+      // The unconfirmed case is spelled out rather than left blank: an absent
+      // line reads as "nothing to report", and the absence of volume behind a
+      // cross IS the report.
+      const volLine = !sig.vol ? ''
+        : sig.vol.confirmed
+          ? `<br/><span style="color:${THRUST_COLOR}">✓ Volume ${sig.vol.ratio?.toFixed(2)}× the ${AVG_PERIOD}d average${sig.vol.barsAgo ? `, ${sig.vol.barsAgo} session${sig.vol.barsAgo > 1 ? 's' : ''} earlier` : ' on the cross bar'}</span>`
+          : `<br/><span style="opacity:0.75">No volume thrust in the ${CONFIRM_WINDOW} sessions before this cross${sig.vol.ratio != null ? ` (${sig.vol.ratio.toFixed(2)}× on the day)` : ''}</span>`;
       tip.innerHTML = `<strong style="color:${sig.type === 'buy' ? BUY_COLOR : SELL_COLOR}">${verb} Signal Triggered</strong><br/>`
         + `Fast MA (${sig.fastPeriod}) ${dir} Slow MA (${sig.slowPeriod})<br/>`
-        + `RSI at ${sig.rsi.toFixed(1)}`;
+        + `RSI at ${sig.rsi.toFixed(1)}`
+        + volLine;
       tip.style.display = 'block';
       const cw = containerRef.current.clientWidth;
       const left = Math.min(Math.max(param.point.x + 14, 8), cw - 190);
@@ -344,10 +408,19 @@ function SignalChart({ token, symbol, fetchUrl }) {
     }
   }, [bb, squeeze, showBB, bars]);
 
+  useEffect(() => { volRatioArrRef.current = volume.ratio; }, [volume]);
+
   // Push (or clear) the volume histogram on toggle / reload.
   //
   // Bars are coloured by the day's own direction (close vs open), matching the
-  // candles above them, so a heavy red bar reads as heavy selling at a glance.
+  // candles above them, so a heavy red bar reads as heavy selling at a glance —
+  // EXCEPT where the bar clears the volume-thrust threshold, which takes lime.
+  //
+  // The two comparisons deliberately differ: the teal/red split is close vs
+  // OPEN, matching the candle body drawn above it, while a thrust is close vs
+  // the PREVIOUS close, because that is what the recorded signal means by "an
+  // up day". Aligning them by changing the detector would silently redefine a
+  // signal that already has rows in signal_emissions.
   // An index has no traded volume — Kite reports 0 on every bar of NIFTY 50 —
   // and hasTradedVolume keeps the series empty there rather than drawing a flat
   // line along the axis, which would read as "nothing traded".
@@ -357,12 +430,14 @@ function SignalChart({ token, symbol, fetchUrl }) {
       volumeRef.current.setData([]);
       return;
     }
-    volumeRef.current.setData(bars.map(b => ({
+    volumeRef.current.setData(bars.map((b, i) => ({
       time: barTime(b),
       value: b.volume,
-      color: b.close >= b.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)',
+      color: volume.thrust[i] ? THRUST_COLOR
+        : volume.elevated[i] ? THRUST_DIM
+        : b.close >= b.open ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)',
     })));
-  }, [bars, showVolume]);
+  }, [bars, showVolume, volume]);
 
   // RSI sub-band: push the oscillator and split the price scale so the bottom
   // ~22% is reserved for it; when off, give the candles the full height back.
@@ -428,24 +503,27 @@ function SignalChart({ token, symbol, fetchUrl }) {
     const map = new Map();
     const markers = visibleSignals.map((s) => {
       const time = barTime(s.bar);
-      map.set(time, s);
+      map.set(time, { ...s, vol: confirmation.get(s.index) || null });
       // Dead-cat-bounce buys are flagged, not acted on: amber circle below the
       // bar instead of a green buy arrow.
       if (s.type === 'buy' && s.deadCat) {
         return { time, position: 'belowBar', color: DEADCAT_COLOR, shape: 'circle', text: 'DC' };
       }
       const buy = s.type === 'buy';
+      // A buy with volume behind it gets a tick — one more fact on the same
+      // marker, not a different shape and not a hidden sibling.
+      const tick = buy && confirmation.get(s.index)?.confirmed ? '✓' : '';
       return {
         time,
         position: buy ? 'belowBar' : 'aboveBar',
         color: buy ? BUY_COLOR : SELL_COLOR,
         shape: buy ? 'arrowUp' : 'arrowDown',
-        text: strict ? (buy ? 'Long' : 'Short') : (buy ? 'B' : 'S'),
+        text: strict ? (buy ? `Long${tick}` : 'Short') : (buy ? `B${tick}` : 'S'),
       };
     });
     signalByTimeRef.current = map;
     candleRef.current.setMarkers(markers);
-  }, [visibleSignals, strict, bars]);
+  }, [visibleSignals, strict, bars, confirmation]);
 
   // Zoom the time axis to the chosen view (runs after chart creation since both
   // depend on `bars`, and on its own when the view button changes).
@@ -488,6 +566,15 @@ function SignalChart({ token, symbol, fetchUrl }) {
   for (let i = engine.rsi.length - 1; i >= 0; i--) { if (engine.rsi[i] != null) { latestRsi = engine.rsi[i]; break; } }
   const displayRsi = hoverRsi != null ? hoverRsi : latestRsi;
   const rsiReadoutColor = displayRsi == null ? 'var(--text-secondary)' : displayRsi >= 70 ? '#ef4444' : displayRsi <= 30 ? '#10b981' : 'var(--text-secondary)';
+  const confirmedBuys = visibleSignals.filter(s => s.type === 'buy' && !s.deadCat && confirmation.get(s.index)?.confirmed).length;
+  // Relative volume — the crosshair value when hovering, else the last bar with
+  // a warm baseline. Coloured only once it clears the threshold, so "1.4×" does
+  // not read as a signal.
+  let latestRvol = null;
+  for (let i = volume.ratio.length - 1; i >= 0; i--) { if (volume.ratio[i] != null) { latestRvol = volume.ratio[i]; break; } }
+  const displayRvol = hoverRvol != null ? hoverRvol : latestRvol;
+  const rvolReadoutColor = displayRvol != null && displayRvol >= THRUST_MULT ? THRUST_COLOR : 'var(--text-secondary)';
+  const atScoredSettings = fastPeriod === SCORED_FAST && slowPeriod === SCORED_SLOW;
   const sliderStyle = { accentColor: FAST_COLOR, cursor: 'pointer', width: '150px' };
   const capStyle = { fontSize: '0.72rem', color: 'var(--text-secondary)' };
 
@@ -536,6 +623,11 @@ function SignalChart({ token, symbol, fetchUrl }) {
           <input type="checkbox" checked={showVolume && hasTradedVolume(bars)} disabled={!hasTradedVolume(bars)} onChange={e => setShowVolume(e.target.checked)} style={{ accentColor: VOLUME_COLOR, cursor: hasTradedVolume(bars) ? 'pointer' : 'not-allowed', width: '15px', height: '15px' }} />
           <span style={{ color: VOLUME_COLOR }}>▮</span> Volume
           {!hasTradedVolume(bars) && <span style={{ opacity: 0.8 }}>&nbsp;(none — index)</span>}
+          {showVolume && hasTradedVolume(bars) && displayRvol != null && (
+            <strong style={{ color: rvolReadoutColor }} title={`Volume against its trailing ${AVG_PERIOD}-session average. ${THRUST_MULT}× or more on an up close is a volume thrust — the lime bars.`}>
+              &nbsp;{displayRvol.toFixed(2)}×
+            </strong>
+          )}
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showRSI} onChange={e => setShowRSI(e.target.checked)} style={{ accentColor: RSI_COLOR, cursor: 'pointer', width: '15px', height: '15px' }} />
@@ -556,10 +648,37 @@ function SignalChart({ token, symbol, fetchUrl }) {
           </span>
         )}
         <span style={{ marginLeft: 'auto', fontSize: '0.78rem', fontWeight: 700, display: 'flex', gap: '0.75rem' }}>
-          <span style={{ color: BUY_COLOR }}>▲ {buyCount} buy</span>
+          <span style={{ color: BUY_COLOR }}>
+            ▲ {buyCount} buy
+            {hasTradedVolume(bars) && buyCount > 0 && (
+              <span style={{ color: THRUST_COLOR, fontWeight: 600 }} title={`${confirmedBuys} of ${buyCount} had a volume thrust on the cross bar or within the previous ${CONFIRM_WINDOW} sessions.`}>
+                {' '}({confirmedBuys}✓)
+              </span>
+            )}
+          </span>
           <span style={{ color: SELL_COLOR }}>▼ {sellCount} sell</span>
           {deadCatCount > 0 && <span style={{ color: DEADCAT_COLOR }} title="Golden-cross buys ignored as likely dead-cat bounces (below the 20-bar middle band after a sharp drop)">⊘ {deadCatCount} dead-cat</span>}
         </span>
+      </div>
+
+      {/* What the Buy markers are actually worth — the two halves side by side,
+          because "volume-confirmed looks better" is only a claim until the
+          unconfirmed half is on screen next to it. */}
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.7rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+        {atScoredSettings ? (
+          <>
+            <span>Golden-cross buys:</span>
+            <SignalScore signal="ma_cross_up" label="all" market={market} />
+            <SignalScore signal="ma_cross_volume" label="✓ volume-confirmed" market={market} />
+            <SignalScore signal="ma_cross_quiet" label="✗ no volume behind it" market={market} />
+            {hasTradedVolume(bars) && <SignalScore signal="volume_thrust" label="▮ volume thrust" market={market} />}
+          </>
+        ) : (
+          <span>
+            Markers are a custom {fastPeriod}/{slowPeriod} variant — the scored rule is {SCORED_FAST}/{SCORED_SLOW},
+            so no track record applies to what is drawn here.
+          </span>
+        )}
       </div>
 
       {/* Price chart */}
@@ -598,6 +717,12 @@ function SignalChart({ token, symbol, fetchUrl }) {
         {showBB && <span><span style={{ color: BB_COLOR }}>━</span> Bollinger ({BB_PERIOD}, {BB_MULT})</span>}
         {showBB && <span><span style={{ color: SQUEEZE_COLOR }}>━</span> Squeeze ({SQUEEZE_LOOKBACK}-day bandwidth low)</span>}
         {showRSI && <span><span style={{ color: RSI_COLOR }}>━</span> RSI (14) · 50 = Buy/Sell threshold, 30/70 guides</span>}
+        {showVolume && hasTradedVolume(bars) && (
+          <span>
+            <span style={{ color: THRUST_COLOR }}>▮</span> Volume thrust (≥{THRUST_MULT}× the {AVG_PERIOD}d average on an up close) ·
+            <span style={{ color: THRUST_DIM }}> ▮</span> dim = meets the bar but not a fresh call — counted once, not daily
+          </span>
+        )}
         <span style={{ fontStyle: 'italic', opacity: 0.8 }}>Hover a marker for the trigger detail</span>
       </div>
     </section>

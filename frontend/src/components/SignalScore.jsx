@@ -20,12 +20,30 @@ const TONE = {
   unscoreable:   { color: '#fcd34d', border: 'rgba(252,211,77,0.35)', bg: 'rgba(252,211,77,0.08)' },
 }
 
+// Everything in signal_emissions comes from nse_bhavcopy and is scored against
+// NIFTY 50. That is a fact about the DATA, not a detail of presentation: a
+// number measured on Indian prices, rendered beside a US chart, is a false
+// provenance however carefully it is captioned. So a non-Indian market gets an
+// explicitly empty record instead of a borrowed one — which still satisfies the
+// rule that an unvalidated signal must LOOK unvalidated.
+const NO_RECORD = {
+  state: 'unscoreable',
+  text: 'not measured here',
+  detail: 'The scorecard is built from nse_bhavcopy and scored against NIFTY 50, so every figure in it was measured on Indian prices. Nothing has been measured on US prices, and showing the Indian number here would attach it to a market it says nothing about.\n\nbackend/volumeThrustStudy.js asks the same question of a decade of US history — run it for the US answer. Its result is not wired into this badge.',
+}
+
 /**
  * @param {string} signal  registry name, e.g. 'breakout_20d'
  * @param {string} [label] leading text; defaults to "Track record"
+ * @param {string} [market] which market the SIGNAL IS BEING SHOWN ON, not which
+ *   one it was scored on. Anything other than 'IN' has no record to show.
  */
-export default function SignalScore({ signal, label, source, style }) {
+export default function SignalScore({ signal, label, source, style, market = 'IN' }) {
   const { entry, error, loading } = useSignalScore(signal, { source })
+
+  // Hooks first, then branch — the lookup is thrown away off the Indian
+  // market, but it must still run on every render.
+  if (market !== 'IN') return <Badge tone={TONE.unscoreable} label={label} headline={NO_RECORD} style={style} />
 
   if (loading) return null
   // A failed scorecard fetch must not shout on top of the signal it annotates —
@@ -33,7 +51,6 @@ export default function SignalScore({ signal, label, source, style }) {
   if (error || !entry) return null
 
   const h = entry.headline
-  const tone = TONE[h.state] || TONE['no-data']
   const detail = [
     h.detail,
     entry.description,
@@ -43,9 +60,13 @@ export default function SignalScore({ signal, label, source, style }) {
       : 'Recorded the day it fired, before the outcome existed.',
   ].filter(Boolean).join('\n\n')
 
+  return <Badge tone={TONE[h.state] || TONE['no-data']} label={label} headline={h} detail={detail} style={style} />
+}
+
+function Badge({ tone, label, headline, detail, style }) {
   return (
     <span
-      title={detail}
+      title={detail || headline.detail}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
         padding: '0.12rem 0.45rem', borderRadius: '5px',
@@ -55,7 +76,7 @@ export default function SignalScore({ signal, label, source, style }) {
       }}
     >
       <span style={{ opacity: 0.75, fontWeight: 500 }}>{label || 'Track record'}</span>
-      {h.text}
+      {headline.text}
     </span>
   )
 }
