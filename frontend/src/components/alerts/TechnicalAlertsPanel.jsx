@@ -12,7 +12,10 @@ import { biasClass } from './biasClass';
 //   alerts      — array of alert objects (the `alerts` field of a *-alerts API)
 //   summary     — { readyCount, totalConstituents, notReady[] }
 //   lastUpdated — Date of the last fetch (for the "● Live" stamp)
-export default function TechnicalAlertsPanel({ alerts = [], summary, lastUpdated }) {
+//   market      — which market these alerts are FOR. The track-record badges
+//                 below are scored on nse_bhavcopy against NIFTY, so on a US
+//                 basket they have nothing to say and must not imply otherwise.
+export default function TechnicalAlertsPanel({ alerts = [], summary, lastUpdated, market = 'IN' }) {
   const [alertFilter, setAlertFilter] = useState('all'); // all | bullish | bearish
   const [alertFilterBreakouts, setAlertFilterBreakouts] = useState(false);
   const [alertFilterSuperFlips, setAlertFilterSuperFlips] = useState(false);
@@ -117,12 +120,12 @@ export default function TechnicalAlertsPanel({ alerts = [], summary, lastUpdated
       {/* What these two filters have actually been worth, next to the filters
           themselves rather than buried on a validation page. */}
       <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-        <SignalScore signal="breakout_20d" label="🚀 20d breakouts" />
-        <SignalScore signal="supertrend_flip_up" label="⚡ Super-flips" />
+        <SignalScore signal="breakout_20d" label="🚀 20d breakouts" market={market} />
+        <SignalScore signal="supertrend_flip_up" label="⚡ Super-flips" market={market} />
         {/* The squeeze preset claims a breakout is likely; this is the number
             saying whether that has held. Sits next to the claim rather than on
             a validation page nobody opens. */}
-        <SignalScore signal="bb_squeeze" label="🎯 BB squeezes" />
+        <SignalScore signal="bb_squeeze" label="🎯 BB squeezes" market={market} />
       </div>
 
       {/* Column Headers */}

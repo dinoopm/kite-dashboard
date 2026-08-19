@@ -663,14 +663,10 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
             ? <span style={{ opacity: 0.8 }}>— none reported</span>
             : showVolume && displayRvol != null && <strong style={{ color: rvolReadoutColor }}>&nbsp;{displayRvol.toFixed(2)}×</strong>}
         </label>
-        {/* The claim this pane makes, with its record attached. It is scored on
-            nse_bhavcopy against NIFTY, so a US chart says where the evidence
-            came from rather than implying it was measured on this symbol. */}
+        {/* The claim this pane makes, with its record attached — or, off the
+            Indian market, with the absence of one stated plainly. */}
         {showVolume && volume.hasVolume && (
-          <SignalScore
-            signal="volume_thrust"
-            label={market === 'US' ? '▮ Volume thrust (NSE record)' : '▮ Volume thrust'}
-          />
+          <SignalScore signal="volume_thrust" label="▮ Volume thrust" market={market} />
         )}
         {showBB && squeeze.current != null && (
           <span
@@ -705,12 +701,10 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.7rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
         {atScoredSettings ? (
           <>
-            <span>{market === 'US'
-              ? `Golden-cross buys, scored on NSE data (not on US history — the record is about the rule):`
-              : 'Golden-cross buys, scored:'}</span>
-            <SignalScore signal="ma_cross_up" label="all" />
-            <SignalScore signal="ma_cross_volume" label="✓ volume-confirmed" />
-            <SignalScore signal="ma_cross_quiet" label="✗ no volume behind it" />
+            <span>Golden-cross buys:</span>
+            <SignalScore signal="ma_cross_up" label="all" market={market} />
+            <SignalScore signal="ma_cross_volume" label="✓ volume-confirmed" market={market} />
+            <SignalScore signal="ma_cross_quiet" label="✗ no volume behind it" market={market} />
           </>
         ) : (
           <span>
