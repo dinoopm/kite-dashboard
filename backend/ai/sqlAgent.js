@@ -94,24 +94,33 @@ RULES:
 `;
 
 // Model is configurable, and the default was measured rather than assumed.
-// Asked one simple and three hard text-to-SQL questions against this schema,
-// all three Groq reasoning-tier candidates produced valid SQL — but not at the
-// same cost, and not all safely:
 //
-//   llama-3.3-70b-versatile   136 / 718 tokens   clean ```sql fence
-//   openai/gpt-oss-120b       378 / 2520         prose + comments to strip
-//   qwen/qwen3.6-27b          467 / -            emits <think> blocks, which
-//                                                extractSql would have to survive
+// The previous default, llama-3.3-70b-versatile, was DECOMMISSIONED by Groq —
+// requests began returning 404 "model does not exist or you do not have access",
+// which surfaced to users as a failed Stock Picks brief. Both jobs this module
+// serves share one `llm`, so the SQL agent went down with it. The catalogue call
+// (GET /openai/v1/models) now lists 13 models and no llama chat model at all.
 //
-// Bigger bought no visible correctness here and cost 3.5x the tokens and the
-// latency, on an interactive endpoint where latency is what the user feels.
-// Qwen is actively unsuitable: reasoning traces containing the word SELECT are
-// exactly what the extractor must not pick up.
+// Re-ran the comparison across the surviving chat-capable candidates, three
+// text-to-SQL questions against this schema plus one picks-brief narration:
+//
+//   openai/gpt-oss-120b   3/3 valid+safe   1451 out tokens   1249ms avg   no <think>
+//   openai/gpt-oss-20b    3/3 valid+safe   1749 out tokens    845ms avg   no <think>
+//   qwen/qwen3.6-27b      emits <think> blocks — reasoning traces containing the
+//                         word SELECT are exactly what extractSQL must not pick up
+//   groq/compound(-mini)  agentic tool-using systems, not plain chat completions
+//
+// 120b wins on the two things that matter here and loses only on latency, by
+// 0.4s: correctness tied, it used FEWER output tokens despite being the larger
+// model (which is why "smaller is cheaper" had to be measured rather than
+// assumed), and its narration stayed strictly descriptive where 20b editorialised
+// — "presented as the top performers" is exactly the kind of gloss the picks
+// brief must not add.
 //
 // Override with GROQ_MODEL to try another without touching code — which is also
-// what makes re-running that comparison cheap when Groq's catalogue moves.
+// what makes re-running this comparison cheap the next time Groq retires one.
 const llm = new ChatOpenAI({
-  modelName: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+  modelName: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
   apiKey: process.env.GROQ_API_KEY,
   configuration: { baseURL: 'https://api.groq.com/openai/v1' },
   temperature: 0,
