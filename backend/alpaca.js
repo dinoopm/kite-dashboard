@@ -144,6 +144,65 @@ async function fetchAssetName(symbol) {
   }
 }
 
+// ─── Tradable-symbol set (Alpaca asset list, 24h cache) ─────────────────────
+//
+// ETF holdings arrive with the ticker each SOURCE uses, which is not always a
+// ticker THIS app can price. The HYDR drilldown showed the problem plainly:
+// seven of fifteen rows — Ceres Power, ITM Power, Nel, AFC, Johnson Matthey,
+// PowerCell, Nanofilm — rendered as a full row of dashes, because they are
+// London, Oslo, Stockholm and Singapore lines that Alpaca does not carry.
+//
+// Pattern-matching cannot separate them: "ITM.L" is recognisably foreign, but
+// "CWR", "NEL", "JMAT" and "PCELL" are bare letters indistinguishable from a US
+// ticker, and cleanSymbol rightly passes them. The only authority on what this
+// app can price is the data source, so ask it: one call returns ~14k active US
+// equities, cached for a day and then a set membership test.
+let tradableCache = null;   // { set, ts }
+let tradableInflight = null;
+const TRADABLE_TTL = 24 * 60 * 60 * 1000;
+
+async function tradableSymbols() {
+  if (tradableCache && Date.now() - tradableCache.ts < TRADABLE_TTL) return tradableCache.set;
+  if (tradableInflight) return tradableInflight;
+  if (!isConfigured()) return null;
+
+  tradableInflight = (async () => {
+    try {
+      const resp = await fetch(`${TRADING_BASE}/v2/assets?status=active&asset_class=us_equity`, {
+        headers: { 'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': API_SECRET, 'Accept': 'application/json' },
+      });
+      if (!resp.ok) throw new Error(`assets ${resp.status}`);
+      const list = await resp.json();
+      if (!Array.isArray(list) || !list.length) throw new Error('assets: empty list');
+      const set = new Set(list.map(a => a.symbol));
+      tradableCache = { set, ts: Date.now() };
+      return set;
+    } catch (e) {
+      console.warn(`[alpaca] tradable symbol list unavailable: ${e.message}`);
+      // Null, not an empty set. An empty set would filter EVERY holding away
+      // and turn a transient outage into empty drilldowns across the app.
+      return tradableCache?.set || null;
+    } finally {
+      tradableInflight = null;
+    }
+  })();
+  return tradableInflight;
+}
+
+/**
+ * Drop holdings this app cannot price, keeping the rest in order.
+ * Returns the list untouched when the asset list is unavailable — a row of
+ * dashes is a worse outcome than no rows, but both are worse than the real
+ * list, so an outage must not silently empty the page.
+ */
+async function keepPriceable(holdings) {
+  const set = await tradableSymbols();
+  if (!set) return { kept: holdings, dropped: [] };
+  const kept = [], dropped = [];
+  for (const h of holdings) (set.has(h.symbol) ? kept : dropped).push(h);
+  return { kept, dropped };
+}
+
 // ─── Sector / industry lookup (Yahoo assetProfile, 7-day cache) ─────────────
 // Works across any US ticker (S&P, Nasdaq, baskets) — not just GICS members.
 const assetSectorCache = {}; // symbol -> { sector, industry, ts }
@@ -860,7 +919,17 @@ router.get('/sector-constituents/:symbol', async (req, res) => {
     // or StockAnalysis. Broad indices (SPY, VTI, …) deliberately stay mapped to
     // their sector ETFs via the curated list below, so they're excluded here.
     if (LIVE_HOLDINGS_FUNDS.has(sym)) {
-      const live = await getEtfHoldings(sym).catch(() => null);
+      const liveRaw = await getEtfHoldings(sym).catch(() => null);
+      // Foreign lines get this far — the sources report them under their home
+      // ticker — and would render as a row of dashes. Drop what cannot be
+      // priced, and say how many, so a short list is explained rather than
+      // looking like the fund holds less than it does.
+      const { kept: live, dropped } = liveRaw?.length
+        ? await keepPriceable(liveRaw)
+        : { kept: liveRaw, dropped: [] };
+      if (dropped.length) {
+        console.log(`[sector-constituents] ${sym}: dropped ${dropped.length} unpriceable holding(s): ${dropped.map(d => d.symbol).join(', ')}`);
+      }
       if (live?.length) {
         const merged = new Map(live.map(h => [h.symbol, h.name]));
         // Software is capped at the top ~25 by weight upstream; widen it with
@@ -872,6 +941,9 @@ router.get('/sector-constituents/:symbol', async (req, res) => {
         return res.json({
           sector: { key: sym, name: labelFor(sym) },
           constituents: [...merged].map(([s, n]) => mkConstituent(s, n)),
+          // Reported so the UI can explain a list shorter than the fund's real
+          // membership: these are held, but not priceable on US market data.
+          excluded: dropped.map(d => ({ symbol: d.symbol, name: d.name })),
         });
       }
     }

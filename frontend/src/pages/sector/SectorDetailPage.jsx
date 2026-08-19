@@ -75,6 +75,9 @@ export default function SectorDetailPage({ market }) {
   const [sectorRsi14, setSectorRsi14] = useState(null);
   const [benchmarkReturns, setBenchmarkReturns] = useState(null);
   const [constituents, setConstituents] = useState([]);
+  // Holdings the fund really owns but this app cannot price — foreign listings
+  // and cash-sweep funds. Reported by the API so a short list is explained.
+  const [excluded, setExcluded] = useState([]);
 
   // ── Phase 2 state ──
   const [stockData, setStockData] = useState([]);
@@ -194,6 +197,7 @@ export default function SectorDetailPage({ market }) {
         // Constituents
         if (constRes.status === 'fulfilled' && constRes.value?.constituents) {
           setConstituents(constRes.value.constituents);
+          setExcluded(constRes.value.excluded || []);
           if (constRes.value.sector?.name) setFetchedName(constRes.value.sector.name);
         } else if (constRes.status === 'fulfilled' && constRes.value?.error) {
           console.warn('sector-constituents:', constRes.value.error);
@@ -585,6 +589,14 @@ export default function SectorDetailPage({ market }) {
           <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
             {histLoadedCount}/{totalStocks} stocks loaded
           </span>
+          {excluded.length > 0 && (
+            <span
+              title={`Held by the fund but not priceable on US market data — foreign listings and cash funds:\n\n${excluded.map(e => `${e.symbol} — ${e.name}`).join('\n')}`}
+              style={{ fontSize: '0.75rem', color: '#fcd34d', whiteSpace: 'nowrap', cursor: 'help', borderBottom: '1px dotted rgba(252,211,77,0.5)' }}
+            >
+              +{excluded.length} not priceable
+            </span>
+          )}
           <div style={{ flex: 1, height: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden', maxWidth: '240px' }}>
             <div style={{ width: `${pct}%`, height: '100%', background: stillLoading ? 'var(--accent)' : '#22c55e', transition: 'width 0.3s ease' }} />
           </div>
