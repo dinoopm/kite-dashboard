@@ -196,6 +196,9 @@ async function runDailyJobs({ force = false } = {}) {
       // first_seen_at is an artefact of bulk loading rather than a report
       // landing, and only the one-off CLI run is entitled to set it.
       const inRes = await runIngest({ market: 'IN' });
+      // The API caches per quarter; new rows are the only thing that can change
+      // an answer, so the write is what invalidates rather than a TTL.
+      require('./fundamentals/service').invalidateCache();
       out.fundamentals = { IN: inRes };
       console.log(`[daily] fundamentals IN: ${inRes.saved} rows from ${inRes.ok} symbols (${inRes.failed} failed)`);
     } else {

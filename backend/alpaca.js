@@ -1920,6 +1920,29 @@ router.get('/pnl/:symbol', async (req, res) => {
   }
 });
 
+// ─── US sector & index earnings ──────────────────────────────────────────────
+// The same service as the Indian side, pointed at the US universe — one
+// aggregation engine, so the two markets cannot drift into disagreeing about
+// what "pool growth" means.
+const usFundamentals = require('./fundamentals/service');
+
+router.get('/fundamentals/quarters', async (req, res) => {
+  try {
+    const ctx = await usFundamentals.context('US');
+    res.json({ market: 'US', quarters: ctx.quarters, weightsAsOf: ctx.weightsAsOf });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/fundamentals/sectors', async (req, res) => {
+  try { res.json(await usFundamentals.allScopes('US', req.query.quarter)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/fundamentals/sector/:key', async (req, res) => {
+  try { res.json(await usFundamentals.scopeReport('US', req.params.key, req.query.quarter)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ─── GET /api/us/cashflow/:symbol — annual cash-flow statement (Yahoo) ──────
 // CFO / CFI / CFF + derived Net and Free Cash Flow, oldest→newest, so the
 // US Instrument Cashflow tab mirrors the Indian one (which is screener-backed).

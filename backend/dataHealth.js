@@ -158,6 +158,51 @@ const FEEDS = [
  * `error` on that row rather than sinking the whole report — a health check
  * that dies when one thing is broken is useless precisely when it is needed.
  */
+/**
+ * Fundamentals coverage — a different question from a daily feed's gaps.
+ *
+ * The FEEDS check above asks "did this table get a row on every session the
+ * index traded?", which is the right question for daily prices and a
+ * meaningless one for quarterly results: companies report four times a year,
+ * on their own dates. So this asks the two questions that CAN go wrong here
+ * instead — how much of the universe has a recent period at all, and how long
+ * since the ingest last ran.
+ *
+ * Deliberately not folded into `ok`: thin coverage in the days after a quarter
+ * closes is the normal state of an earnings season, not a defect, and a banner
+ * that cries during every results season stops being read.
+ */
+async function checkFundamentalsCoverage({ months = 6 } = {}) {
+  const cutoff = new Date(Date.now() - months * 30 * 86400000).toISOString().slice(0, 10);
+  const out = [];
+  for (const market of ['IN', 'US']) {
+    try {
+      const { data, error } = await supabase
+        .from('stock_fundamentals')
+        .select('symbol,period_end,fetched_at')
+        .eq('market', market).eq('period_type', 'quarter')
+        .gte('period_end', cutoff);
+      if (error) throw new Error(error.message);
+      const symbols = new Set((data || []).map(r => r.symbol));
+      const lastIngest = (data || []).reduce((m, r) => (r.fetched_at > m ? r.fetched_at : m), '');
+      const ageHours = lastIngest ? (Date.now() - Date.parse(lastIngest)) / 3600000 : null;
+      out.push({
+        market,
+        symbolsWithRecentPeriod: symbols.size,
+        rows: (data || []).length,
+        lastIngest: lastIngest || null,
+        ingestAgeHours: ageHours == null ? null : +ageHours.toFixed(1),
+        // A stalled ingest IS actionable, unlike thin seasonal coverage.
+        ingestStale: ageHours != null && ageHours > 48,
+        never: !lastIngest,
+      });
+    } catch (err) {
+      out.push({ market, error: err.message });
+    }
+  }
+  return out;
+}
+
 async function checkDataHealth({ since = '2026-04-01' } = {}) {
   const indexDates = await fetchIndexDates(since);
   const feeds = [];
@@ -187,9 +232,15 @@ async function checkDataHealth({ since = '2026-04-01' } = {}) {
     }
   }
 
+  // Reported alongside, never inside `ok` — see checkFundamentalsCoverage.
+  let fundamentals = null;
+  try { fundamentals = await checkFundamentalsCoverage(); }
+  catch (err) { fundamentals = [{ error: err.message }]; }
+
   return {
     index: { symbol: INDEX, sessions: indexDates.length, last: indexDates[indexDates.length - 1] || null },
     feeds,
+    fundamentals,
     ok: feeds.every(f => f.ok),
     checkedAt: new Date().toISOString(),
   };
@@ -208,5 +259,5 @@ function logDataHealth(report) {
 
 module.exports = {
   checkDataHealth, logDataHealth, findGaps, checkFreshness,
-  partitionGaps, ACKNOWLEDGED_GAPS, FEEDS,
+  partitionGaps, ACKNOWLEDGED_GAPS, FEEDS, checkFundamentalsCoverage,
 };

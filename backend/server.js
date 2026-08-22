@@ -2500,6 +2500,40 @@ const pickScreenerBasis = (symbol, opts) =>
 const wantsConsolidated = (req) =>
   req.query.consolidated !== '0' && req.query.consolidated !== 'false';
 
+// ─── Sector & index earnings ─────────────────────────────────────────────────
+//
+// Reads stock_fundamentals rather than scraping: a sector of 40 names would be
+// 40 screener.in page loads per view, and the history that makes "how did this
+// results season go?" answerable would not exist at all.
+//
+// These describe what was REPORTED. Nothing here claims anything about future
+// prices — no score, no ranking implying which sector to buy — which is why
+// none of it carries a registry entry. A claim that earnings growth predicts
+// returns would be a signal and would need one.
+const fundamentalsService = require('./fundamentals/service');
+
+app.get('/api/fundamentals/quarters', async (req, res) => {
+  try {
+    const ctx = await fundamentalsService.context('IN');
+    res.json({ market: 'IN', quarters: ctx.quarters, weightsAsOf: ctx.weightsAsOf });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/fundamentals/sectors', async (req, res) => {
+  try { res.json(await fundamentalsService.allScopes('IN', req.query.quarter)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/fundamentals/sector/:key', async (req, res) => {
+  try { res.json(await fundamentalsService.scopeReport('IN', req.params.key, req.query.quarter)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/fundamentals/coverage', async (req, res) => {
+  try { res.json(await fundamentalsService.coverage('IN')); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/screener-quarterly/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const consolidated = wantsConsolidated(req);
