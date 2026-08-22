@@ -32,6 +32,7 @@ import TopGainersLosers from './pages/marketData/TopGainersLosers'
 import VolumeGainers from './pages/marketData/VolumeGainers'
 import SurveillanceStocks from './pages/marketData/SurveillanceStocks'
 import StockPicks from './pages/marketData/StockPicks'
+import Earnings from './pages/marketData/Earnings'
 import MacroEconomics from './pages/marketData/MacroEconomics'
 import ExpiryStudy from './pages/marketData/ExpiryStudy'
 import EventsCalendar from './pages/marketData/EventsCalendar'
@@ -243,6 +244,7 @@ function App() {
           <Route path="/vix" element={<VixIndex />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/market-data/stock-picks" element={<StockPicks />} />
+          <Route path="/market-data/earnings" element={<Earnings />} />
           <Route path="/market-data/fii-dii" element={<FiiDii />} />
           <Route path="/market-data/large-deals" element={<LargeDeals />} />
           <Route path="/market-data/52wk-high-low" element={<Week52HighLow />} />

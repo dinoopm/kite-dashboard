@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
+import { ScopeDetail } from '../marketData/Earnings';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Cell as RechartsCell, ResponsiveContainer } from 'recharts';
 import RRGChart from '../../components/RRGChart';
 import AlertRow from '../../components/alerts/AlertRow';
@@ -1142,6 +1143,7 @@ export default function SectorDetailPage({ market }) {
           { id: 'leaders', label: hiddenLeaders?.active ? `Hidden Leaders (${hiddenLeaders.leaders.length})` : 'Hidden Leaders' },
           // Technical Alerts is backed by an India-only endpoint; markets
           // without one hide the tab rather than offering a dead panel.
+          { id: 'earnings', label: 'Earnings' },
           ...(market.hasAlertsTab ? [{ id: 'alerts', label: 'Technical Alerts' }] : []),
         ].map(t => (
           <button
@@ -1191,6 +1193,24 @@ export default function SectorDetailPage({ market }) {
             benchmarkReadOnly={true}
             {...market.rrgExtraProps(constituents)}
           />
+        )}
+        {activeTab === 'earnings' && (
+          <section className="glass-panel" style={{ padding: '1.25rem' }}>
+            <div style={{ marginBottom: '0.75rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1rem' }}>Earnings — latest reported quarter</h3>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                What this sector's profit pool did, and what moved it. Every figure is same-store:
+                only companies that reported both periods are counted.{' '}
+                <Link to="/market-data/earnings" style={{ color: 'var(--accent)' }}>
+                  Compare every sector →
+                </Link>
+              </span>
+            </div>
+            {/* Quarter omitted on purpose: the API defaults to the most recent
+                one clearing its coverage floors, so this never opens on a
+                season three companies have reported. */}
+            <ScopeDetail market={market.id === 'us' ? 'US' : 'IN'} scope={sectorKey} quarter="" />
+          </section>
         )}
         {activeTab === 'stocks' && renderStocks()}
         {activeTab === 'leaders' && renderHiddenLeaders()}

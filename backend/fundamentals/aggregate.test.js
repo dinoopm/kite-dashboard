@@ -545,3 +545,51 @@ describe('the verdict makes no interpretive claim', () => {
       `verdict must stay descriptive, got: ${r.verdict}`);
   });
 });
+
+// ─── The payload surface the UI depends on ───────────────────────────────────
+//
+// The page and the aggregator are developed in different files and can drift
+// apart silently: a renamed field shows up as a blank cell, not an error. This
+// pins the fields Earnings.jsx actually reads.
+describe('the shape the page reads', () => {
+  const r = aggregateQuarter({
+    rows: [
+      ...series('AAA', { '2025-06-30': 100, '2026-03-31': 110, '2026-06-30': 150 }),
+      ...series('BBB', { '2025-06-30': 200, '2026-03-31': 190, '2026-06-30': 180 }),
+    ],
+    constituents: members('AAA', 'BBB'),
+    quarter: '2026-06',
+  });
+
+  test('every field the sector table renders is present', () => {
+    for (const path of ['quarter', 'unit', 'verdict', 'yoy.poolGrowthPct', 'yoy.poolDeltaAbs',
+      'yoy.weightedGrowthPct', 'yoy.medianGrowthPct', 'coverage.reportedCount',
+      'coverage.constituents', 'coverage.countPct', 'coverage.poolPct', 'coverage.sufficient']) {
+      const v = path.split('.').reduce((o, k) => (o == null ? o : o[k]), r);
+      assert.ok(v !== undefined, `${path} is missing from the payload`);
+    }
+  });
+
+  test('breadth carries exactly the five states the legend draws', () => {
+    assert.deepEqual(Object.keys(r.breadth).sort(),
+      ['grew', 'lossToLoss', 'lossToProfit', 'profitToLoss', 'shrank']);
+  });
+
+  test('the drill-down panels have their arrays', () => {
+    for (const key of ['bridge', 'contributions', 'reporting', 'excluded']) {
+      assert.ok(Array.isArray(r[key]), `${key} must be an array the panel can map over`);
+    }
+    assert.ok(r.bridge.every(s => 'step' in s && 'delta' in s));
+    assert.ok(r.contributions.every(c => 'symbol' in c && 'delta' in c && 'sharePct' in c));
+    assert.ok(r.reporting.every(x => 'symbol' in x && 'reported' in x && 'mergedInto' in x));
+  });
+
+  test('the sequential block carries its own caveat, so the UI cannot omit it', () => {
+    assert.ok(r.qoq.caveat && /seasonal/i.test(r.qoq.caveat));
+  });
+
+  test('bridgeBase and bridgeClose are present for the waterfall header', () => {
+    assert.equal(typeof r.bridgeBase, 'number');
+    assert.equal(typeof r.bridgeClose, 'number');
+  });
+});
