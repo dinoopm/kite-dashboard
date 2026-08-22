@@ -46,6 +46,13 @@ const SCREENER_ROW_MAP = {
   'Depreciation': 'depreciation',
   'Profit before tax': 'pbt',
   'Tax %': 'taxPct',
+  // Lenders only. A bank's earnings swing on provisions, not on operating
+  // margin — interest is its revenue line, so the industrial bridge
+  // (revenue → OPM → interest → depreciation) describes nothing real for one.
+  // Parsed here so fundamentals/aggregate.js can build the lender bridge
+  // instead of relabelling the industrial one.
+  'Provisions': 'provisions',
+  'Provisions and contingencies': 'provisions',
 };
 
 function parseNumberCell(text) {

@@ -27,6 +27,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const TICK_MS = 30 * 60 * 1000;      // re-check every 30 minutes
 const FIRST_TICK_MS = 2 * 60 * 1000; // let the server finish booting first
 const EMISSION_LOOKBACK_DAYS = 30;   // re-scan a window, so a missed day heals
+const FUNDAMENTALS_MAX_AGE_HOURS = 20; // results change 4x a year — don't re-scrape on a tick
 
 const isoMinus = (days) => {
   const d = new Date();
@@ -164,6 +165,71 @@ async function runDailyJobs({ force = false } = {}) {
   } catch (err) {
     out.emissions = { error: err.message };
     console.error('[daily] signal recording failed (will retry next tick):', err.message);
+  }
+
+  // ── Fundamentals ─────────────────────────────────────────────────────────
+  //
+  // Three jobs, all DB-decided rather than timer-decided, and two of them
+  // recording things nothing displays yet.
+  //
+  // That is deliberate. Consensus estimates and index membership can only ever
+  // be captured FORWARD: Yahoo exposes only today's consensus, and NSE does not
+  // publish historical membership, so a quarter that passes unrecorded is
+  // unrecoverable. Waiting until the panels are built would cost exactly the
+  // months of history that make them worth building — the same mistake
+  // stock_pick_snapshots made when it lost 2026-07-16 and 07-17.
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Statements: quarterly data changes four times a year, so this is gated on
+    // "nothing fetched recently" rather than run on a tick. ~239 Indian pages at
+    // one a second is a few minutes, and screener.in should not see more.
+    const { data: lastFetch, error: lastErr } = await supabase
+      .from('stock_fundamentals').select('fetched_at')
+      .order('fetched_at', { ascending: false }).limit(1);
+    if (lastErr) throw new Error(`stock_fundamentals: ${lastErr.message}`);
+    const lastAt = lastFetch?.[0]?.fetched_at ? Date.parse(lastFetch[0].fetched_at) : 0;
+    const staleHours = (Date.now() - lastAt) / 3600000;
+    if (force || staleHours >= FUNDAMENTALS_MAX_AGE_HOURS) {
+      const { runIngest } = require('./fundamentals/ingest');
+      // Never --backfill from the scheduler: that flag marks rows whose
+      // first_seen_at is an artefact of bulk loading rather than a report
+      // landing, and only the one-off CLI run is entitled to set it.
+      const inRes = await runIngest({ market: 'IN' });
+      out.fundamentals = { IN: inRes };
+      console.log(`[daily] fundamentals IN: ${inRes.saved} rows from ${inRes.ok} symbols (${inRes.failed} failed)`);
+    } else {
+      out.fundamentals = { skipped: `fetched ${staleHours.toFixed(1)}h ago` };
+    }
+
+    // Membership: one row per index per symbol per day, so a same-day re-run is
+    // an idempotent upsert rather than duplication.
+    const { count: memCount, error: memErr } = await supabase
+      .from('index_membership_snapshots')
+      .select('symbol', { count: 'exact', head: true }).eq('snap_date', today);
+    if (memErr) throw new Error(`index_membership_snapshots: ${memErr.message}`);
+    if (force || !memCount) {
+      const { snapshotAll } = require('./fundamentals/membership');
+      out.membership = await snapshotAll(today);
+    } else {
+      out.membership = { skipped: 'already snapshotted today', rows: memCount };
+    }
+
+    // Consensus: only symbols inside a reporting window, which is both the
+    // cheap set and the only set where a PRE-announcement consensus exists.
+    const { count: conCount, error: conErr } = await supabase
+      .from('consensus_snapshots')
+      .select('symbol', { count: 'exact', head: true }).eq('snap_date', today);
+    if (conErr) throw new Error(`consensus_snapshots: ${conErr.message}`);
+    if (force || !conCount) {
+      const { snapshotConsensus } = require('./fundamentals/consensus');
+      out.consensus = { IN: await snapshotConsensus({ market: 'IN' }) };
+    } else {
+      out.consensus = { skipped: 'already snapshotted today', rows: conCount };
+    }
+  } catch (err) {
+    out.fundamentals = { ...(out.fundamentals || {}), error: err.message };
+    console.error('[daily] fundamentals failed (will retry next tick):', err.message);
   }
 
   // Once per session, not once per tick. Each run fetches holdings plus a year

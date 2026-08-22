@@ -1827,80 +1827,92 @@ function mergeStatementRows(detailed, fallback, { maxStandalone = 8 } = {}) {
   return [...detailed, ...extra].sort((a, b) => a.sortKey - b.sortKey);
 }
 
+/**
+ * The US income statement, assembled from every source that has part of it.
+ *
+ * Lifted out of the /pnl route so the nightly fundamentals ingest calls exactly
+ * the code the page shows. Two implementations of "what did this company earn"
+ * would drift, and the earnings aggregate would then disagree with the very
+ * statement a user opens to check it.
+ */
+async function fetchUsStatements(sym) {
+  const now = new Date();
+  const period1 = new Date(now.getFullYear() - 5, 0, 1);
+  const pct = (a, b) => (a != null && b ? (a / b) * 100 : null);
+  const mapRow = (r, isQuarter) => {
+    const d = r.date ? new Date(r.date) : null;
+    const revenue = r.totalRevenue ?? null;
+    const grossProfit = r.grossProfit ?? (revenue != null && r.costOfRevenue != null ? revenue - r.costOfRevenue : null);
+    const operatingIncome = r.operatingIncome ?? null;
+    const netIncome = r.netIncome ?? null;
+    return {
+      label: statementLabel(d, isQuarter),
+      endDate: d ? d.toISOString().slice(0, 10) : null, sortKey: d ? d.getTime() : 0,
+      revenue,
+      costOfRevenue: r.costOfRevenue ?? null,
+      grossProfit,
+      operatingExpense: r.operatingExpense ?? null,
+      operatingIncome,
+      interestExpense: r.interestExpense ?? r.netInterestIncome ?? null,
+      pretaxIncome: r.pretaxIncome ?? null,
+      tax: r.taxProvision ?? null,
+      netIncome,
+      eps: r.dilutedEPS ?? r.basicEPS ?? null,
+      grossMargin: pct(grossProfit, revenue),
+      operatingMargin: pct(operatingIncome, revenue),
+      netMargin: pct(netIncome, revenue),
+    };
+  };
+  const fetchTS = async (type) => {
+    try {
+      const rows = await yf.fundamentalsTimeSeries(sym, { period1, period2: now, type, module: 'financials' });
+      return (rows || []).map(r => mapRow(r, type === 'quarterly')).filter(r => r.revenue != null || r.netIncome != null).sort((a, b) => a.sortKey - b.sortKey);
+    } catch { return []; }
+  };
+  // The legacy submodule is best-effort: it is the fallback, so its failure
+  // must leave the primary result intact rather than blank the whole tab.
+  const fetchLegacy = async () => {
+    try {
+      const q = await yf.quoteSummary(sym,
+        { modules: ['incomeStatementHistory', 'incomeStatementHistoryQuarterly'] },
+        { validateResult: false });
+      const map = (hist, isQuarter) => (hist?.incomeStatementHistory || [])
+        .map(r => mapLegacyStatementRow(r, isQuarter)).filter(Boolean);
+      return {
+        annual: map(q.incomeStatementHistory, false),
+        quarterly: map(q.incomeStatementHistoryQuarterly, true),
+      };
+    } catch { return { annual: [], quarterly: [] }; }
+  };
+  // Also best-effort: no CIK, an SEC outage or a rate-limit must degrade to
+  // the Yahoo answer rather than fail the tab.
+  const fetchSec = async () => {
+    try {
+      const cik = (await getCikMap()).get(sym.replace(/\./g, '-')) || (await getCikMap()).get(sym);
+      if (!cik) return { annual: [], quarterly: [] };
+      const r = await fetch(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, { headers: SEC_UA });
+      if (!r.ok) return { annual: [], quarterly: [] };
+      const facts = await r.json();
+      return { annual: secStatementRows(facts, false), quarterly: secStatementRows(facts, true) };
+    } catch { return { annual: [], quarterly: [] }; }
+  };
+  const [annualTS, quarterlyTS, sec, legacy] = await Promise.all([
+    fetchTS('annual'), fetchTS('quarterly'), fetchSec(), fetchLegacy(),
+  ]);
+  // Yahoo stays primary so nothing on screen shifts retroactively; SEC fills
+  // the periods it hasn't published; the thin submodule is the last resort
+  // (a Q4 the filings can't supply as a three-month figure).
+  const annual = mergeStatementRows(mergeStatementRows(annualTS, sec.annual), legacy.annual);
+  const quarterly = mergeStatementRows(mergeStatementRows(quarterlyTS, sec.quarterly), legacy.quarterly);
+  return { symbol: sym, currency: 'USD', annual, quarterly };
+}
+
 router.get('/pnl/:symbol', async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
   const hit = pnlCache[sym];
   if (hit && Date.now() - hit.ts < PNL_TTL) return res.json({ ...hit.data, cached: true });
   try {
-    const now = new Date();
-    const period1 = new Date(now.getFullYear() - 5, 0, 1);
-    const pct = (a, b) => (a != null && b ? (a / b) * 100 : null);
-    const mapRow = (r, isQuarter) => {
-      const d = r.date ? new Date(r.date) : null;
-      const revenue = r.totalRevenue ?? null;
-      const grossProfit = r.grossProfit ?? (revenue != null && r.costOfRevenue != null ? revenue - r.costOfRevenue : null);
-      const operatingIncome = r.operatingIncome ?? null;
-      const netIncome = r.netIncome ?? null;
-      return {
-        label: statementLabel(d, isQuarter),
-        endDate: d ? d.toISOString().slice(0, 10) : null, sortKey: d ? d.getTime() : 0,
-        revenue,
-        costOfRevenue: r.costOfRevenue ?? null,
-        grossProfit,
-        operatingExpense: r.operatingExpense ?? null,
-        operatingIncome,
-        interestExpense: r.interestExpense ?? r.netInterestIncome ?? null,
-        pretaxIncome: r.pretaxIncome ?? null,
-        tax: r.taxProvision ?? null,
-        netIncome,
-        eps: r.dilutedEPS ?? r.basicEPS ?? null,
-        grossMargin: pct(grossProfit, revenue),
-        operatingMargin: pct(operatingIncome, revenue),
-        netMargin: pct(netIncome, revenue),
-      };
-    };
-    const fetchTS = async (type) => {
-      try {
-        const rows = await yf.fundamentalsTimeSeries(sym, { period1, period2: now, type, module: 'financials' });
-        return (rows || []).map(r => mapRow(r, type === 'quarterly')).filter(r => r.revenue != null || r.netIncome != null).sort((a, b) => a.sortKey - b.sortKey);
-      } catch { return []; }
-    };
-    // The legacy submodule is best-effort: it is the fallback, so its failure
-    // must leave the primary result intact rather than blank the whole tab.
-    const fetchLegacy = async () => {
-      try {
-        const q = await yf.quoteSummary(sym,
-          { modules: ['incomeStatementHistory', 'incomeStatementHistoryQuarterly'] },
-          { validateResult: false });
-        const map = (hist, isQuarter) => (hist?.incomeStatementHistory || [])
-          .map(r => mapLegacyStatementRow(r, isQuarter)).filter(Boolean);
-        return {
-          annual: map(q.incomeStatementHistory, false),
-          quarterly: map(q.incomeStatementHistoryQuarterly, true),
-        };
-      } catch { return { annual: [], quarterly: [] }; }
-    };
-    // Also best-effort: no CIK, an SEC outage or a rate-limit must degrade to
-    // the Yahoo answer rather than fail the tab.
-    const fetchSec = async () => {
-      try {
-        const cik = (await getCikMap()).get(sym.replace(/\./g, '-')) || (await getCikMap()).get(sym);
-        if (!cik) return { annual: [], quarterly: [] };
-        const r = await fetch(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, { headers: SEC_UA });
-        if (!r.ok) return { annual: [], quarterly: [] };
-        const facts = await r.json();
-        return { annual: secStatementRows(facts, false), quarterly: secStatementRows(facts, true) };
-      } catch { return { annual: [], quarterly: [] }; }
-    };
-    const [annualTS, quarterlyTS, sec, legacy] = await Promise.all([
-      fetchTS('annual'), fetchTS('quarterly'), fetchSec(), fetchLegacy(),
-    ]);
-    // Yahoo stays primary so nothing on screen shifts retroactively; SEC fills
-    // the periods it hasn't published; the thin submodule is the last resort
-    // (a Q4 the filings can't supply as a three-month figure).
-    const annual = mergeStatementRows(mergeStatementRows(annualTS, sec.annual), legacy.annual);
-    const quarterly = mergeStatementRows(mergeStatementRows(quarterlyTS, sec.quarterly), legacy.quarterly);
-    const data = { symbol: sym, currency: 'USD', annual, quarterly };
+    const data = await fetchUsStatements(sym);
     pnlCache[sym] = { data, ts: Date.now() };
     res.json(data);
   } catch (err) {
@@ -2559,4 +2571,6 @@ module.exports = {
   TNX_RANGES, TNX_DEFAULT_RANGE, tnxRangeConfig,
   // Exported for the income-statement merge tests — see /pnl/:symbol.
   mapLegacyStatementRow, mergeStatementRows, secStatementRows,
+  // Exported so fundamentals/ingest.js stores exactly what /pnl renders.
+  fetchUsStatements,
 };
