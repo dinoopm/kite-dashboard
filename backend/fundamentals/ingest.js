@@ -18,7 +18,7 @@
 // the aggressive cache "keeps us off screener's radar". So: one at a time, with
 // a pause, and never in parallel.
 
-require('dotenv').config({ path: __dirname + '/../../.env' });
+require('dotenv').config({ path: require('node:path').resolve(__dirname, '../../.env') });
 const { createClient } = require('@supabase/supabase-js');
 
 const { fetchScreenerHTML } = require('../screener/fetchHtml');
@@ -39,7 +39,33 @@ const IN_FINANCIAL_SECTORS = new Set([
   'NSE:NIFTY FINANCIAL SERVICES',
 ]);
 
-const supabase = () => createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+const ENV_PATH = require('node:path').resolve(__dirname, '../../.env');
+
+/**
+ * Fail with something a person can act on.
+ *
+ * Without this, a missing .env surfaces as `supabaseUrl is required.` thrown
+ * from inside the Supabase client — no mention of which variable, which file,
+ * or that a .env is involved at all. That matters more here than elsewhere in
+ * this repo because most backend scripts resolve '../.env' relative to the
+ * WORKING DIRECTORY and so only work when run from backend/, while this one
+ * resolves against its own location. Someone who has both habits deserves to be
+ * told which file was actually consulted.
+ */
+function requireDbConfig() {
+  const missing = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY'].filter(k => !process.env[k]);
+  if (!missing.length) return;
+  throw new Error(
+    `${missing.join(' and ')} not set.\n` +
+    `  Looked for a .env at: ${ENV_PATH}\n` +
+    `  (this script resolves .env against its own path, so the working directory does not matter)`
+  );
+}
+
+const supabase = () => {
+  requireDbConfig();
+  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+};
 
 /** Last day of a month, as ISO. Screener's "Jun 2026" means the quarter ENDING June. */
 function monthEnd(year, month) {
@@ -259,6 +285,12 @@ if (require.main === module) {
   // claim three years of companies reported this morning.
   const backfill = process.argv.includes('--backfill');
   const limit = Number(arg('limit', 0)) || 0;
+
+  // Checked up front: discovering a missing credential AFTER scraping 239
+  // pages would waste the fetch and, worse, teach screener.in nothing good
+  // about this client.
+  try { requireDbConfig(); }
+  catch (err) { console.error(err.message); process.exit(1); }
 
   runIngest({
     market, backfill, limit,
