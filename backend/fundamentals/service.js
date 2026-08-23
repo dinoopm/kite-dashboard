@@ -8,6 +8,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { aggregateQuarter } = require('./aggregate');
 const { issuerGroups } = require('./duplicates');
+const { scopeSurprise, revisionBreadth } = require('./surprise');
 
 const supabase = () => createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
@@ -87,17 +88,31 @@ async function loadScopes(market) {
  * apply the same weights to both sides — mixing vintages would blend earnings
  * change with weight drift and stop it being a cross-check on pool growth.
  */
-async function loadWeights(market) {
-  const rows = await fetchAll('consensus_snapshots', 'symbol,snap_date,market_cap',
-    q => q.eq('market', market).not('market_cap', 'is', null).order('snap_date', { ascending: false }));
-  if (!rows.length) return { weights: null, asOf: null };
-  const asOf = rows[0].snap_date;
-  const weights = {};
-  for (const r of rows) {
-    if (r.snap_date !== asOf) break;
-    weights[r.symbol] = r.market_cap;
-  }
-  return { weights, asOf };
+async function loadConsensus(market) {
+  const rows = await fetchAll('consensus_snapshots',
+    'symbol,snap_date,trend_period,trend_end_date,eps_avg,analysts,market_cap',
+    q => q.eq('market', market).order('snap_date', { ascending: false }));
+
+  // Weights: ONE vector, from the newest day that has caps. The weighted ratio
+  // must apply the same weights to both sides, so mixing vintages would blend
+  // earnings change with weight drift.
+  const withCap = rows.filter(r => r.market_cap != null);
+  const asOf = withCap[0]?.snap_date || null;
+  const weights = asOf
+    ? Object.fromEntries(withCap.filter(r => r.snap_date === asOf).map(r => [r.symbol, r.market_cap]))
+    : null;
+
+  // Recording start: beat/miss and revisions are forward-only, so how long this
+  // has been running IS part of the answer and travels with it.
+  const recordingSince = rows.length ? rows[rows.length - 1].snap_date : null;
+
+  return {
+    weights, asOf, recordingSince,
+    snapshots: rows.map(r => ({
+      symbol: r.symbol, snapDate: r.snap_date,
+      trendEndDate: r.trend_end_date, epsAvg: r.eps_avg, analysts: r.analysts,
+    })),
+  };
 }
 
 /** Quarter buckets that actually have rows, newest first. */
@@ -114,8 +129,12 @@ function quartersFrom(rows) {
 
 async function context(market) {
   return cached(`ctx:${market}`, async () => {
-    const [rows, scopes, w] = await Promise.all([loadRows(market), loadScopes(market), loadWeights(market)]);
-    return { rows, scopes, weights: w.weights, weightsAsOf: w.asOf, quarters: quartersFrom(rows) };
+    const [rows, scopes, c] = await Promise.all([loadRows(market), loadScopes(market), loadConsensus(market)]);
+    return {
+      rows, scopes, quarters: quartersFrom(rows),
+      weights: c.weights, weightsAsOf: c.asOf,
+      snapshots: c.snapshots, recordingSince: c.recordingSince,
+    };
   });
 }
 
@@ -126,14 +145,32 @@ async function scopeReport(market, scopeKey, quarter) {
   return cached(`scope:${market}:${scopeKey}:${q}`, () => {
     const constituents = ctx.scopes.get(scopeKey) || [];
     const symbols = new Set(constituents.map(c => c.symbol));
-    const rows = ctx.rows.filter(r => symbols.has(r.symbol)).map(toAggRow);
+    const scoped = ctx.rows.filter(r => symbols.has(r.symbol));
+    const report = aggregateQuarter({
+      rows: scoped.map(toAggRow), constituents, quarter: q,
+      weights: ctx.weights, weightsAsOf: ctx.weightsAsOf,
+      issuerGroups: issuerGroups(ctx.rows),
+    });
+
+    // Beat/miss needs what the aggregator deliberately does not carry: the
+    // landing date and the backfill flag, which is how "was this consensus
+    // recorded BEFORE the result?" gets answered at all.
+    const [qy, qm] = q.split('-');
+    const quarterEnd = new Date(Date.UTC(Number(qy), Number(qm), 0)).toISOString().slice(0, 10);
+    const quarterStart = new Date(Date.UTC(Number(qy), Number(qm) - 3, 1)).toISOString().slice(0, 10);
+    const results = scoped
+      .filter(r => r.period_type === 'quarter' && r.period_end >= quarterStart && r.period_end <= quarterEnd)
+      .map(r => ({
+        symbol: r.symbol, periodEnd: r.period_end, eps: r.eps,
+        firstSeenAt: r.first_seen_at, backfilled: r.backfilled,
+      }));
+    const snapshots = ctx.snapshots.filter(s => symbols.has(s.symbol));
+
     return {
       scope: scopeKey,
-      ...aggregateQuarter({
-        rows, constituents, quarter: q,
-        weights: ctx.weights, weightsAsOf: ctx.weightsAsOf,
-        issuerGroups: issuerGroups(ctx.rows),
-      }),
+      ...report,
+      surprise: scopeSurprise({ results, snapshots, recordingSince: ctx.recordingSince }),
+      revisions: revisionBreadth(snapshots, {}),
     };
   });
 }

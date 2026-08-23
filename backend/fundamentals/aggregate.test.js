@@ -593,3 +593,22 @@ describe('the shape the page reads', () => {
     assert.equal(typeof r.bridgeClose, 'number');
   });
 });
+
+// The Phase 3 panel reads these off the same report object, so they belong in
+// the surface test alongside everything else the page renders.
+describe('the surprise panel\'s shape', () => {
+  const { scopeSurprise, revisionBreadth } = require('./surprise');
+
+  test('an empty scope still returns a readable, non-null panel', () => {
+    const s = scopeSurprise({ results: [], snapshots: [], recordingSince: null });
+    for (const k of ['beat', 'miss', 'inline', 'noConsensus', 'n', 'sufficient', 'note', 'basisNote']) {
+      assert.ok(s[k] !== undefined, `${k} missing`);
+    }
+    assert.equal(s.sufficient, false);
+    assert.match(s.note, /forward/i, 'the empty state has to explain itself, not just be blank');
+
+    const rev = revisionBreadth([], {});
+    assert.equal(rev.n, 0);
+    assert.ok(rev.note);
+  });
+});

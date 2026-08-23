@@ -201,6 +201,69 @@ function Tracker({ report }) {
 }
 
 /**
+ * Beat/miss and estimate revisions.
+ *
+ * This panel is empty for months by design, and that is the honest state rather
+ * than a broken one: Yahoo publishes only today's consensus, so what analysts
+ * expected BEFORE a past result is not recoverable — it can only be recorded
+ * forward. So the panel shows the sample growing and says how long it has been
+ * recording, instead of hiding until it has something flattering to say.
+ */
+function Surprise({ report }) {
+  const s = report.surprise
+  const rev = report.revisions
+  if (!s) return null
+  const total = s.beat + s.miss + s.inline + s.noConsensus
+
+  return (
+    <section style={{ marginTop: '1.25rem' }}>
+      <h4 style={{ margin: '0 0 0.15rem', fontSize: '0.85rem' }}>Against expectations</h4>
+      <div style={{ fontSize: '0.7rem', color: s.sufficient ? 'var(--text-secondary)' : '#fcd34d', marginBottom: '0.6rem' }}>
+        {s.note}
+      </div>
+
+      {total > 0 && (
+        <div style={{ display: 'flex', gap: '1.1rem', flexWrap: 'wrap', fontSize: '0.72rem', marginBottom: '0.5rem' }}>
+          <span style={{ color: POS }}>▲ {s.beat} beat</span>
+          <span style={{ color: NEG }}>▼ {s.miss} missed</span>
+          <span style={{ color: NEUTRAL }}>■ {s.inline} in line</span>
+          <span style={{ color: 'var(--text-secondary)' }}
+            title="No consensus was recorded before this result landed — either the snapshot history does not reach back that far, or Yahoo has no coverage for the symbol.">
+            ○ {s.noConsensus} no consensus
+          </span>
+        </div>
+      )}
+
+      {/* The counts are shown even when the characterisation is withheld, so
+          you can watch the sample fill rather than face an empty box. */}
+      {!s.sufficient && total > 0 && (
+        <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+          Counts are shown, the hit rate is not — a beat rate on a handful of results,
+          rendered confidently, is how a dashboard talks someone into a bad habit.
+        </div>
+      )}
+
+      {rev && (
+        <div style={{ fontSize: '0.72rem', color: rev.sufficient ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+          <strong style={{ fontWeight: 600 }}>Revisions:</strong>{' '}
+          {rev.sufficient
+            ? <>
+                <span style={{ color: POS }}>{rev.raised} raised</span>,{' '}
+                <span style={{ color: NEG }}>{rev.cut} cut</span>,{' '}
+                {rev.unchanged} unchanged over {rev.windowDays} days
+              </>
+            : rev.note}
+        </div>
+      )}
+
+      <div style={{ marginTop: '0.5rem', fontSize: '0.66rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+        {s.basisNote}
+      </div>
+    </section>
+  )
+}
+
+/**
  * One scope's detail, shared by this page and the sector drill-down's Earnings
  * tab — so the two cannot drift into showing different decompositions of the
  * same quarter.
@@ -235,6 +298,7 @@ export function ScopeDetail({ market, scope, quarter }) {
       )}
       <Bridge report={report} />
       <Contributions report={report} />
+      <Surprise report={report} />
       <Tracker report={report} />
     </div>
   )
@@ -410,6 +474,10 @@ export default function Earnings() {
             <li><strong>Survivorship.</strong> Constituents are today's index members, so companies
               dropped along the way never appear and past quarters are flattered. Membership is now
               being recorded daily, which fixes this going forward but not backwards.</li>
+            <li><strong>Beat/miss is forward-only.</strong> Analysts' expectations for a past
+              quarter cannot be recovered — Yahoo publishes only today's consensus — so that panel
+              stays empty until enough quarters have been recorded with the estimate captured
+              beforehand. Empty is the honest state, not a fault.</li>
             <li><strong>{data.note}</strong></li>
           </ul>
         </section>
