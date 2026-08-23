@@ -182,27 +182,48 @@ async function runDailyJobs({ force = false } = {}) {
     const today = new Date().toISOString().slice(0, 10);
 
     // Statements: quarterly data changes four times a year, so this is gated on
-    // "nothing fetched recently" rather than run on a tick. ~239 Indian pages at
-    // one a second is a few minutes, and screener.in should not see more.
-    const { data: lastFetch, error: lastErr } = await supabase
-      .from('stock_fundamentals').select('fetched_at')
-      .order('fetched_at', { ascending: false }).limit(1);
-    if (lastErr) throw new Error(`stock_fundamentals: ${lastErr.message}`);
-    const lastAt = lastFetch?.[0]?.fetched_at ? Date.parse(lastFetch[0].fetched_at) : 0;
-    const staleHours = (Date.now() - lastAt) / 3600000;
-    if (force || staleHours >= FUNDAMENTALS_MAX_AGE_HOURS) {
+    // "nothing fetched recently" rather than run on a tick.
+    //
+    // The staleness check is PER MARKET. A single global check was wrong the
+    // moment a second market existed: India's nightly run would refresh the
+    // newest fetched_at in the table and the US would then look fresh forever,
+    // so its half of the page would stay permanently empty.
+    //
+    // And at most ONE market runs per tick, staler first. India is ~239
+    // screener.in pages at one a second and the US is ~600 Yahoo fetches;
+    // running both in one pass makes a ten-minute job out of two four-minute
+    // ones, and the next tick is only 30 minutes away.
+    const staleness = {};
+    for (const market of ['IN', 'US']) {
+      const { data, error } = await supabase
+        .from('stock_fundamentals').select('fetched_at')
+        .eq('market', market)
+        .order('fetched_at', { ascending: false }).limit(1);
+      if (error) throw new Error(`stock_fundamentals: ${error.message}`);
+      const at = data?.[0]?.fetched_at ? Date.parse(data[0].fetched_at) : 0;
+      staleness[market] = (Date.now() - at) / 3600000;
+    }
+    const due = ['IN', 'US']
+      .filter(m => force || staleness[m] >= FUNDAMENTALS_MAX_AGE_HOURS)
+      .sort((a, b) => staleness[b] - staleness[a]);
+
+    if (due.length) {
+      const market = due[0];
       const { runIngest } = require('./fundamentals/ingest');
       // Never --backfill from the scheduler: that flag marks rows whose
       // first_seen_at is an artefact of bulk loading rather than a report
       // landing, and only the one-off CLI run is entitled to set it.
-      const inRes = await runIngest({ market: 'IN' });
+      const res = await runIngest({ market });
       // The API caches per quarter; new rows are the only thing that can change
       // an answer, so the write is what invalidates rather than a TTL.
       require('./fundamentals/service').invalidateCache();
-      out.fundamentals = { IN: inRes };
-      console.log(`[daily] fundamentals IN: ${inRes.saved} rows from ${inRes.ok} symbols (${inRes.failed} failed)`);
+      out.fundamentals = { [market]: res, deferred: due.slice(1) };
+      console.log(`[daily] fundamentals ${market}: ${res.saved} rows from ${res.ok} symbols (${res.failed} failed)`);
     } else {
-      out.fundamentals = { skipped: `fetched ${staleHours.toFixed(1)}h ago` };
+      out.fundamentals = {
+        skipped: Object.entries(staleness)
+          .map(([m, h]) => `${m} fetched ${h.toFixed(1)}h ago`).join(', '),
+      };
     }
 
     // Membership: one row per index per symbol per day, so a same-day re-run is
@@ -226,7 +247,13 @@ async function runDailyJobs({ force = false } = {}) {
     if (conErr) throw new Error(`consensus_snapshots: ${conErr.message}`);
     if (force || !conCount) {
       const { snapshotConsensus } = require('./fundamentals/consensus');
-      out.consensus = { IN: await snapshotConsensus({ market: 'IN' }) };
+      // Both markets every day: the reporting-window filter already cuts this
+      // to the symbols about to report, which is both the cheap set and the
+      // only set where a PRE-announcement consensus can exist.
+      out.consensus = {
+        IN: await snapshotConsensus({ market: 'IN' }),
+        US: await snapshotConsensus({ market: 'US' }),
+      };
     } else {
       out.consensus = { skipped: 'already snapshotted today', rows: conCount };
     }

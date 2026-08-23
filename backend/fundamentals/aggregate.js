@@ -261,6 +261,17 @@ function aggregateQuarter({
       backfilled: current ? Boolean(current.backfilled) : null,
       seenOn: null,               // filled by the caller's reporting-lag band
       mergedInto: primaryOf.get(symbol) || null,
+      // Per-company figures, filled in below once pairing has run. Present as
+      // nulls from the start so a consumer never has to test for the key.
+      netProfit: current ? current.netProfit : null,
+      netProfitPrior: null,
+      eps: current ? current.eps : null,
+      epsPrior: null,
+      yoyGrowthPct: null,
+      qoqGrowthPct: null,
+      classification: null,
+      flags: [],
+      excludedReason: null,
     });
 
     if (!current) continue;                       // not reported yet — same-store
@@ -279,6 +290,7 @@ function aggregateQuarter({
   }
 
   const unit = pairs[0]?.current.unit ?? rows[0]?.unit ?? null;
+  const reportingBySymbol = new Map(reporting.map(r => [r.symbol, r]));
 
   // ── Coverage: two numbers, both of which must clear ────────────────────────
   const yearAgoPoolAll = sum(scope
@@ -376,6 +388,23 @@ function aggregateQuarter({
     }))
     .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
 
+  // Attach each company's own figures to its reporting row. The table renders
+  // exactly the numbers the aggregate summed — not a second calculation of
+  // them, which is how a drill-down comes to contradict its own total.
+  for (const p of pairs) {
+    const row = reportingBySymbol.get(p.symbol);
+    if (!row) continue;
+    row.netProfitPrior = p.yoy.netProfit;
+    row.epsPrior = p.yoy.eps ?? null;
+    row.classification = classify(p.current.netProfit, p.yoy.netProfit);
+    row.yoyGrowthPct = round(growthPct(p.current.netProfit, p.yoy.netProfit, { floor: baseFloor }), 4);
+    if (p.qoq) row.qoqGrowthPct = round(growthPct(p.current.netProfit, p.qoq.netProfit, { floor: baseFloor }), 4);
+  }
+  for (const e of excluded) {
+    const row = reportingBySymbol.get(e.symbol);
+    if (row) row.excludedReason = e.reason;
+  }
+
   // ── The sector bridge is the Σ of the same-store company bridges ───────────
   const bridgeMap = new Map();
   let bridgeKind = 'industrial';
@@ -386,7 +415,11 @@ function aggregateQuarter({
     if (b.kind === 'financial') anyFinancial = true;
     for (const s of b.steps) bridgeMap.set(s.step, (bridgeMap.get(s.step) ?? 0) + s.delta);
     const f = qualityFlags(p.current, p.yoy, b);
-    if (f.length) flags[p.symbol] = f;
+    if (f.length) {
+      flags[p.symbol] = f;
+      const row = reportingBySymbol.get(p.symbol);
+      if (row) row.flags = f;
+    }
   }
   if (anyFinancial) bridgeKind = pairs.every(p => p.current.isFinancial) ? 'financial' : 'mixed';
   const bridge = [...bridgeMap.entries()].map(([step, delta]) => ({

@@ -200,6 +200,124 @@ function Tracker({ report }) {
   )
 }
 
+// What each quality flag is claiming. These are computed from the profit
+// bridge and are descriptions of where the money came from — not scores, and
+// not judgements about whether it was good.
+const FLAG_HINT = {
+  'other-income-driven': 'Most of the profit increase came from other income rather than from operations.',
+  'tax-driven': 'Most of the profit increase came from a lower tax rate rather than from operations.',
+  'below-the-line': 'Operating profit FELL while net profit rose — the gain is below the operating line.',
+  buyback: 'The implied share count shrank, so EPS grew faster than profit did.',
+  dilution: 'The implied share count grew, so EPS grew more slowly than profit did.',
+}
+
+const CLASS_LABEL = {
+  grew: 'grew', shrank: 'shrank', lossToProfit: 'loss → profit',
+  profitToLoss: 'profit → loss', lossToLoss: 'still loss-making',
+}
+
+/**
+ * Every constituent, with its own numbers.
+ *
+ * The rows render the figures the aggregate actually summed rather than
+ * recomputing them here — a drill-down that does its own arithmetic is how a
+ * table comes to contradict the total above it.
+ *
+ * Companies that crossed zero show a classification and NO percentage, which is
+ * the same refusal the sector number makes one line up: "+175%" for a company
+ * going from a ₹20 Cr loss to a ₹15 Cr profit is not a growth rate.
+ */
+function Constituents({ report }) {
+  const [sort, setSort] = useState({ key: 'netProfit', dir: 'desc' })
+  const rows = report.reporting || []
+  if (!rows.length) return null
+
+  const sorted = [...rows].sort((a, b) => {
+    const av = a[sort.key], bv = b[sort.key]
+    if (av == null && bv == null) return 0
+    if (av == null) return 1
+    if (bv == null) return -1
+    const cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv
+    return sort.dir === 'asc' ? cmp : -cmp
+  })
+
+  const cols = [
+    { key: 'symbol', label: 'Symbol', align: 'left' },
+    { key: 'periodEnd', label: 'Period end', align: 'left', hint: 'The company\'s own fiscal period end. Quarters are bucketed by calendar quarter, so an odd fiscal year-end can land in an adjacent bucket — this is the real date.' },
+    { key: 'netProfit', label: 'Net profit' },
+    { key: 'yoyGrowthPct', label: 'YoY' },
+    { key: 'qoqGrowthPct', label: 'QoQ' },
+    { key: 'eps', label: 'EPS' },
+  ]
+
+  return (
+    <section style={{ marginTop: '1.25rem' }}>
+      <h4 style={{ margin: '0 0 0.15rem', fontSize: '0.85rem' }}>Constituents</h4>
+      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+        Chips mark where a profit change came from — click a column to sort.
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="interactive-table" style={{ width: '100%', fontSize: '0.75rem' }}>
+          <thead>
+            <tr>
+              {cols.map(c => (
+                <th key={c.key} title={c.hint}
+                  onClick={() => setSort(s => ({ key: c.key, dir: s.key === c.key && s.dir === 'desc' ? 'asc' : 'desc' }))}
+                  style={{ textAlign: c.align || 'right', cursor: 'pointer', padding: '0.35rem 0.5rem', fontSize: '0.68rem', whiteSpace: 'nowrap', color: sort.key === c.key ? 'var(--accent)' : 'var(--text-secondary)' }}>
+                  {c.label}{sort.key === c.key ? (sort.dir === 'desc' ? ' ↓' : ' ↑') : ''}
+                </th>
+              ))}
+              <th style={{ textAlign: 'left', padding: '0.35rem 0.5rem', fontSize: '0.68rem', color: 'var(--text-secondary)' }}>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map(r => (
+              <tr key={r.symbol} style={{ opacity: r.reported ? 1 : 0.5 }}>
+                <td style={{ padding: '0.3rem 0.5rem' }}>
+                  {r.symbol}
+                  {r.mergedInto && <span style={{ color: 'var(--text-secondary)' }} title={`Same issuer as ${r.mergedInto}: counted once, with the caps summed.`}> ⇢ {r.mergedInto}</span>}
+                </td>
+                <td style={{ padding: '0.3rem 0.5rem', color: 'var(--text-secondary)' }}>{r.periodEnd || '—'}</td>
+                <td style={{ textAlign: 'right', fontFamily: "'JetBrains Mono', monospace" }}>{money(r.netProfit, report.unit)}</td>
+                <td style={{ textAlign: 'right', fontFamily: "'JetBrains Mono', monospace", color: toneOf(r.yoyGrowthPct) }}
+                  title={r.yoyGrowthPct == null && r.classification ? `No percentage: ${CLASS_LABEL[r.classification]}. A company crossing zero has no meaningful growth rate.` : undefined}>
+                  {r.yoyGrowthPct == null ? '—' : pct(r.yoyGrowthPct)}
+                </td>
+                <td style={{ textAlign: 'right', fontFamily: "'JetBrains Mono', monospace", color: toneOf(r.qoqGrowthPct) }}>
+                  {r.qoqGrowthPct == null ? '—' : pct(r.qoqGrowthPct)}
+                </td>
+                <td style={{ textAlign: 'right', fontFamily: "'JetBrains Mono', monospace" }}>{r.eps == null ? '—' : r.eps}</td>
+                <td style={{ padding: '0.3rem 0.5rem' }}>
+                  <span style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+                    {!r.reported && <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>not reported yet</span>}
+                    {r.excludedReason && (
+                      <span title="Dropped from the aggregate rather than computed — the number it would have produced means nothing."
+                        style={{ fontSize: '0.62rem', padding: '0.05rem 0.35rem', borderRadius: '4px', cursor: 'help', border: '1px solid rgba(252,211,77,0.35)', color: '#fcd34d' }}>
+                        excluded: {r.excludedReason}
+                      </span>
+                    )}
+                    {r.classification && r.yoyGrowthPct == null && (
+                      <span style={{ fontSize: '0.62rem', padding: '0.05rem 0.35rem', borderRadius: '4px', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+                        {CLASS_LABEL[r.classification]}
+                      </span>
+                    )}
+                    {(r.flags || []).map(f => (
+                      <span key={f} title={FLAG_HINT[f] || f}
+                        style={{ fontSize: '0.62rem', padding: '0.05rem 0.35rem', borderRadius: '4px', cursor: 'help', border: '1px solid rgba(56,189,248,0.35)', background: 'rgba(56,189,248,0.08)', color: 'var(--accent)' }}>
+                        {f}
+                      </span>
+                    ))}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
 /**
  * Beat/miss and estimate revisions.
  *
@@ -300,6 +418,7 @@ export function ScopeDetail({ market, scope, quarter }) {
       <Contributions report={report} />
       <Surprise report={report} />
       <Tracker report={report} />
+      <Constituents report={report} />
     </div>
   )
 }

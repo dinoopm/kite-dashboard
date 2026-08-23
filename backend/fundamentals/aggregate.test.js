@@ -621,3 +621,60 @@ describe('a market with nothing ingested', () => {
       'the US table is empty until its ingest runs — that must not read as a crash');
   });
 });
+
+// ─── The constituent table's own data ────────────────────────────────────────
+describe('per-company figures on the reporting rows', () => {
+  const r = aggregateQuarter({
+    rows: [
+      ...series('GROW', { '2025-06-30': 100, '2026-03-31': 105, '2026-06-30': 130 }),
+      ...series('TURN', { '2025-06-30': -20, '2026-06-30': 15 }),
+      ...series('LATE', { '2025-06-30': 90 }),
+      row('SWITCH', '2025-06-30', 50, { basis: 'standalone' }),
+      row('SWITCH', '2026-06-30', 150, { basis: 'consolidated' }),
+    ],
+    constituents: members('GROW', 'TURN', 'LATE', 'SWITCH'),
+    quarter: '2026-06',
+  });
+  const by = (s) => r.reporting.find(x => x.symbol === s);
+
+  test('a reported company carries its own growth, not just a tick', () => {
+    assert.equal(by('GROW').yoyGrowthPct, 30);
+    assert.equal(by('GROW').qoqGrowthPct, 23.8095, '130 over 105, to the payload\'s precision');
+    assert.equal(by('GROW').netProfit, 130);
+    assert.equal(by('GROW').netProfitPrior, 100);
+    assert.equal(by('GROW').classification, 'grew');
+  });
+
+  // The table must show the turnaround as a turnaround. A "+175%" here would be
+  // the exact lie the aggregate refuses to tell one line up.
+  test('a company crossing zero shows its classification and NO percentage', () => {
+    assert.equal(by('TURN').classification, 'lossToProfit');
+    assert.equal(by('TURN').yoyGrowthPct, null);
+  });
+
+  test('an unreported company is blank rather than zero', () => {
+    assert.equal(by('LATE').reported, false);
+    assert.equal(by('LATE').netProfit, null);
+    assert.equal(by('LATE').yoyGrowthPct, null);
+  });
+
+  test('an excluded company says why, where the reader can see it', () => {
+    assert.equal(by('SWITCH').excludedReason, 'basis-mismatch');
+    assert.equal(by('SWITCH').yoyGrowthPct, null, 'excluded means not computed, not computed-and-hidden');
+  });
+
+  test('quality flags reach the row the table renders', () => {
+    const taxy = aggregateQuarter({
+      rows: [
+        row('TAXY', '2025-06-30', 50, { pbt: 100, taxPct: 50, operatingProfit: 100, revenue: 1000 }),
+        row('TAXY', '2026-06-30', 90, { pbt: 100, taxPct: 10, operatingProfit: 100, revenue: 1000 }),
+      ],
+      constituents: members('TAXY'),
+      quarter: '2026-06',
+    });
+    const row0 = taxy.reporting[0];
+    assert.ok(row0.flags.includes('tax-driven'),
+      'profit up 80% on an unchanged operating line and a halved tax rate is a tax event');
+    assert.deepEqual(row0.flags, taxy.flags.TAXY, 'the row and the map must agree');
+  });
+});
