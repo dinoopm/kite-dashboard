@@ -88,23 +88,41 @@ async function loadScopes(market) {
  * apply the same weights to both sides — mixing vintages would blend earnings
  * change with weight drift and stop it being a cross-check on pool growth.
  */
+// How far back the consensus read reaches. Beat/miss needs a snapshot from
+// before each result in the quarters on screen, and revisions need 30 days —
+// so a year plus a margin covers both. WITHOUT a bound this paged the whole
+// table on every context build, which is fine in month one and is the same
+// unbounded-read mistake that once cost this app 1.35 GB of egress a day (see
+// dailyJobs' note on the bhavcopy scan). The table grows forever; the read
+// must not.
+const CONSENSUS_LOOKBACK_DAYS = 400;
+
 async function loadConsensus(market) {
+  const since = new Date(Date.now() - CONSENSUS_LOOKBACK_DAYS * 86400000)
+    .toISOString().slice(0, 10);
+
   const rows = await fetchAll('consensus_snapshots',
     'symbol,snap_date,trend_period,trend_end_date,eps_avg,analysts,market_cap',
-    q => q.eq('market', market).order('snap_date', { ascending: false }));
+    q => q.eq('market', market).gte('snap_date', since).order('snap_date', { ascending: false }));
 
-  // Weights: ONE vector, from the newest day that has caps. The weighted ratio
-  // must apply the same weights to both sides, so mixing vintages would blend
-  // earnings change with weight drift.
+  // Weights: ONE vector, from the newest day that has caps — inside the same
+  // bounded page, since a cap vector older than the lookback would be too stale
+  // to be "as-of" anyway.
   const withCap = rows.filter(r => r.market_cap != null);
   const asOf = withCap[0]?.snap_date || null;
   const weights = asOf
     ? Object.fromEntries(withCap.filter(r => r.snap_date === asOf).map(r => [r.symbol, r.market_cap]))
     : null;
 
-  // Recording start: beat/miss and revisions are forward-only, so how long this
-  // has been running IS part of the answer and travels with it.
-  const recordingSince = rows.length ? rows[rows.length - 1].snap_date : null;
+  // Recording start is asked for separately — one row — because it must be the
+  // TRUE first snapshot, not the oldest inside the lookback window. Reading it
+  // off the bounded page would make the panel claim it started recording a year
+  // ago every year, forever.
+  const { data: firstRow, error: firstErr } = await supabase()
+    .from('consensus_snapshots').select('snap_date')
+    .eq('market', market).order('snap_date', { ascending: true }).limit(1);
+  if (firstErr) throw new Error(`consensus_snapshots: ${firstErr.message}`);
+  const recordingSince = firstRow?.[0]?.snap_date || null;
 
   return {
     weights, asOf, recordingSince,

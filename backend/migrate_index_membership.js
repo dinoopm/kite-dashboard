@@ -15,6 +15,13 @@
 //
 // Same reasoning as consensus_snapshots, and the same conclusion: start
 // recording before anything reads it.
+//
+// Rows are written ON CHANGE, not daily. A daily snapshot of both markets is
+// ~940 rows a day and 340,000 a year to capture perhaps twenty real
+// constituent changes. Membership as of any date is "the latest snapshot at or
+// before that date", so an unchanged day adds nothing an existing row does not
+// already answer — and a table that grows 340k rows a year to say nothing is
+// how a read that was cheap in month one becomes expensive in month twelve.
 require('dotenv').config({ path: __dirname + '/../.env' });
 const { createClient } = require('@supabase/supabase-js');
 
