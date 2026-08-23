@@ -612,3 +612,12 @@ describe('the surprise panel\'s shape', () => {
     assert.ok(rev.note);
   });
 });
+
+describe('a market with nothing ingested', () => {
+  test('says what is wrong instead of dereferencing undefined', () => {
+    assert.throws(
+      () => aggregateQuarter({ rows: [], constituents: [{ symbol: 'AAPL' }], quarter: undefined }),
+      /needs a quarter like/,
+      'the US table is empty until its ingest runs — that must not read as a crash');
+  });
+});

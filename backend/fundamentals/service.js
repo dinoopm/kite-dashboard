@@ -138,10 +138,34 @@ async function context(market) {
   });
 }
 
+/**
+ * The shape a market with nothing ingested yet returns.
+ *
+ * Not an error: until the ingest has run for a market its table is simply
+ * empty, and the page should say so rather than show a 500. This keeps the
+ * payload's shape identical so no caller needs a special case.
+ */
+const emptyReport = (scope, note) => ({
+  scope, quarter: null, unit: null,
+  yoy: { poolGrowthPct: null, poolDeltaAbs: null, medianGrowthPct: null, iqr: null,
+         weightedGrowthPct: null, n: 0, poolUsable: false },
+  qoq: null, ttm: null, fy: null,
+  bridge: [], bridgeKind: null, bridgeNote: null, bridgeBase: null, bridgeClose: null,
+  contributions: [], flags: {},
+  breadth: { grew: 0, shrank: 0, lossToProfit: 0, profitToLoss: 0, lossToLoss: 0 },
+  surprise: null, revisions: null,
+  coverage: { reportedCount: 0, constituents: 0, countPct: 0, poolPct: 0, sufficient: false },
+  reporting: [], excluded: [], weightNote: null,
+  verdict: note,
+});
+
+const NOT_INGESTED = 'No results stored for this market yet — run fundamentals/ingest.js for it.';
+
 /** One scope, one quarter. */
 async function scopeReport(market, scopeKey, quarter) {
   const ctx = await context(market);
   const q = quarter || ctx.quarters[0];
+  if (!q) return emptyReport(scopeKey, NOT_INGESTED);
   return cached(`scope:${market}:${scopeKey}:${q}`, () => {
     const constituents = ctx.scopes.get(scopeKey) || [];
     const symbols = new Set(constituents.map(c => c.symbol));
@@ -179,6 +203,12 @@ async function scopeReport(market, scopeKey, quarter) {
 async function allScopes(market, quarter) {
   const ctx = await context(market);
   const q = quarter || ctx.quarters[0];
+  if (!q) {
+    return {
+      market, quarter: null, quarters: [], weightsAsOf: null, scopes: [],
+      note: NOT_INGESTED,
+    };
+  }
   return cached(`all:${market}:${q}`, async () => {
     const out = [];
     for (const key of ctx.scopes.keys()) out.push(await scopeReport(market, key, q));
@@ -203,6 +233,7 @@ async function allScopes(market, quarter) {
 async function coverage(market) {
   const ctx = await context(market);
   const latest = ctx.quarters[0] || null;
+  if (!latest) return { market, latestQuarter: null, lastIngest: null, scopes: [], note: NOT_INGESTED };
   const perScope = [];
   for (const key of ctx.scopes.keys()) {
     const r = await scopeReport(market, key, latest);

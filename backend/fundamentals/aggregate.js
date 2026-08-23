@@ -75,6 +75,11 @@ const round = (v, n = 4) => (v == null || !Number.isFinite(v) ? null : +v.toFixe
 
 /** '2026-06' → the calendar quarter's [start, end] as ISO dates. */
 function quarterBounds(quarter) {
+  // A market with no stored rows yields no quarters, and the caller then has
+  // nothing to pass. Saying so beats "Cannot read properties of undefined".
+  if (!quarter || !/^\d{4}-\d{2}$/.test(String(quarter))) {
+    throw new Error(`aggregateQuarter needs a quarter like '2026-06', got ${JSON.stringify(quarter)}`);
+  }
   const [y, m] = quarter.split('-').map(Number);
   const startMonth = m - 3;
   const start = new Date(Date.UTC(y, startMonth, 1));
