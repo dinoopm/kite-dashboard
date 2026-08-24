@@ -13,6 +13,7 @@ require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const { createClient } = require('@supabase/supabase-js');
 // Alpaca US market-data router (required after dotenv so it sees the keys).
 const { alpacaRouter, checkFeedAgreement } = require('./alpaca');
+const { cryptoRouter } = require('./crypto');
 let supabase = null;
 if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
   supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -5949,6 +5950,9 @@ app.post('/api/stock-picks/summary', async (req, res) => {
 
 // ─── US market data (Alpaca) ───────────────────────────────────
 app.use('/api/us', alpacaRouter);
+// Crypto is a different Alpaca API (v1beta3, pair symbols, no feed param), so
+// it gets its own router rather than riding the equities one.
+app.use('/api/crypto', cryptoRouter);
 
 // Serve frontend in production (Railway)
 app.use(express.static(path.join(__dirname, '../frontend/dist')));

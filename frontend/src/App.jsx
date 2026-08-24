@@ -12,6 +12,7 @@ import ThemeDetail from './pages/ThemeDetail'
 import VirtualPortfolio from './pages/VirtualPortfolio'
 import VirtualPortfolioDetail from './pages/VirtualPortfolioDetail'
 import VixIndex from './pages/VixIndex'
+import Crypto from './pages/Crypto'
 import Screener from './pages/Screener'
 import UsIndices from './pages/us/UsIndices'
 import UsMacro from './pages/us/UsMacro'
@@ -241,6 +242,7 @@ function App() {
           <Route path="/briefing" element={<Briefing />} />
           <Route path="/indices" element={<SectorIndices />} />
           <Route path="/vix" element={<VixIndex />} />
+          <Route path="/crypto" element={<Crypto />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/market-data/stock-picks" element={<StockPicks />} />
           <Route path="/market-data/fii-dii" element={<FiiDii />} />

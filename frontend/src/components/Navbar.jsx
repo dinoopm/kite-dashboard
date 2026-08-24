@@ -79,6 +79,7 @@ function Navbar({ onDisconnect }) {
       <Link to="/screener" style={linkStyle(location.pathname === '/screener')}>Screener</Link>
       <Link to="/indices" style={linkStyle(location.pathname === '/indices')}>Indices</Link>
       <Link to="/vix" style={linkStyle(location.pathname === '/vix')}>VIX</Link>
+      <Link to="/crypto" style={linkStyle(location.pathname === '/crypto')}>Crypto</Link>
       {/* US dropdown (Indices + Screener) */}
       <div onMouseEnter={openUsMenu} onMouseLeave={scheduleUsClose} style={{ position: 'relative' }}>
         <span style={{ ...linkStyle(onUsPage), cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>

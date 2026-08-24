@@ -1,0 +1,159 @@
+// ─── Alpaca crypto market data ───────────────────────────────────────────────
+//
+// A different API from the equities one: /v1beta3/crypto/{loc} rather than /v2,
+// pair symbols like BTC/USD, and no `feed` parameter — which is why alpacaGet
+// cannot be reused, since it hardcodes the v2 base and always appends a feed.
+//
+// DATA ONLY. Nothing here can place an order.
+//
+// Two limits that decide what this data may honestly be used for, both stated
+// on the page rather than buried here:
+//
+// 1. THE VOLUME IS ALPACA'S OWN BOOK. Equities have a consolidated tape, so the
+//    sip feed sees essentially every share traded and the iex feed's 2-3% was a
+//    bug to be caught (see feedAgreement.js). Crypto has no consolidated tape at
+//    all: this is what crossed Alpaca's venue, not what traded in Bitcoin. There
+//    is no fuller feed to switch to, so relative-volume or volume-thrust logic
+//    built on it would measure Alpaca's liquidity rather than the market's.
+//
+// 2. IT TRADES 24/7. Every horizon in this app is counted in SESSIONS, and
+//    calendars are built through signals/marketSeries.mergeCalendars against
+//    NSE. Crypto has no sessions, no closes and no gaps, so a "20-day breakout"
+//    is not the same object here and a daily bar depends on an arbitrary UTC
+//    cutoff. That is why this module serves prices and volume and NOTHING that
+//    claims to predict them: a signal here would need its own calendar and its
+//    own track record before it could mean anything.
+
+const express = require('express');
+const router = express.Router();
+
+const CRYPTO_BASE = 'https://data.alpaca.markets/v1beta3/crypto/us';
+const API_KEY = process.env.ALPACA_API_KEY || process.env.APCA_API_KEY_ID;
+const API_SECRET = process.env.ALPACA_API_SECRET || process.env.APCA_API_SECRET_KEY;
+
+// Crypto market data is served without a subscription, but the keys are still
+// sent when present — an authenticated call gets the better rate limit.
+const authHeaders = () => (API_KEY && API_SECRET
+  ? { 'APCA-API-KEY-ID': API_KEY, 'APCA-API-SECRET-KEY': API_SECRET, Accept: 'application/json' }
+  : { Accept: 'application/json' });
+
+// The liquid USD pairs Alpaca supports. Hardcoded rather than discovered: the
+// assets endpoint needs trading credentials, and a data-only module should not
+// require them.
+const PAIRS = [
+  { pair: 'BTC/USD', name: 'Bitcoin' },
+  { pair: 'ETH/USD', name: 'Ethereum' },
+  { pair: 'SOL/USD', name: 'Solana' },
+  { pair: 'AVAX/USD', name: 'Avalanche' },
+  { pair: 'LINK/USD', name: 'Chainlink' },
+  { pair: 'LTC/USD', name: 'Litecoin' },
+  { pair: 'BCH/USD', name: 'Bitcoin Cash' },
+  { pair: 'UNI/USD', name: 'Uniswap' },
+  { pair: 'AAVE/USD', name: 'Aave' },
+  { pair: 'DOT/USD', name: 'Polkadot' },
+  { pair: 'DOGE/USD', name: 'Dogecoin' },
+  { pair: 'SHIB/USD', name: 'Shiba Inu' },
+];
+const PAIR_NAME = new Map(PAIRS.map(p => [p.pair, p.name]));
+
+// URL-safe form for a route parameter: BTC/USD <-> BTC-USD. A slash in a path
+// segment would need double-encoding and survives proxies badly.
+const toPair = (slug) => String(slug).toUpperCase().replace('-', '/');
+const toSlug = (pair) => pair.replace('/', '-');
+
+const cache = {};
+const inflight = {};
+
+async function cryptoGet(path, params = {}, ttlMs = 30_000) {
+  const qs = new URLSearchParams(params).toString();
+  const url = `${CRYPTO_BASE}${path}${qs ? `?${qs}` : ''}`;
+
+  const hit = cache[url];
+  if (hit && Date.now() - hit.ts < ttlMs) return hit.data;
+  if (inflight[url]) return inflight[url];
+
+  inflight[url] = (async () => {
+    const resp = await fetch(url, { headers: authHeaders() });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      const err = new Error(`Alpaca crypto ${resp.status}: ${body.slice(0, 300)}`);
+      err.statusCode = resp.status === 429 ? 429 : 502;
+      throw err;
+    }
+    const data = await resp.json();
+    cache[url] = { data, ts: Date.now() };
+    return data;
+  })().finally(() => { delete inflight[url]; });
+
+  return inflight[url];
+}
+
+const num = (v) => (v == null || !Number.isFinite(v) ? null : v);
+
+/**
+ * Latest daily bar per pair, with the change against the previous one.
+ *
+ * "24h change" is deliberately NOT what this reports. A daily bar closes at an
+ * arbitrary UTC boundary on a market that never closes, so bar-over-bar change
+ * is a statement about two UTC days rather than about the last 24 hours. The
+ * field is named for what it is.
+ */
+router.get('/snapshots', async (req, res) => {
+  try {
+    const symbols = PAIRS.map(p => p.pair).join(',');
+    const data = await cryptoGet('/bars', {
+      symbols, timeframe: '1Day', limit: 1000,
+      start: new Date(Date.now() - 10 * 86400000).toISOString(),
+    });
+    const rows = PAIRS.map(({ pair, name }) => {
+      const bars = data?.bars?.[pair] || [];
+      const last = bars[bars.length - 1];
+      const prev = bars[bars.length - 2];
+      const close = num(last?.c);
+      const prevClose = num(prev?.c);
+      return {
+        pair, slug: toSlug(pair), name,
+        close,
+        prevClose,
+        changePct: (close != null && prevClose) ? ((close / prevClose) - 1) * 100 : null,
+        volume: num(last?.v),
+        trades: num(last?.n),
+        vwap: num(last?.vw),
+        barStart: last?.t || null,
+      };
+    });
+    res.json({
+      rows,
+      venue: 'Alpaca',
+      caveat: 'Volume is what crossed Alpaca\'s own venue. Crypto has no consolidated tape, so this is not total market volume and there is no fuller feed to switch to.',
+      barNote: 'Daily bars close at a UTC boundary on a market that never closes, so change is bar-over-bar, not a rolling 24 hours.',
+    });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+/** Candles for one pair. `slug` is BTC-USD; Alpaca wants BTC/USD. */
+router.get('/bars/:slug', async (req, res) => {
+  const pair = toPair(req.params.slug);
+  if (!PAIR_NAME.has(pair)) return res.status(404).json({ error: `Unsupported pair: ${pair}` });
+
+  const tf = String(req.query.tf || '1Day');
+  const allowed = { '1Hour': 30, '1Day': 400 };
+  if (!allowed[tf]) return res.status(400).json({ error: `Unsupported timeframe: ${tf}` });
+
+  try {
+    const start = new Date(Date.now() - allowed[tf] * 86400000).toISOString();
+    const data = await cryptoGet('/bars', { symbols: pair, timeframe: tf, limit: 10000, start });
+    const bars = (data?.bars?.[pair] || []).map(b => ({
+      date: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v, vwap: b.vw, trades: b.n,
+    }));
+    res.json({ pair, name: PAIR_NAME.get(pair), timeframe: tf, bars });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+router.get('/pairs', (req, res) => res.json({ pairs: PAIRS.map(p => ({ ...p, slug: toSlug(p.pair) })) }));
+
+module.exports = { cryptoRouter: router, PAIRS, toPair, toSlug };
