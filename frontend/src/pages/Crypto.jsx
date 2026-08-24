@@ -44,7 +44,7 @@ const RANGES = ['1D', '1W', '1M', '3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y']
 const INTRADAY = new Set(['1D', '1W', '1M', '3M'])
 
 /** Candles plus volume. No overlays — see the note at the top of this file. */
-function CryptoChart({ slug, range }) {
+function CryptoChart({ slug, range, onStats }) {
   const box = useRef(null)
   const [bars, setBars] = useState([])
   const [meta, setMeta] = useState(null)
@@ -55,13 +55,30 @@ function CryptoChart({ slug, range }) {
     fetch(`/api/crypto/bars/${slug}?range=${range}`, { signal: ctl.signal })
       .then(r => r.json())
       .then(j => {
-        if (j.error) { setError(j.error); return }
-        setBars(j.bars || [])
+        if (j.error) { setError(j.error); onStats?.(null); return }
+        const bs = j.bars || []
+        setBars(bs)
         setMeta(j)
+        // The header's change must be the change ACROSS the selected range —
+        // first close to last — not the bar-over-bar figure from /snapshots,
+        // which never moves when the range does. Reported from here because
+        // this is where the range's bars actually live.
+        const first = bs[0]?.close
+        const last = bs[bs.length - 1]?.close
+        onStats?.(bs.length ? {
+          range: j.range,
+          first, last,
+          changePct: (first && last) ? ((last / first) - 1) * 100 : null,
+          high: Math.max(...bs.map(b => b.high)),
+          low: Math.min(...bs.map(b => b.low)),
+          firstBar: j.firstBar,
+        } : null)
       })
       .catch(e => e.name !== 'AbortError' && setError(e.message))
     return () => ctl.abort()
-  }, [slug, range])
+    // onStats is the parent's setState and so is stable; listed to satisfy the
+    // exhaustive-deps rule rather than because it can change.
+  }, [slug, range, onStats])
 
   useEffect(() => {
     if (!box.current || !bars.length) return
@@ -124,6 +141,7 @@ export default function Crypto() {
   const [error, setError] = useState(null)
   const [selected, setSelected] = useState('BTC-USD')
   const [range, setRange] = useState('1Y')
+  const [rangeStats, setRangeStats] = useState(null)
   const [sort, setSort] = useState({ key: 'volume', dir: 'desc' })
 
   useEffect(() => {
@@ -205,7 +223,13 @@ export default function Crypto() {
               <div>
                 <h2 style={{ margin: 0, fontSize: '1rem' }}>{current?.name} <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>{current?.pair}</span></h2>
                 <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-                  {fmtPrice(current?.close)} · <span style={{ color: tone(current?.changePct) }}>{pct(current?.changePct)}</span> bar over bar
+                  {fmtPrice(rangeStats?.last ?? current?.close)}
+                  {' · '}
+                  <span style={{ color: tone(rangeStats?.changePct) }}>{pct(rangeStats?.changePct)}</span>
+                  {' '}over {range}
+                  {rangeStats && (
+                    <> · range {fmtPrice(rangeStats.low)}–{fmtPrice(rangeStats.high)}</>
+                  )}
                 </span>
               </div>
               <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
@@ -221,7 +245,10 @@ export default function Crypto() {
               </div>
             </div>
             <div style={{ height: '460px' }}>
-              {current && <CryptoChart key={`${current.slug}:${range}`} slug={current.slug} range={range} />}
+              {current && (
+                <CryptoChart key={`${current.slug}:${range}`}
+                  slug={current.slug} range={range} onStats={setRangeStats} />
+              )}
             </div>
           </section>
         </div>
