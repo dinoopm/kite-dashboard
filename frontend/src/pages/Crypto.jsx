@@ -36,20 +36,32 @@ const fmtVol = (v) => {
 const pct = (v) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`)
 const tone = (v) => (v == null ? 'var(--text-secondary)' : v >= 0 ? UP : DOWN)
 
+// The ranges, and the bar size each one implies. They are not independent
+// choices: five years of 5-minute candles is unreadable and one day of daily
+// candles is a single bar, so the server picks the timeframe from the range and
+// the label here just says which it used.
+const RANGES = ['1D', '1W', '1M', '3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y']
+const INTRADAY = new Set(['1D', '1W', '1M', '3M'])
+
 /** Candles plus volume. No overlays — see the note at the top of this file. */
-function CryptoChart({ slug, tf }) {
+function CryptoChart({ slug, range }) {
   const box = useRef(null)
   const [bars, setBars] = useState([])
+  const [meta, setMeta] = useState(null)
   const [error, setError] = useState(null)
 
   useEffect(() => {
     const ctl = new AbortController()
-    fetch(`/api/crypto/bars/${slug}?tf=${tf}`, { signal: ctl.signal })
+    fetch(`/api/crypto/bars/${slug}?range=${range}`, { signal: ctl.signal })
       .then(r => r.json())
-      .then(j => (j.error ? setError(j.error) : setBars(j.bars || [])))
+      .then(j => {
+        if (j.error) { setError(j.error); return }
+        setBars(j.bars || [])
+        setMeta(j)
+      })
       .catch(e => e.name !== 'AbortError' && setError(e.message))
     return () => ctl.abort()
-  }, [slug, tf])
+  }, [slug, range])
 
   useEffect(() => {
     if (!box.current || !bars.length) return
@@ -61,7 +73,7 @@ function CryptoChart({ slug, tf }) {
       rightPriceScale: { borderColor: GRID, scaleMargins: { top: 0.1, bottom: 0.25 } },
       // Crypto trades every day, so the axis must not hide weekends — that
       // option exists for markets that close, and this one does not.
-      timeScale: { borderColor: GRID, timeVisible: tf === '1Hour', secondsVisible: false },
+      timeScale: { borderColor: GRID, timeVisible: INTRADAY.has(range), secondsVisible: false },
     })
     const candles = chart.addCandlestickSeries({
       upColor: UP, downColor: DOWN, borderVisible: false, wickUpColor: UP, wickDownColor: DOWN,
@@ -83,18 +95,35 @@ function CryptoChart({ slug, tf }) {
     const ro = new ResizeObserver(() => chart.applyOptions({ width: el.clientWidth, height: el.clientHeight }))
     ro.observe(el)
     return () => { ro.disconnect(); chart.remove() }
-  }, [bars, tf])
+  }, [bars, range])
 
   if (error) return <p style={{ color: 'var(--danger)', fontSize: '0.85rem' }}>{error}</p>
   if (!bars.length) return <div className="loader" style={{ margin: '3rem auto' }} />
-  return <div ref={box} style={{ width: '100%', height: '100%' }} />
+
+  // Alpaca's history does not reach back equally far for every pair. Saying so
+  // beats drawing fourteen months under a 5Y label as though that were all
+  // there ever was.
+  const short = meta?.firstBar && meta?.requestedFrom
+    && Date.parse(meta.firstBar) - Date.parse(meta.requestedFrom) > 30 * 86400000
+
+  return (
+    <>
+      <div ref={box} style={{ width: '100%', height: short ? 'calc(100% - 20px)' : '100%' }} />
+      {short && (
+        <div style={{ fontSize: '0.66rem', color: '#fcd34d', paddingTop: '3px' }}>
+          History starts {new Date(meta.firstBar).toISOString().slice(0, 10)} — Alpaca has less
+          than {meta.range} for this pair.
+        </div>
+      )}
+    </>
+  )
 }
 
 export default function Crypto() {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [selected, setSelected] = useState('BTC-USD')
-  const [tf, setTf] = useState('1Day')
+  const [range, setRange] = useState('1Y')
   const [sort, setSort] = useState({ key: 'volume', dir: 'desc' })
 
   useEffect(() => {
@@ -179,19 +208,20 @@ export default function Crypto() {
                   {fmtPrice(current?.close)} · <span style={{ color: tone(current?.changePct) }}>{pct(current?.changePct)}</span> bar over bar
                 </span>
               </div>
-              <div style={{ display: 'flex', gap: '0.4rem' }}>
-                {[['1Day', 'Daily'], ['1Hour', 'Hourly']].map(([v, label]) => (
-                  <button key={v} onClick={() => setTf(v)} style={{
-                    padding: '0.3rem 0.7rem', borderRadius: '4px', fontSize: '0.75rem', cursor: 'pointer',
-                    border: `1px solid ${tf === v ? 'var(--accent)' : 'var(--border)'}`,
-                    background: tf === v ? 'rgba(56,189,248,0.12)' : 'transparent',
-                    color: tf === v ? 'var(--accent)' : 'var(--text-secondary)',
-                  }}>{label}</button>
+              <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+                {RANGES.map(v => (
+                  <button key={v} onClick={() => setRange(v)} style={{
+                    padding: '0.28rem 0.55rem', borderRadius: '4px', fontSize: '0.72rem', cursor: 'pointer',
+                    border: `1px solid ${range === v ? 'var(--accent)' : 'var(--border)'}`,
+                    background: range === v ? 'rgba(56,189,248,0.12)' : 'transparent',
+                    color: range === v ? 'var(--accent)' : 'var(--text-secondary)',
+                    fontWeight: range === v ? 700 : 400,
+                  }}>{v}</button>
                 ))}
               </div>
             </div>
             <div style={{ height: '460px' }}>
-              {current && <CryptoChart key={`${current.slug}:${tf}`} slug={current.slug} tf={tf} />}
+              {current && <CryptoChart key={`${current.slug}:${range}`} slug={current.slug} range={range} />}
             </div>
           </section>
         </div>

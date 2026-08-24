@@ -133,22 +133,58 @@ router.get('/snapshots', async (req, res) => {
   }
 });
 
+/**
+ * The bar size is chosen BY the range, not offered alongside it.
+ *
+ * They are not independent: five years of 5-minute bars is half a million
+ * candles nobody can read and Alpaca will not return in one page, and one day
+ * of daily bars is a single candle. Each row below keeps the count in the
+ * hundreds — the largest is 5Y at ~1,825 — which fits one request and stays
+ * legible.
+ */
+const RANGES = {
+  '1D': { timeframe: '5Min',  days: 1 },
+  '1W': { timeframe: '1Hour', days: 7 },
+  '1M': { timeframe: '1Hour', days: 30 },
+  '3M': { timeframe: '4Hour', days: 90 },
+  '6M': { timeframe: '1Day',  days: 180 },
+  '1Y': { timeframe: '1Day',  days: 365 },
+  '2Y': { timeframe: '1Day',  days: 730 },
+  '3Y': { timeframe: '1Day',  days: 1095 },
+  '4Y': { timeframe: '1Day',  days: 1460 },
+  '5Y': { timeframe: '1Day',  days: 1825 },
+};
+
 /** Candles for one pair. `slug` is BTC-USD; Alpaca wants BTC/USD. */
 router.get('/bars/:slug', async (req, res) => {
   const pair = toPair(req.params.slug);
   if (!PAIR_NAME.has(pair)) return res.status(404).json({ error: `Unsupported pair: ${pair}` });
 
-  const tf = String(req.query.tf || '1Day');
-  const allowed = { '1Hour': 30, '1Day': 400 };
-  if (!allowed[tf]) return res.status(400).json({ error: `Unsupported timeframe: ${tf}` });
+  const range = String(req.query.range || '1Y').toUpperCase();
+  const spec = RANGES[range];
+  if (!spec) {
+    return res.status(400).json({ error: `Unsupported range: ${range}`, supported: Object.keys(RANGES) });
+  }
 
   try {
-    const start = new Date(Date.now() - allowed[tf] * 86400000).toISOString();
-    const data = await cryptoGet('/bars', { symbols: pair, timeframe: tf, limit: 10000, start });
+    const requestedFrom = new Date(Date.now() - spec.days * 86400000).toISOString();
+    const data = await cryptoGet('/bars', {
+      symbols: pair, timeframe: spec.timeframe, limit: 10000, start: requestedFrom,
+    });
     const bars = (data?.bars?.[pair] || []).map(b => ({
       date: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v, vwap: b.vw, trades: b.n,
     }));
-    res.json({ pair, name: PAIR_NAME.get(pair), timeframe: tf, bars });
+    // Alpaca's crypto history does not reach back equally far for every pair —
+    // a newer listing simply has less. Returning what was ASKED FOR alongside
+    // what arrived lets the page say "only 14 months exist" instead of drawing
+    // a short series under a 5Y label as though that were the whole story.
+    res.json({
+      pair, name: PAIR_NAME.get(pair),
+      range, timeframe: spec.timeframe,
+      requestedFrom,
+      firstBar: bars[0]?.date || null,
+      bars,
+    });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
@@ -156,4 +192,4 @@ router.get('/bars/:slug', async (req, res) => {
 
 router.get('/pairs', (req, res) => res.json({ pairs: PAIRS.map(p => ({ ...p, slug: toSlug(p.pair) })) }));
 
-module.exports = { cryptoRouter: router, PAIRS, toPair, toSlug };
+module.exports = { cryptoRouter: router, PAIRS, RANGES, toPair, toSlug };
