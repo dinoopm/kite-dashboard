@@ -58,7 +58,13 @@ function CryptoChart({ slug, range, onStats }) {
         if (j.error) { setError(j.error); onStats?.(null); return }
         const bs = j.bars || []
         setBars(bs)
-        setMeta(j)
+        // How far the window ends short of now is measured HERE, at fetch time,
+        // not during render: the clock is not a pure input, and a value read
+        // mid-render changes on any incidental re-render.
+        setMeta({
+          ...j,
+          staleHours: j.lastBar ? (Date.now() - Date.parse(j.lastBar)) / 3600000 : 0,
+        })
         // The header's change must be the change ACROSS the selected range —
         // first close to last — not the bar-over-bar figure from /snapshots,
         // which never moves when the range does. Reported from here because
@@ -122,14 +128,24 @@ function CryptoChart({ slug, range, onStats }) {
   // there ever was.
   const short = meta?.firstBar && meta?.requestedFrom
     && Date.parse(meta.firstBar) - Date.parse(meta.requestedFrom) > 30 * 86400000
+  // A window that ends well before now is the failure that hid behind the
+  // pagination bug: the chart looked fine and was simply about last month.
+  const staleHours = meta?.staleHours || 0
+  const stale = staleHours > 48
 
   return (
     <>
-      <div ref={box} style={{ width: '100%', height: short ? 'calc(100% - 20px)' : '100%' }} />
+      <div ref={box} style={{ width: '100%', height: `calc(100% - ${(short ? 20 : 0) + (stale ? 20 : 0)}px)` }} />
       {short && (
         <div style={{ fontSize: '0.66rem', color: '#fcd34d', paddingTop: '3px' }}>
           History starts {new Date(meta.firstBar).toISOString().slice(0, 10)} — Alpaca has less
           than {meta.range} for this pair.
+        </div>
+      )}
+      {stale && (
+        <div style={{ fontSize: '0.66rem', color: '#fcd34d', paddingTop: '3px' }}>
+          Latest bar is {new Date(meta.lastBar).toISOString().slice(0, 10)}, not today — this
+          window ends {Math.round(staleHours / 24)} days ago.
         </div>
       )}
     </>
@@ -186,8 +202,13 @@ export default function Crypto() {
       {!data && !error && <div className="loader" style={{ margin: '3rem auto' }} />}
 
       {data && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(360px, 1fr) 2fr', gap: '1rem', alignItems: 'start' }}>
-          <section className="glass-panel" style={{ padding: '0.75rem 1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 460px) minmax(0, 1fr)', gap: '1rem', alignItems: 'start' }}>
+          <section className="glass-panel" style={{ padding: '0.75rem 1rem', overflow: 'hidden' }}>
+            {/* Scrolls inside its own panel rather than spilling under the
+                chart: five nowrap columns cannot always fit, and a grid track
+                sized `1fr` still refuses to shrink below its content unless the
+                minimum is set to 0. */}
+            <div style={{ overflowX: 'auto' }}>
             <table className="interactive-table" style={{ width: '100%', fontSize: '0.8rem' }}>
               <thead>
                 <tr>
@@ -216,6 +237,7 @@ export default function Crypto() {
                 ))}
               </tbody>
             </table>
+            </div>
           </section>
 
           <section className="glass-panel" style={{ padding: '1rem 1.25rem' }}>

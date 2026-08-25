@@ -64,6 +64,35 @@ const toSlug = (pair) => pair.replace('/', '-');
 const cache = {};
 const inflight = {};
 
+/**
+ * Fetch every page, not just the first.
+ *
+ * Alpaca returns bars ASCENDING from `start` and hands back a next_page_token
+ * when more exist. Reading only the first page therefore yields the OLDEST
+ * slice of the requested window and silently stops short — a 1-month request
+ * came back with about a week, ending three weeks before today, and the chart
+ * drew it under a "1M" label with a change and a high/low computed over the
+ * wrong span. Nothing errored; the numbers were just quietly about the past.
+ *
+ * The page cap is a guard against an unbounded loop, not a data limit: the
+ * largest range here is ~1,825 daily bars, so this should rarely exceed one.
+ */
+const MAX_PAGES = 12;
+
+async function cryptoGetAllBars(params) {
+  const out = {};
+  let token = null;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const data = await cryptoGet('/bars', token ? { ...params, page_token: token } : params);
+    for (const [sym, bars] of Object.entries(data?.bars || {})) {
+      (out[sym] = out[sym] || []).push(...bars);
+    }
+    token = data?.next_page_token || null;
+    if (!token) break;
+  }
+  return out;
+}
+
 async function cryptoGet(path, params = {}, ttlMs = 30_000) {
   const qs = new URLSearchParams(params).toString();
   const url = `${CRYPTO_BASE}${path}${qs ? `?${qs}` : ''}`;
@@ -101,12 +130,12 @@ const num = (v) => (v == null || !Number.isFinite(v) ? null : v);
 router.get('/snapshots', async (req, res) => {
   try {
     const symbols = PAIRS.map(p => p.pair).join(',');
-    const data = await cryptoGet('/bars', {
+    const allBars = await cryptoGetAllBars({
       symbols, timeframe: '1Day', limit: 1000,
       start: new Date(Date.now() - 10 * 86400000).toISOString(),
     });
     const rows = PAIRS.map(({ pair, name }) => {
-      const bars = data?.bars?.[pair] || [];
+      const bars = allBars[pair] || [];
       const last = bars[bars.length - 1];
       const prev = bars[bars.length - 2];
       const close = num(last?.c);
@@ -168,10 +197,10 @@ router.get('/bars/:slug', async (req, res) => {
 
   try {
     const requestedFrom = new Date(Date.now() - spec.days * 86400000).toISOString();
-    const data = await cryptoGet('/bars', {
+    const allBars = await cryptoGetAllBars({
       symbols: pair, timeframe: spec.timeframe, limit: 10000, start: requestedFrom,
     });
-    const bars = (data?.bars?.[pair] || []).map(b => ({
+    const bars = (allBars[pair] || []).map(b => ({
       date: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v, vwap: b.vw, trades: b.n,
     }));
     // Alpaca's crypto history does not reach back equally far for every pair —
@@ -183,6 +212,7 @@ router.get('/bars/:slug', async (req, res) => {
       range, timeframe: spec.timeframe,
       requestedFrom,
       firstBar: bars[0]?.date || null,
+      lastBar: bars[bars.length - 1]?.date || null,
       bars,
     });
   } catch (err) {
