@@ -13,9 +13,23 @@ const TONES = {
   warn: { color: '#fbbf24', border: 'rgba(251,191,36,0.45)' },
 }
 const GREEN = '#34d399', RED = '#f87171'
+// Quarterly shareholding is disclosed to 2dp and the two institutional legs
+// routinely move a full point against each other, so a net inside this band is
+// not a direction — it is what is left over when they cancel. Colouring ±0.04
+// green is how a dashboard talks someone into reading noise as accumulation.
+const NOISE_PP = 0.25
+const ppColor = (v) => (v == null || Math.abs(v) < NOISE_PP ? undefined : v > 0 ? GREEN : RED)
 
 const fmtCr = (v) => (v == null ? '—' : `₹${Math.abs(v) >= 100 ? Math.round(v).toLocaleString('en-IN') : v} cr`)
 const signed = (v, unit = '') => (v == null ? '—' : `${v >= 0 ? '+' : ''}${v}${unit}`)
+
+// The net above is the sum of two legs that frequently move against each other,
+// so it is only interpretable next to them. Rendered whenever both legs are
+// known — if screener left either blank the net still stands, but breaking it
+// down would be a guess.
+const legs = (fii, dii) => (fii == null || dii == null
+  ? null
+  : `FII ${signed(fii)} / DII ${signed(dii)} · quarterly filings`)
 
 function Stat({ label, value, color, sub }) {
   return (
@@ -66,9 +80,10 @@ export default function InstitutionalPanel({ symbol }) {
 
       <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
         <Stat label="FII+DII stake, 2 qtrs" value={signed(d.instChange2Q, ' pp')}
-          color={d.instChange2Q == null ? undefined : d.instChange2Q >= 0 ? GREEN : RED} sub="from quarterly filings" />
+          color={ppColor(d.instChange2Q)}
+          sub={legs(d.fiiChange2Q, d.diiChange2Q) || 'from quarterly filings'} />
         <Stat label="Promoters, 2 qtrs" value={signed(d.promoterChange2Q, ' pp')}
-          color={d.promoterChange2Q == null ? undefined : d.promoterChange2Q >= 0 ? GREEN : RED} />
+          color={ppColor(d.promoterChange2Q)} />
         <Stat label="Bulk/block deals, 90d" value={d.deals?.netCr == null ? '—' : `${d.deals.netCr >= 0 ? '+' : '−'}${fmtCr(Math.abs(d.deals.netCr))}`}
           color={d.deals?.netCr == null ? undefined : d.deals.netCr >= 0 ? GREEN : RED}
           sub={d.deals ? `${d.deals.count} deal(s) · ₹${d.deals.buyCr} cr bought / ₹${d.deals.sellCr} cr sold` : 'no disclosed deals'} />

@@ -21,6 +21,39 @@ const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
 const r1 = (v) => (v == null || !isFinite(v) ? null : +v.toFixed(1));
 const r2 = (v) => (v == null || !isFinite(v) ? null : +v.toFixed(2));
 
+// Change in ownership over the last two quarters, from an oldest→newest list of
+// quarterly shareholding rows. Pure, so it can be tested without screener.
+//
+// The FII+DII net alone is misleading when the two legs move against each
+// other: TATAELXSI Dec-25→Jun-26 was FII +1.29 and DII −1.25, netting to +0.04
+// — which reads as "nothing happened" when in fact an eighth of the domestic
+// institutional book changed hands to foreign ones. So the legs come back
+// alongside the net and the panel shows both.
+function quarterlyChanges(quarters) {
+  const none = { instChange2Q: null, promoterChange2Q: null, fiiChange2Q: null, diiChange2Q: null };
+  // Three rows because the comparison is newest vs TWO quarters back; a shorter
+  // history has no such pair and must not silently compare something else.
+  if (!Array.isArray(quarters) || quarters.length < 3) return none;
+
+  const at = (i, f) => quarters[quarters.length - 1 - i]?.[f];
+  // The net tolerates one missing leg — a company with no FII holding at all
+  // leaves that cell blank rather than writing 0 — but only when the other leg
+  // is present, so an entirely blank quarter still yields null.
+  const inst = (i) => (at(i, 'fiis') != null || at(i, 'diis') != null) ? (at(i, 'fiis') || 0) + (at(i, 'diis') || 0) : null;
+  const diff = (i, j) => (i != null && j != null ? r2(i - j) : null);
+  // Each leg needs BOTH ends present in its own right. Inheriting the net's
+  // `|| 0` here would turn a quarter screener left blank into a spurious
+  // full-size move in one leg while the net stayed honest.
+  const leg = (f) => diff(at(0, f), at(2, f));
+
+  return {
+    instChange2Q: diff(inst(0), inst(2)),
+    promoterChange2Q: leg('promoters'),
+    fiiChange2Q: leg('fiis'),
+    diiChange2Q: leg('diis'),
+  };
+}
+
 async function indiaInstitutional(symbol, { getQuarters }) {
   const sym = String(symbol || '').toUpperCase();
   if (!sym) throw new Error('symbol required');
@@ -83,14 +116,7 @@ async function indiaInstitutional(symbol, { getQuarters }) {
   }
 
   // ── Verdict: fixed rules over whatever sources are available ──
-  // Institutional QoQ = change in FII+DII combined % over the last 2 quarters.
-  let instChange2Q = null, promoterChange2Q = null;
-  if (quarters && quarters.length >= 3) {
-    const at = (i, f) => quarters[quarters.length - 1 - i]?.[f];
-    const inst = (i) => (at(i, 'fiis') != null || at(i, 'diis') != null) ? (at(i, 'fiis') || 0) + (at(i, 'diis') || 0) : null;
-    if (inst(0) != null && inst(2) != null) instChange2Q = r2(inst(0) - inst(2));
-    if (at(0, 'promoters') != null && at(2, 'promoters') != null) promoterChange2Q = r2(at(0, 'promoters') - at(2, 'promoters'));
-  }
+  const { instChange2Q, promoterChange2Q, fiiChange2Q, diiChange2Q } = quarterlyChanges(quarters);
   const dealNet = deals?.netCr ?? null;
   const delivRising = delivery ? delivery.recentAvg > delivery.priorAvg * 1.1 : null;
 
@@ -115,9 +141,9 @@ async function indiaInstitutional(symbol, { getQuarters }) {
   return {
     symbol: sym, market: 'IN',
     source: 'screener.in quarterly shareholding (≤12h) + NSE bulk/block deals & delivery % (daily EOD)',
-    quarters, deals, delivery, instChange2Q, promoterChange2Q,
+    quarters, deals, delivery, instChange2Q, promoterChange2Q, fiiChange2Q, diiChange2Q,
     verdict,
   };
 }
 
-module.exports = { indiaInstitutional };
+module.exports = { indiaInstitutional, quarterlyChanges };
