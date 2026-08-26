@@ -5,6 +5,11 @@
 const { buildSeries, rollingMax, rollingMin } = require('../backtest/indicators');
 const { computeVcpScore } = require('./vcp');
 const { squeezeState, MIN_BARS: SQUEEZE_MIN_BARS } = require('./squeeze');
+// The BUY half of signal1050 is the registry's detector, not a second copy of
+// the rule. See the note above lastCrossoverSignal for why that matters.
+const {
+  maCrossUp, smaSeries: registrySma, CROSS_FAST, CROSS_SLOW, CONFIRM_WINDOW, VOLUME_THRUST_MULT,
+} = require('../signals/registry');
 
 // Field catalog — drives both the UI's condition builder (dropdowns, operator
 // choices, value inputs) and server-side validation. `group` is only a UI hint.
@@ -48,6 +53,23 @@ const SCREENER_FIELDS = [
   // RSI < 50. signal1050 = the most recent such event's type.
   { key: 'signal1050',    label: 'SMA 10/50 signal',            type: 'enum', enumValues: ['BUY', 'SELL', 'NONE'], group: 'Signals' },
   { key: 'signal1050Age', label: 'Bars since 10/50 signal',     type: 'number', group: 'Signals' },
+  // Was there demand behind the buy? A volume thrust (>=2x the trailing
+  // 20-session average on an up close) landing on the cross bar or in the 5
+  // sessions before it. This is the split the registry already records as
+  // ma_cross_volume vs ma_cross_quiet, surfaced so the screener can ask for it.
+  //
+  // NOT the same question as volSurge, which is today's volume against its
+  // average — a stock that crossed six weeks ago on huge volume and is quiet
+  // now has a low volSurge and a confirmed cross. One describes today, the
+  // other describes the buy.
+  //
+  // Null unless the latest signal is a BUY: on a SELL or a stock that has never
+  // crossed there is no cross for the question to be about, and null never
+  // matches a condition, so `is NO` cannot sweep those in.
+  { key: 'crossVolConfirmed', label: 'Buy volume-confirmed', type: 'enum', enumValues: ['YES', 'NO'], group: 'Signals' },
+  // Volume ÷ 20-session average ON THE CROSS BAR itself — the figure recorded
+  // with the emission, so a screened row and its scorecard entry agree.
+  { key: 'crossVolRatio', label: 'Volume × at the cross', type: 'number', group: 'Signals' },
   { key: 'smaCross',    label: 'SMA 50/200 state',         type: 'enum', enumValues: ['GOLDEN', 'DEATH'], group: 'Trend' },
   { key: 'breakout20d', label: 'Above prior 20d high',     type: 'enum', enumValues: ['YES', 'NO'], group: 'Levels' },
   // Bollinger bandwidth and the squeeze. `bbSqueeze` is a STATE — true for
@@ -72,35 +94,42 @@ function lastSma(closes, n) {
   return s / n;
 }
 
-// Full SMA series via rolling sum (null during warmup) — same alignment as
-// the frontend signalEngine's sma().
-function smaSeries(values, period) {
-  const out = new Array(values.length).fill(null);
-  let sum = 0;
-  for (let i = 0; i < values.length; i++) {
-    sum += values[i];
-    if (i >= period) sum -= values[i - period];
-    if (i >= period - 1) out[i] = sum / period;
-  }
-  return out;
-}
-
-// Most recent SMA fast/slow crossover signal, with the same RSI momentum
-// filter as the Signals tab: BUY on golden cross + RSI > 50, SELL on death
-// cross + RSI < 50. Returns { signal: 'BUY'|'SELL'|null, barsAgo }.
-function lastCrossoverSignal(closes, rsiArr, fastPeriod = 10, slowPeriod = 50) {
-  const fast = smaSeries(closes, fastPeriod);
-  const slow = smaSeries(closes, slowPeriod);
-  let signal = null;
-  let signalIdx = null;
+/**
+ * Most recent SMA 10/50 crossover signal, with the Signals tab's RSI momentum
+ * filter: BUY on golden cross + RSI > 50, SELL on death cross + RSI < 50.
+ *
+ * The BUY half calls the registry's `maCrossUp` rather than re-deriving the
+ * rule here. This file used to carry its own copy, and the two had already
+ * drifted: the registry (like the chart) drops a cross that fires below the
+ * 20-bar mean right after a sharp fall — the dead-cat bounce the chart draws as
+ * a hollow DC and deliberately does not count as a buy — and this copy did not.
+ *
+ * That divergence was latent rather than active: over 1,591 crossings in a
+ * synthetic sweep the two rules agreed every time, because a golden cross
+ * almost never fires with price under its own 20-bar mean. Latent is still
+ * wrong. `ma_cross_up` is what the scorecard measures and what the badge beside
+ * these results reports, so a screener hit that the scorecard would have
+ * excluded is a row claiming a track record built without it.
+ *
+ * Returns the detector's own metadata for the buy, so a screened row and its
+ * recorded emission carry identical numbers.
+ */
+function lastCrossoverSignal(S) {
+  const closes = S.closes;
+  const fast = registrySma(S, CROSS_FAST);
+  const slow = registrySma(S, CROSS_SLOW);
+  let signal = null, signalIdx = null, buy = null;
   for (let i = 1; i < closes.length; i++) {
-    if (fast[i] == null || slow[i] == null || fast[i - 1] == null || slow[i - 1] == null || rsiArr[i] == null) continue;
-    const crossedUp = fast[i - 1] <= slow[i - 1] && fast[i] > slow[i];
-    const crossedDown = fast[i - 1] >= slow[i - 1] && fast[i] < slow[i];
-    if (crossedUp && rsiArr[i] > 50) { signal = 'BUY'; signalIdx = i; }
-    else if (crossedDown && rsiArr[i] < 50) { signal = 'SELL'; signalIdx = i; }
+    const hit = maCrossUp(S, i);
+    if (hit) { signal = 'BUY'; signalIdx = i; buy = hit; continue; }
+    if (fast[i] == null || slow[i] == null || fast[i - 1] == null || slow[i - 1] == null || S.rsi14[i] == null) continue;
+    // No registry entry scores the sell side yet, so it stays local. When one
+    // lands, it replaces this branch the same way the buy branch was replaced.
+    if (fast[i - 1] >= slow[i - 1] && fast[i] < slow[i] && S.rsi14[i] < 50) {
+      signal = 'SELL'; signalIdx = i; buy = null;
+    }
   }
-  return { signal, barsAgo: signalIdx != null ? closes.length - 1 - signalIdx : null };
+  return { signal, barsAgo: signalIdx != null ? closes.length - 1 - signalIdx : null, buy };
 }
 
 const pctVs = (price, ref) => (ref != null && ref > 0 ? +(((price - ref) / ref) * 100).toFixed(2) : null);
@@ -156,8 +185,13 @@ function computeScreenerRow(candles) {
     rangeCompression: (w252 != null && w252 > 0 && w66 != null) ? +(w66 / w252).toFixed(3) : null,
     supertrend: S.supertrend[last]?.direction ?? null,
     ...(() => {
-      const { signal, barsAgo } = lastCrossoverSignal(closes, S.rsi14, 10, 50);
-      return { signal1050: signal ?? 'NONE', signal1050Age: barsAgo };
+      const { signal, barsAgo, buy } = lastCrossoverSignal(S);
+      return {
+        signal1050: signal ?? 'NONE',
+        signal1050Age: barsAgo,
+        crossVolConfirmed: buy ? (buy.confirmed ? 'YES' : 'NO') : null,
+        crossVolRatio: buy ? buy.volRatio : null,
+      };
     })(),
     smaCross: (sma50 != null && sma200 != null) ? (sma50 > sma200 ? 'GOLDEN' : 'DEATH') : null,
     breakout20d: hi20 != null ? (price > hi20 ? 'YES' : 'NO') : null,

@@ -25,6 +25,18 @@ const PRESET_SCREENS = [
   // days; only 22.
   { id: 'p-basebreak', name: 'Year-long base → fresh BUY', scope: { type: 'sp500' }, conditions: [{ field: 'range52wPct', op: 'lte', value: 30 }, { field: 'ret1Y', op: 'lte', value: 15 }, { field: 'ret1Y', op: 'gte', value: -15 }, { field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 10 }] },
   { id: 'p-vcp', name: 'VCP setups', scope: { type: 'sp500' }, conditions: [{ field: 'vcpSetup', op: 'is', value: 'YES' }] },
+  // The Signals-tab setup: the golden-cross buy with a volume thrust behind it,
+  // and its disjoint control. See the fuller note on the same pair in
+  // pages/Screener.jsx — they are two halves of one rule and only mean anything
+  // read together.
+  //
+  // No track-record badge here, unlike the India screener. The scorecard is
+  // built from nse_bhavcopy and scored against NIFTY 50, so it has nothing to
+  // say about US prices, and an amber "not measured here" chip on each card
+  // would be four words of noise repeated twice. The note under the preset list
+  // says it once instead.
+  { id: 'p-cross-vol', name: 'Golden cross, volume-confirmed', scope: { type: 'sp500' }, conditions: [{ field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 10 }, { field: 'crossVolConfirmed', op: 'is', value: 'YES' }] },
+  { id: 'p-cross-quiet', name: 'Golden cross, no volume (control)', scope: { type: 'sp500' }, conditions: [{ field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 10 }, { field: 'crossVolConfirmed', op: 'is', value: 'NO' }] },
   // See the note on the same preset in pages/Screener.jsx: thresholds are the
   // chart's, not yet swept, and the trend filter is there because a squeeze
   // predicts a move without predicting its direction.
@@ -38,6 +50,8 @@ const RESULT_COLUMNS = [
   { key: 'adx14', label: 'ADX' },
   { key: 'volSurge', label: 'Vol×' },
   { key: 'signal1050', label: '10/50 Signal' },
+  { key: 'crossVolConfirmed', label: 'Vol conf.' },
+  { key: 'crossVolRatio', label: 'Vol× @cross' },
   { key: 'supertrend', label: 'SuperTrend' },
   { key: 'pctVsSma200', label: 'vs 200SMA %', pct: true },
   { key: 'ret1M', label: '1M %', pct: true },
@@ -378,6 +392,14 @@ export default function UsScreener() {
           );
         })}
       </div>
+      {/* Said once here rather than as a chip on every card that would carry
+          one. The signals scorecard is built entirely from nse_bhavcopy and
+          scored against NIFTY 50; none of it was measured on US prices. */}
+      <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: '-1rem 0 1.5rem' }}>
+        These presets carry no track record on US data. The signals scorecard is built from Indian
+        prices and scored against NIFTY 50, so it says nothing about these names — the same setup
+        on the India screener shows what has been measured.
+      </p>
 
       {/* Saved screens */}
       <h3 style={{ margin: '0.5rem 0 0.75rem' }}>Saved screens</h3>

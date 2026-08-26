@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
+import SignalScore from '../components/SignalScore'
 
 const POLL_MS = 2000
 const NUMBER_OPS = [
@@ -29,6 +30,26 @@ const PRESET_SCREENS = [
   { id: 'p-buy20d', name: 'BUY + 20d breakout', conditions: [
     { field: 'signal1050', op: 'is', value: 'BUY' },
     { field: 'breakout20d', op: 'is', value: 'YES' },
+  ] },
+  // The Signals-tab setup, screened: the golden-cross buy with a volume thrust
+  // behind it. `signal` names the registry entry these conditions reproduce, so
+  // the card can carry that entry's track record — the same badge the chart
+  // shows beside the marker, over the same rule.
+  //
+  // The pair is deliberate and they are DISJOINT halves of ma_cross_up, not a
+  // good screen and a worse one. Volume confirmation is only worth applying as
+  // a filter if the quiet half does measurably worse, and that comparison is
+  // unreadable unless both are on screen. Loading the control is how you find
+  // out whether the filter earns its place; if their badges agree, it does not.
+  { id: 'p-cross-vol', name: 'Golden cross, volume-confirmed', signal: 'ma_cross_volume', conditions: [
+    { field: 'signal1050', op: 'is', value: 'BUY' },
+    { field: 'signal1050Age', op: 'lte', value: 10 },
+    { field: 'crossVolConfirmed', op: 'is', value: 'YES' },
+  ] },
+  { id: 'p-cross-quiet', name: 'Golden cross, no volume (control)', signal: 'ma_cross_quiet', conditions: [
+    { field: 'signal1050', op: 'is', value: 'BUY' },
+    { field: 'signal1050Age', op: 'lte', value: 10 },
+    { field: 'crossVolConfirmed', op: 'is', value: 'NO' },
   ] },
   { id: 'p-coiling', name: 'Coiling (3m tighter than 12m)', conditions: [
     { field: 'rangeCompression', op: 'lte', value: 0.5 },
@@ -63,6 +84,8 @@ const RESULT_COLUMNS = [
   { key: 'volSurge', label: 'Vol×' },
   { key: 'signal1050', label: '10/50 Signal' },
   { key: 'signal1050Age', label: 'Sig. age' },
+  { key: 'crossVolConfirmed', label: 'Vol conf.' },
+  { key: 'crossVolRatio', label: 'Vol× @cross' },
   { key: 'supertrend', label: 'SuperTrend' },
   { key: 'pctVsSma200', label: 'vs 200SMA %', pct: true },
   { key: 'ret1M', label: '1M %', pct: true },
@@ -557,6 +580,12 @@ export default function Screener() {
               <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flex: 1 }}>
                 {(p.conditions || []).map(describeCondition).join('  AND  ')}
               </span>
+              {/* Where a preset reproduces a registered signal, its track record
+                  rides with it. The badge greys itself out and says "too few to
+                  judge" below the sample floor, which is the honest state for
+                  these two today — bhavcopy starts 2026-04-02 and a 10/50 cross
+                  needs 50 bars before it can fire at all. */}
+              {p.signal && <SignalScore signal={p.signal} market="IN" />}
               <button
                 onClick={() => loadPreset(p)}
                 disabled={isActive}
