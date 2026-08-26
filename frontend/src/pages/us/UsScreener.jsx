@@ -37,6 +37,9 @@ const PRESET_SCREENS = [
   // says it once instead.
   { id: 'p-cross-vol', name: 'Golden cross, volume-confirmed', scope: { type: 'sp500' }, conditions: [{ field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 10 }, { field: 'crossVolConfirmed', op: 'is', value: 'YES' }] },
   { id: 'p-cross-quiet', name: 'Golden cross, no volume (control)', scope: { type: 'sp500' }, conditions: [{ field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 10 }, { field: 'crossVolConfirmed', op: 'is', value: 'NO' }] },
+  // The chart setup: fresh buy, >=2x volume behind it, RSI over 60 at the
+  // cross. See the fuller note on the same preset in pages/Screener.jsx.
+  { id: 'p-cross-rsi60', name: '2× volume + buy + RSI 60', scope: { type: 'sp500' }, conditions: [{ field: 'signal1050', op: 'is', value: 'BUY' }, { field: 'signal1050Age', op: 'lte', value: 10 }, { field: 'crossVolConfirmed', op: 'is', value: 'YES' }, { field: 'crossRsi', op: 'gt', value: 60 }] },
   // See the note on the same preset in pages/Screener.jsx: thresholds are the
   // chart's, not yet swept, and the trend filter is there because a squeeze
   // predicts a move without predicting its direction.
@@ -52,6 +55,7 @@ const RESULT_COLUMNS = [
   { key: 'signal1050', label: '10/50 Signal' },
   { key: 'crossVolConfirmed', label: 'Vol conf.' },
   { key: 'crossVolRatio', label: 'Vol× @cross' },
+  { key: 'crossRsi', label: 'RSI @cross' },
   { key: 'supertrend', label: 'SuperTrend' },
   { key: 'pctVsSma200', label: 'vs 200SMA %', pct: true },
   { key: 'ret1M', label: '1M %', pct: true },

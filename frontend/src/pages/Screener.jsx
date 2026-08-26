@@ -51,6 +51,27 @@ const PRESET_SCREENS = [
     { field: 'signal1050Age', op: 'lte', value: 10 },
     { field: 'crossVolConfirmed', op: 'is', value: 'NO' },
   ] },
+  // The chart setup read off the Signals tab: a fresh buy marker, a tinted
+  // (>=2x) volume bar behind it, RSI above 60 at the cross.
+  //
+  // Deliberately carries NO track-record badge, unlike the two above. The
+  // scored rule is ma_cross_volume, whose RSI gate is >50; asking for >60 is a
+  // tighter cut of it that nothing has measured separately. Showing the parent's
+  // record here would attach a number to a rule it was not measured on — the
+  // same reason the Signals tab hides its badge when the period sliders move
+  // off 10/50. The note renders in its place so the gap is visible rather than
+  // merely absent.
+  {
+    id: 'p-cross-rsi60',
+    name: '2× volume + buy + RSI 60',
+    note: 'Tighter than the scored rule (ma_cross_volume gates RSI at 50). No separate record yet.',
+    conditions: [
+      { field: 'signal1050', op: 'is', value: 'BUY' },
+      { field: 'signal1050Age', op: 'lte', value: 10 },
+      { field: 'crossVolConfirmed', op: 'is', value: 'YES' },
+      { field: 'crossRsi', op: 'gt', value: 60 },
+    ],
+  },
   { id: 'p-coiling', name: 'Coiling (3m tighter than 12m)', conditions: [
     { field: 'rangeCompression', op: 'lte', value: 0.5 },
     { field: 'range52wPct', op: 'lte', value: 60 },
@@ -86,6 +107,7 @@ const RESULT_COLUMNS = [
   { key: 'signal1050Age', label: 'Sig. age' },
   { key: 'crossVolConfirmed', label: 'Vol conf.' },
   { key: 'crossVolRatio', label: 'Vol× @cross' },
+  { key: 'crossRsi', label: 'RSI @cross' },
   { key: 'supertrend', label: 'SuperTrend' },
   { key: 'pctVsSma200', label: 'vs 200SMA %', pct: true },
   { key: 'ret1M', label: '1M %', pct: true },
@@ -586,6 +608,13 @@ export default function Screener() {
                   these two today — bhavcopy starts 2026-04-02 and a 10/50 cross
                   needs 50 bars before it can fire at all. */}
               {p.signal && <SignalScore signal={p.signal} market="IN" />}
+              {/* Stands where the badge would be, for a preset that is a
+                  variant of a scored rule rather than the rule itself. */}
+              {p.note && (
+                <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', fontStyle: 'italic', maxWidth: '280px' }}>
+                  {p.note}
+                </span>
+              )}
               <button
                 onClick={() => loadPreset(p)}
                 disabled={isActive}

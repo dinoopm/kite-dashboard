@@ -1,7 +1,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { computeScreenerRow, SCREENER_FIELDS } = require('./engine');
+const { computeScreenerRow, SCREENER_FIELDS, validateConditions, evaluateConditions } = require('./engine');
 const { buildSeries } = require('../backtest/indicators');
 const { maCrossUp, smaSeries, CONFIRM_WINDOW } = require('../signals/registry');
 
@@ -97,6 +97,34 @@ describe('crossVolRatio', () => {
   });
 });
 
+describe('crossRsi', () => {
+  test('reports RSI at the cross bar, not today', () => {
+    const bars = series({ 77: 3000 });
+    const S = buildSeries(bars);
+    const r = computeScreenerRow(bars);
+    assert.equal(r.crossRsi, maCrossUp(S, CROSS_BAR).rsi);
+    assert.equal(r.crossRsi, +S.rsi14[CROSS_BAR].toFixed(1));
+  });
+
+  // The two diverge as soon as the stock moves after the cross, which is the
+  // entire reason for a separate field. Truncating right after the cross and
+  // running to the end of the rally gives the same buy two different "current"
+  // RSIs while crossRsi stays put.
+  test('stays fixed while rsi14 moves on', () => {
+    const full = series({ 77: 3000 });
+    const early = computeScreenerRow(full.slice(0, CROSS_BAR + 2));
+    const late = computeScreenerRow(full);
+    assert.equal(early.crossRsi, late.crossRsi, 'the cross has not changed');
+    assert.notEqual(early.rsi14, late.rsi14, 'but today has');
+  });
+
+  // The cross rule gates RSI above 50, so anything it emits clears that. A
+  // screen asking for less is asking for something the rule cannot produce.
+  test('is always above the rule\'s own 50 gate', () => {
+    assert.ok(computeScreenerRow(series()).crossRsi > 50);
+  });
+});
+
 describe('absence is null, never NO', () => {
   // A null field never matches a condition, so `crossVolConfirmed is NO` cannot
   // sweep in stocks that simply have no buy to ask the question about. Encoding
@@ -111,6 +139,7 @@ describe('absence is null, never NO', () => {
     assert.notEqual(r.signal1050, 'BUY');
     assert.equal(r.crossVolConfirmed, null);
     assert.equal(r.crossVolRatio, null);
+    assert.equal(r.crossRsi, null);
   });
 
   test('null when there is not enough history to cross at all', () => {
@@ -121,13 +150,75 @@ describe('absence is null, never NO', () => {
 });
 
 describe('the fields are declared to the UI and to validation', () => {
-  for (const [key, type] of [['crossVolConfirmed', 'enum'], ['crossVolRatio', 'number']]) {
+  for (const [key, type] of [['crossVolConfirmed', 'enum'], ['crossVolRatio', 'number'], ['crossRsi', 'number']]) {
     test(`${key} is in the catalog as ${type}`, () => {
       const f = SCREENER_FIELDS.find(x => x.key === key);
       assert.ok(f, `${key} missing from SCREENER_FIELDS — the condition builder cannot offer it`);
       assert.equal(f.type, type);
     });
   }
+});
+
+// ─── The shipped preset ─────────────────────────────────────────────────────
+//
+// "2x volume + buy + RSI 60" as it appears in PRESET_SCREENS on both screeners.
+// Copied rather than imported because the presets live in frontend source; the
+// point is that each condition in it can be shown to bite, so a later edit that
+// makes one of them redundant fails here rather than silently widening the
+// screen.
+describe('the 2x volume + buy + RSI 60 preset', () => {
+  const PRESET = [
+    { field: 'signal1050', op: 'is', value: 'BUY' },
+    { field: 'signal1050Age', op: 'lte', value: 10 },
+    { field: 'crossVolConfirmed', op: 'is', value: 'YES' },
+    { field: 'crossRsi', op: 'gt', value: 60 },
+  ];
+
+  test('the conditions are well-formed', () => {
+    assert.doesNotThrow(() => validateConditions(PRESET));
+  });
+
+  test('matches a fresh, volume-confirmed, strong-RSI buy', () => {
+    const v = computeScreenerRow(series({ 77: 3000 }).slice(0, CROSS_BAR + 7));
+    assert.equal(evaluateConditions(v, PRESET), true);
+  });
+
+  test('rejects the identical path with no volume behind the buy', () => {
+    const v = computeScreenerRow(series().slice(0, CROSS_BAR + 7));
+    assert.equal(v.crossVolConfirmed, 'NO');
+    assert.equal(evaluateConditions(v, PRESET), false);
+  });
+
+  test('rejects a buy that has gone stale', () => {
+    const v = computeScreenerRow(series({ 77: 3000 }));
+    assert.equal(v.signal1050Age, 15);
+    assert.equal(evaluateConditions(v, PRESET), false);
+  });
+
+  // The case that proves the 60 gate does something. A choppy rally crosses
+  // with RSI at 56.5 — a real buy the chart would draw, volume-confirmed and
+  // fresh — so it clears every condition except the one under test. Without a
+  // fixture in the 50-60 band the RSI clause could be deleted and every other
+  // test here would still pass.
+  test('rejects a confirmed, fresh buy whose RSI is only 56.5', () => {
+    const bars = [];
+    let p = 200;
+    const push = (c, i) => bars.push({
+      date: new Date(2025, 0, 1 + i).toISOString().slice(0, 10),
+      open: c, high: c * 1.01, low: c * 0.99, close: c, volume: i === 82 ? 3000 : 1000,
+    });
+    for (let i = 0; i < 70; i++) { p *= 0.997; push(p, i); }
+    for (let i = 70; i < 95; i++) { p *= 1.004 * (1 + 0.02 * Math.sin(i * 1.7)); push(p, i); }
+    const v = computeScreenerRow(bars.slice(0, 86));
+
+    assert.equal(v.signal1050, 'BUY');
+    assert.equal(v.signal1050Age, 0);
+    assert.equal(v.crossVolConfirmed, 'YES');
+    assert.equal(v.crossRsi, 56.5);
+    assert.equal(evaluateConditions(v, PRESET), false, 'only the RSI clause can reject this');
+    // ...and it is exactly the RSI clause doing it.
+    assert.equal(evaluateConditions(v, PRESET.slice(0, 3)), true);
+  });
 });
 
 // ─── The anti-drift contract ────────────────────────────────────────────────

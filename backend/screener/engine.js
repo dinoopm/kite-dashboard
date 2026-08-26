@@ -70,6 +70,15 @@ const SCREENER_FIELDS = [
   // Volume ÷ 20-session average ON THE CROSS BAR itself — the figure recorded
   // with the emission, so a screened row and its scorecard entry agree.
   { key: 'crossVolRatio', label: 'Volume × at the cross', type: 'number', group: 'Signals' },
+  // RSI on the cross bar, likewise from the emission. Distinct from rsi14,
+  // which is today's: a cross that fired at RSI 72 and has since cooled to 45
+  // reads 72 here and 45 there. "How strong was the buy" and "how strong is it
+  // now" are different questions and a screen usually means one of them.
+  //
+  // Always > 50 when present — the cross rule requires it — so a condition
+  // below 50 matches nothing, and one above it is asking for a tighter buy than
+  // the chart draws.
+  { key: 'crossRsi', label: 'RSI at the cross', type: 'number', group: 'Signals' },
   { key: 'smaCross',    label: 'SMA 50/200 state',         type: 'enum', enumValues: ['GOLDEN', 'DEATH'], group: 'Trend' },
   { key: 'breakout20d', label: 'Above prior 20d high',     type: 'enum', enumValues: ['YES', 'NO'], group: 'Levels' },
   // Bollinger bandwidth and the squeeze. `bbSqueeze` is a STATE — true for
@@ -191,6 +200,7 @@ function computeScreenerRow(candles) {
         signal1050Age: barsAgo,
         crossVolConfirmed: buy ? (buy.confirmed ? 'YES' : 'NO') : null,
         crossVolRatio: buy ? buy.volRatio : null,
+        crossRsi: buy ? buy.rsi : null,
       };
     })(),
     smaCross: (sma50 != null && sma200 != null) ? (sma50 > sma200 ? 'GOLDEN' : 'DEATH') : null,
