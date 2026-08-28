@@ -64,6 +64,20 @@ export function generateSignals(bars, fastPeriod = 10, slowPeriod = 50, rsiPerio
   };
 
   const signals = [];
+  // Golden crosses that happened but failed the RSI > 50 gate.
+  //
+  // Returned SEPARATELY, never mixed into `signals`. Two reasons, and the
+  // second is the load-bearing one. They are not signals — the rule rejected
+  // them — so filing them alongside buys would be a category error. And
+  // Instrument.jsx / UsInstrument.jsx both render a signal as `type === 'buy'
+  // ? BUY : SELL`, so anything unfamiliar in that array is painted as a red
+  // sell marker. A near-miss shown as a sell is worse than showing nothing.
+  //
+  // Buy side only. The sell rule has a symmetric near-miss (a death cross with
+  // RSI >= 50) but the chart's quality furniture — the dead-cat tally, the
+  // volume-confirmation chips — is all buy-side, and adding sell markers nobody
+  // asked for would crowd the chart to answer a question nobody asked.
+  const nearMisses = [];
   for (let i = 1; i < bars.length; i++) {
     if (fast[i] == null || slow[i] == null || fast[i - 1] == null || slow[i - 1] == null || rsiArr[i] == null) continue;
 
@@ -78,7 +92,16 @@ export function generateSignals(bars, fastPeriod = 10, slowPeriod = 50, rsiPerio
       signals.push({ index: i, type: 'buy', bar: bars[i], rsi: rsiArr[i], fast: fast[i], slow: slow[i], fastPeriod, slowPeriod, deadCat, mid: mid[i], close: closes[i] });
     } else if (crossedDown && rsiArr[i] < 50) {
       signals.push({ index: i, type: 'sell', bar: bars[i], rsi: rsiArr[i], fast: fast[i], slow: slow[i], fastPeriod, slowPeriod });
+    } else if (crossedUp) {
+      // The cross is real; only momentum was missing. Without this the chart
+      // draws nothing here, so a visible crossing with no marker is
+      // indistinguishable from no crossing at all — which is exactly how a
+      // correct rejection reads as a bug.
+      nearMisses.push({
+        index: i, type: 'near-miss', reason: 'rsi', bar: bars[i],
+        rsi: rsiArr[i], fast: fast[i], slow: slow[i], fastPeriod, slowPeriod,
+      });
     }
   }
-  return { fast, slow, mid, rsi: rsiArr, signals };
+  return { fast, slow, mid, rsi: rsiArr, signals, nearMisses };
 }

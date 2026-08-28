@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createChart } from 'lightweight-charts';
 import { hasTradedVolume } from '../lib/volume';
 import { volumeStats, confirmedAt, THRUST_MULT, AVG_PERIOD, CONFIRM_WINDOW } from '../lib/volumeThrust';
@@ -18,6 +18,10 @@ const BUY_COLOR = '#22c55e';
 const SELL_COLOR = '#ef4444';
 const BB_COLOR = '#a78bfa';   // violet — distinct from the SMA blue/orange
 const DEADCAT_COLOR = '#fbbf24'; // amber — flagged/ignored buy
+// Grey, and deliberately the dimmest marker on the chart: a near-miss is a
+// cross the rule REJECTED. It has to be visible enough to explain the gap where
+// a marker isn't, and quiet enough that it is never mistaken for a call.
+const NEARMISS_COLOR = '#64748b';
 const SQUEEZE_COLOR = '#ec4899'; // magenta — BB-width squeeze highlight
 const RSI_COLOR = '#22d3ee';     // cyan — RSI oscillator (bottom sub-band)
 // Volume bars take the candle colours at half opacity rather than a colour of
@@ -156,7 +160,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
 
   // Recompute the engine output whenever bars or the control params change.
   const engine = useMemo(
-    () => (bars.length ? generateSignals(bars, fastPeriod, slowPeriod) : { fast: [], slow: [], mid: [], rsi: [], signals: [] }),
+    () => (bars.length ? generateSignals(bars, fastPeriod, slowPeriod) : { fast: [], slow: [], mid: [], rsi: [], signals: [], nearMisses: [] }),
     [bars, fastPeriod, slowPeriod]
   );
 
@@ -220,14 +224,19 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
   // stay warm, but markers (and the counts) must be scoped to what's on screen —
   // otherwise old low-price signals from years ago render clamped at the bottom
   // edge and the tally won't match the view.
-  const visibleSignals = useMemo(() => {
+  const clipToView = useCallback((list) => {
     if (bars.length === 0) return [];
     const days = VIEW_DAYS[view];
-    if (!days) return engine.signals;
+    if (!days) return list;
     const lastTime = (bars[bars.length - 1].dateObj || new Date(bars[bars.length - 1].date)).getTime();
     const fromT = lastTime - days * 86400000;
-    return engine.signals.filter(s => (s.bar.dateObj || new Date(s.bar.date)).getTime() >= fromT);
-  }, [engine, view, bars]);
+    return list.filter(s => (s.bar.dateObj || new Date(s.bar.date)).getTime() >= fromT);
+  }, [view, bars]);
+
+  const visibleSignals = useMemo(() => clipToView(engine.signals), [engine, clipToView]);
+  // Crosses the RSI gate rejected. Same clipping as the signals so the tally
+  // and the markers describe the same window.
+  const visibleNearMisses = useMemo(() => clipToView(engine.nearMisses || []), [engine, clipToView]);
 
   // Create the chart once per bars set (timeframe change). Sets candle data,
   // resize observer, and the crosshair tooltip handler.
@@ -334,6 +343,19 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
         tip.style.display = 'block';
         const cwd = containerRef.current.clientWidth;
         tip.style.left = `${Math.min(Math.max(param.point.x + 14, 8), cwd - 190)}px`;
+        tip.style.top = `${Math.max(param.point.y - 10, 8)}px`;
+        return;
+      }
+      // The whole reason near-misses are drawn: name the gate that rejected it
+      // and the exact figure that failed, so a crossing with no buy on it stops
+      // being indistinguishable from no crossing at all.
+      if (sig.type === 'near-miss') {
+        tip.innerHTML = `<strong style="color:${NEARMISS_COLOR}">Golden cross — no buy</strong><br/>`
+          + `Fast MA (${sig.fastPeriod}) crossed above Slow MA (${sig.slowPeriod}), but<br/>`
+          + `RSI was ${sig.rsi.toFixed(1)} — the rule needs it above 50 on the same bar.`;
+        tip.style.display = 'block';
+        const cwn = containerRef.current.clientWidth;
+        tip.style.left = `${Math.min(Math.max(param.point.x + 14, 8), cwn - 190)}px`;
         tip.style.top = `${Math.max(param.point.y - 10, 8)}px`;
         return;
       }
@@ -501,6 +523,14 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
   useEffect(() => {
     if (!candleRef.current || bars.length === 0) return;
     const map = new Map();
+    // Rejected crosses first so a near-miss and a real signal on the same bar
+    // (impossible today, but the sort below is by time either way) cannot let
+    // the near-miss overwrite the signal in the tooltip map.
+    const nearMissMarkers = visibleNearMisses.map((s) => {
+      const time = barTime(s.bar);
+      if (!map.has(time)) map.set(time, { ...s, vol: null });
+      return { time, position: 'belowBar', color: NEARMISS_COLOR, shape: 'circle', text: '✕' };
+    });
     const markers = visibleSignals.map((s) => {
       const time = barTime(s.bar);
       map.set(time, { ...s, vol: confirmation.get(s.index) || null });
@@ -522,8 +552,12 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
       };
     });
     signalByTimeRef.current = map;
-    candleRef.current.setMarkers(markers);
-  }, [visibleSignals, strict, bars, confirmation]);
+    // lightweight-charts requires markers in ascending time order and renders
+    // nothing at all if they are not, so the two lists are merged and sorted
+    // rather than concatenated.
+    const key = (m) => m.time.year * 10000 + m.time.month * 100 + m.time.day;
+    candleRef.current.setMarkers([...markers, ...nearMissMarkers].sort((a, b) => key(a) - key(b)));
+  }, [visibleSignals, visibleNearMisses, strict, bars, confirmation]);
 
   // Zoom the time axis to the chosen view (runs after chart creation since both
   // depend on `bars`, and on its own when the view button changes).
@@ -560,6 +594,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
   const buyCount = visibleSignals.filter(s => s.type === 'buy' && !s.deadCat).length;
   const sellCount = visibleSignals.filter(s => s.type === 'sell').length;
   const deadCatCount = visibleSignals.filter(s => s.type === 'buy' && s.deadCat).length;
+  const nearMissCount = visibleNearMisses.length;
   // RSI readout — the crosshair value when hovering, else the latest bar.
   // >70 overbought (red), <30 oversold (green).
   let latestRsi = null;
@@ -658,6 +693,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
           </span>
           <span style={{ color: SELL_COLOR }}>▼ {sellCount} sell</span>
           {deadCatCount > 0 && <span style={{ color: DEADCAT_COLOR }} title="Golden-cross buys ignored as likely dead-cat bounces (below the 20-bar middle band after a sharp drop)">⊘ {deadCatCount} dead-cat</span>}
+          {nearMissCount > 0 && <span style={{ color: NEARMISS_COLOR }} title="Golden crosses that did not become buys because RSI was at or below 50 on the crossing bar. Shown so a crossing with no marker on it is legible as a rejection rather than an oversight.">✕ {nearMissCount} no momentum</span>}
         </span>
       </div>
 
@@ -713,6 +749,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
         <span><span style={{ color: BUY_COLOR }}>▲ B</span> = Buy (golden cross, RSI &gt; 50)</span>
         <span><span style={{ color: SELL_COLOR }}>▼ S</span> = Sell (death cross, RSI &lt; 50)</span>
         <span><span style={{ color: DEADCAT_COLOR }}>● DC</span> = Dead-cat bounce (buy ignored: below {BB_PERIOD}-bar mid after sharp drop)</span>
+        <span><span style={{ color: NEARMISS_COLOR }}>● ✕</span> = Golden cross, no buy (RSI ≤ 50 on the crossing bar)</span>
         <span><span style={{ color: FAST_COLOR }}>━</span> Fast SMA · <span style={{ color: SLOW_COLOR }}>━</span> Slow SMA</span>
         {showBB && <span><span style={{ color: BB_COLOR }}>━</span> Bollinger ({BB_PERIOD}, {BB_MULT})</span>}
         {showBB && <span><span style={{ color: SQUEEZE_COLOR }}>━</span> Squeeze ({SQUEEZE_LOOKBACK}-day bandwidth low)</span>}
