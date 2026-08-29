@@ -6,6 +6,8 @@ import {
   displayContributions,
   freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
   shortTitle, reportMonth, signed,
+  PROVENANCE, PROVENANCE_TITLE, ANNUALIZATION_TOOLTIP,
+  payrollHeadline, payrollLevel, scoreAudit,
 } from '../lib/macroRead.js'
 
 // ─── Macro Decision Monitor ──────────────────────────────────────────────────
@@ -34,6 +36,30 @@ import {
 
 const GREEN = 'var(--success)', RED = 'var(--danger)', GREY = 'var(--text-secondary)'
 const AMBER = '#fbbf24'
+
+// Provenance is rendered as a colour AND a word: the whole point is telling a
+// published figure from a computed one, so it must survive greyscale.
+const PROVENANCE_TONE = {
+  OFFICIAL: 'var(--text-secondary)',
+  DERIVED: '#7dd3fc',
+  MODEL: '#c4b5fd',
+  LIVE: '#fbbf24',
+}
+
+function ProvenanceBadge({ kind, style }) {
+  if (!kind) return null
+  return (
+    <span
+      title={PROVENANCE_TITLE[kind]}
+      style={{
+        fontSize: '0.54rem', fontWeight: 700, letterSpacing: '0.06em',
+        color: PROVENANCE_TONE[kind] || 'var(--text-secondary)',
+        border: `1px solid ${PROVENANCE_TONE[kind] || 'var(--border)'}`,
+        borderRadius: 3, padding: '0 0.25rem', whiteSpace: 'nowrap', ...style,
+      }}
+    >{kind}</span>
+  )
+}
 
 const REGIME_TONE = { cooling: GREEN, neutral: AMBER, reaccelerating: RED, unknown: GREY }
 const TONE_COLOR = { ok: GREEN, warn: AMBER, bad: RED, muted: GREY }
@@ -151,6 +177,7 @@ export default function MacroDecisionMonitor() {
   // Rounded so the column adds up to the headline — see distributeRounding.
   // Same precision as the score above it, or the two cannot agree.
   const contributions = displayContributions(d, SCORE_DP)
+  const audit = scoreAudit(d, SCORE_DP)
   const next = d.releases?.next
   const scored = d.indicators.filter(i => i.scored)
   const context = d.indicators.filter(i => !i.scored)
@@ -348,6 +375,63 @@ export default function MacroDecisionMonitor() {
         </div>
       </div>
 
+      {/* ─── SECONDARY: the score's own construction ──────────────────────── */}
+      {audit && (
+        <details style={{ marginTop: '0.9rem' }}>
+          <summary style={{ ...label, cursor: 'pointer', listStyle: 'revert' }}>
+            How this score is built <ProvenanceBadge kind={PROVENANCE.MODEL} />
+          </summary>
+          <div style={{ marginTop: '0.5rem', fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.55, maxWidth: '78ch' }}>
+            <p style={{ margin: '0 0 0.5rem' }}>{audit.normalization}</p>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', fontVariantNumeric: 'tabular-nums' }}>
+                <thead>
+                  <tr style={{ color: GREY, textAlign: 'right' }}>
+                    <th style={{ ...cell, textAlign: 'left' }}>Component</th>
+                    <th style={cell}>Weight</th>
+                    <th style={cell}>Sub-score</th>
+                    <th style={cell}>× weight ÷ {audit.coverage.toFixed(2)}</th>
+                    <th style={cell}>Shown</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {audit.rows.map(r => (
+                    <tr key={r.key} style={{ borderTop: '1px solid var(--border)', textAlign: 'right' }}>
+                      <td style={{ ...cell, textAlign: 'left' }}>{r.label}</td>
+                      <td style={cell}>{(r.weight * 100).toFixed(0)}%</td>
+                      <td style={cell}>{r.scored ? signed(r.subScore, 3) : 'n/a'}</td>
+                      <td style={cell}>{r.scored ? signed(r.contribution, 4) : 'n/a'}</td>
+                      <td style={cell}>{r.display == null ? 'n/a' : signed(r.display, SCORE_DP)}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ borderTop: '1px solid var(--border)', textAlign: 'right', fontWeight: 600 }}>
+                    <td style={{ ...cell, textAlign: 'left' }}>Macro score</td>
+                    <td style={cell}>{(audit.coverage * 100).toFixed(0)}%</td>
+                    <td style={cell} />
+                    <td style={cell}>{signed(audit.rawSum, 4)}</td>
+                    <td style={cell}>{signed(audit.shownSum, SCORE_DP)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            {/* The identity is stated AND checked, because a claimed identity
+                nobody verifies is how a reconciliation quietly stops holding. */}
+            <p style={{ margin: '0.5rem 0 0' }}>
+              <strong>{audit.identity}</strong> — {audit.reconciles
+                ? `checks out: the parts sum to ${signed(audit.rawSum, 4)} against a score of ${signed(audit.score, 4)}.`
+                : `MISMATCH: parts sum to ${signed(audit.rawSum, 4)} against a score of ${signed(audit.score, 4)}, a residual of ${signed(audit.residual, 6)}.`}
+              {' '}The rounded column is reconciled separately so the figures on screen also add up.
+            </p>
+            {audit.coverage < 1 && (
+              <p style={{ margin: '0.35rem 0 0', color: AMBER }}>
+                Coverage is {(audit.coverage * 100).toFixed(0)}%: the missing components are dropped and the
+                surviving weights renormalised, so the divisor above is {audit.coverage.toFixed(2)} rather than 1.00.
+              </p>
+            )}
+          </div>
+        </details>
+      )}
+
       {/* ─── SECONDARY: what would change this ────────────────────────────── */}
       {changeGroups.length > 0 && (
         <Section title="What would change this signal">
@@ -489,23 +573,50 @@ export default function MacroDecisionMonitor() {
                       )}
                     </td>
                     <td style={{ ...cell, textAlign: 'right' }}>
-                      {ind.latest == null ? '—' : ind.transform === 'count' ? Math.round(ind.latest).toLocaleString() : ind.latest.toFixed(2)}
+                      {/* A `count` series is a LEVEL IN THOUSANDS of persons.
+                          Printed bare it read "158,858", which is the payroll
+                          count wrong by a factor of a thousand. */}
+                      {ind.latest == null ? '—'
+                        : ind.transform === 'count' ? payrollLevel(ind.latest)
+                        : ind.latest.toFixed(2)}
+                      {/* Every figure carries the date it was observed on, so a
+                          settled print is never read as today's value. */}
+                      {ind.latestDate && (
+                        <div style={{ fontSize: '0.6rem', color: GREY }}>
+                          as of {ind.latestDate}{' '}
+                          <ProvenanceBadge kind={PROVENANCE.OFFICIAL} />
+                        </div>
+                      )}
                       {/* Live quote beside the settled figure. Deliberately a
                           different instrument and labelled as one — see
                           liveOil() in backend/macro/monitor.js. */}
                       {ind.live && (
                         <div style={{ fontSize: '0.63rem', color: AMBER }}
                              title={`${ind.live.instrument} (${ind.live.symbol}), ${ind.live.delayMin ?? 15}-min delayed. Shown for freshness; the six-month score uses the settled spot series.`}>
-                          live {ind.live.price.toFixed(2)}
+                          live {ind.live.price.toFixed(2)}{' '}
+                          <ProvenanceBadge kind={PROVENANCE.LIVE} />
+                          {ind.live.quotedAt && (
+                            <div style={{ color: GREY }}>quoted {String(ind.live.quotedAt).slice(0, 16).replace('T', ' ')}Z</div>
+                          )}
                         </div>
                       )}
                     </td>
                     <td style={{ ...cell, textAlign: 'right' }}>
-                      <div style={{ fontWeight: 600 }}>{six.value}</div>
-                      <div style={{ fontSize: '0.62rem', color: GREY }}>{six.label}</div>
+                      <div style={{ fontWeight: 600 }}
+                           title={six.label?.includes('annualized') ? ANNUALIZATION_TOOLTIP : undefined}>
+                        {six.value}
+                      </div>
+                      <div style={{ fontSize: '0.62rem', color: GREY }}>
+                        {six.label} <ProvenanceBadge kind={PROVENANCE.DERIVED} />
+                      </div>
+                      {/* Payrolls: the trend average alone hid a -23k month
+                          behind a +20k trend. Both, always. */}
+                      {payrollHeadline(ind) && (
+                        <div style={{ fontSize: '0.62rem', color: GREY }}>{payrollHeadline(ind)}</div>
+                      )}
                     </td>
                     <td style={{ ...cell, fontSize: '0.74rem', color: ind.scored ? 'var(--text-secondary)' : GREY }}>
-                      {ind.scored ? interpretIndicator(ind, d.thresholds) : 'Context only · not scored'}
+                      {ind.scored ? interpretIndicator(ind, d.thresholds, d) : 'Context only · not scored'}
                     </td>
                   </tr>
                 )

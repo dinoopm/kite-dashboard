@@ -6,6 +6,8 @@ import {
   explainShort, componentInterpretation, shortTitle, reportMonth,
   whatWouldChangeByDirection, distributeRounding, displayContributions,
   fresherCoreMeasure, nextPublishDate, approxWhen,
+  PROVENANCE, inflationTargetLabel, payrollsDiverging, payrollHeadline,
+  payrollLevel, scoreAudit,
 } from './macroRead.js'
 
 // The live payload from 2026-08-09, trimmed. Real numbers on purpose: the
@@ -222,9 +224,40 @@ describe('sixMonthRead', () => {
 describe('interpretIndicator', () => {
   const T = MONITOR.thresholds
 
-  test('reads core inflation against its markers', () => {
-    assert.match(interpretIndicator({ key: 'corePce', annualized6m: 3.7567 }, T), /Above target/)
-    assert.match(interpretIndicator({ key: 'coreCpi', annualized6m: 2.58 }, T), /Near target/)
+  // Rewritten. This test used to assert that 2.58% reads "Near target" — it
+  // encoded the bug rather than the rule. The label is now driven by YoY against
+  // the 2% target, and 2.58% is not near it.
+  test('reads core inflation against the target, not the middle of its markers', () => {
+    assert.match(interpretIndicator({ key: 'corePce', yoyPct: 3.30, annualized6m: 3.46 }, T), /Above target/)
+    assert.match(interpretIndicator({ key: 'coreCpi', yoyPct: 2.58, annualized6m: 2.58 }, T), /Moderately above target/)
+    assert.doesNotMatch(interpretIndicator({ key: 'coreCpi', yoyPct: 2.58, annualized6m: 2.58 }, T), /Near target/)
+  })
+
+  // The label is on YoY while the score and the column beside it are on the
+  // six-month annualized pace. Naming both is what stops a reader matching the
+  // verdict to the wrong number.
+  test('names both bases on the inflation reading', () => {
+    const s = interpretIndicator({ key: 'corePce', yoyPct: 3.30, annualized6m: 3.46 }, T)
+    assert.match(s, /3\.30% YoY/)
+    assert.match(s, /3\.46% six-month annualized/)
+  })
+
+  // "elevated but not accelerating" is a claim about momentum; asserting it
+  // without checking momentum would be the same error as "near target".
+  test('does not claim "not accelerating" when the 3m pace is running hotter', () => {
+    const hot = interpretIndicator({ key: 'corePce', yoyPct: 3.30, annualized6m: 3.46, annualized3m: 4.60 }, T)
+    assert.match(hot, /still accelerating/)
+    const cool = interpretIndicator({ key: 'corePce', yoyPct: 3.30, annualized6m: 3.46, annualized3m: 2.80 }, T)
+    assert.match(cool, /not accelerating/)
+  })
+
+  // Without twelve months of history there is no YoY to judge against, and the
+  // old six-month rule is exactly what produced the wrong label — so it must
+  // not be the fallback.
+  test('refuses a target comparison when YoY is unavailable', () => {
+    const s = interpretIndicator({ key: 'coreCpi', annualized6m: 2.58 }, T)
+    assert.match(s, /no year-over-year reading/)
+    assert.doesNotMatch(s, /Near target|Above target/)
   })
 
   // Strong hiring is inflationary here, not "good news" — the sign convention
@@ -585,5 +618,174 @@ describe('componentInterpretation with a fresher core measure', () => {
   test('leaves the sentence untouched when nothing fresher exists', () => {
     const same = { ...CPI_JULY, indicators: CPI_JULY.indicators.map(i => ({ ...i, latestDate: '2026-06-01' })) }
     assert.ok(!componentInterpretation('inflation', same).includes('has since reported'))
+  })
+})
+
+// ─── Target-relative inflation bands ────────────────────────────────────────
+describe('inflationTargetLabel', () => {
+  // The brief wrote "<= 2.3" and "2.3-2.8", both claiming 2.3, then asked for a
+  // boundary test at exactly 2.30. Resolved so each cut point belongs to the
+  // gentler band; these two cases are what pin that decision.
+  test('2.30 is the top of Near target, not the bottom of the band above', () => {
+    assert.equal(inflationTargetLabel(2.30), 'Near target')
+    assert.equal(inflationTargetLabel(2.3001), 'Moderately above target')
+  })
+
+  test('2.80 is the top of Moderately above, not the bottom of Above', () => {
+    assert.equal(inflationTargetLabel(2.80), 'Moderately above target')
+    assert.equal(inflationTargetLabel(2.8001), 'Above target')
+  })
+
+  // The acceptance criterion, asserted directly rather than inferred from the
+  // bands: nothing above 2.5% may be called near target, at any input.
+  test('no value above 2.5% is ever Near target', () => {
+    for (let v = 2.51; v <= 8; v += 0.01) {
+      assert.notEqual(inflationTargetLabel(+v.toFixed(2)), 'Near target', `${v.toFixed(2)}% read as near target`)
+    }
+  })
+
+  // The mirror of the bug being fixed. The brief's lowest band was "<= 2.3 Near
+  // target", which would call 0.8% near a 2% target.
+  test('does not call deep undershoots "near target" either', () => {
+    assert.equal(inflationTargetLabel(0.8), 'Below target')
+    assert.equal(inflationTargetLabel(1.9), 'Near target')
+  })
+
+  test('is null rather than a guess when there is no reading', () => {
+    for (const v of [null, undefined, NaN, Infinity]) assert.equal(inflationTargetLabel(v), null)
+  })
+})
+
+// ─── Payrolls: the latest month and the trend, never one alone ──────────────
+describe('payroll presentation', () => {
+  test('shows both figures with units', () => {
+    const s = payrollHeadline({ lastChange: -23, avg3mChange: 20 })
+    assert.match(s, /Latest month: -23k/)
+    assert.match(s, /3m average: \+20k\/month/)
+  })
+
+  test('flags the divergence that the average alone hides', () => {
+    assert.equal(payrollsDiverging({ lastChange: -23, avg3mChange: 20 }), true)
+    assert.equal(payrollsDiverging({ lastChange: 40, avg3mChange: 20 }), false)
+    assert.equal(payrollsDiverging({ lastChange: -23, avg3mChange: -10 }), false)
+  })
+
+  // Zero has no sign. Flagging it would fire on the case where the two measures
+  // are closest to agreeing.
+  test('a flat month is not a divergence', () => {
+    assert.equal(payrollsDiverging({ lastChange: 0, avg3mChange: 20 }), false)
+    assert.equal(payrollsDiverging({ lastChange: -23, avg3mChange: 0 }), false)
+  })
+
+  test('reaches the reading as a suffix', () => {
+    const s = interpretIndicator({ key: 'payrolls', avg3mChange: 20, lastChange: -23 }, MONITOR.thresholds)
+    assert.match(s, /moderating/i)
+    assert.match(s, /\(trend diverging\)/)
+  })
+
+  // 158858 is thousands of persons. Printed bare it is wrong by 1000x.
+  test('renders the payroll level in units a reader can check', () => {
+    assert.match(payrollLevel(158858), /158\.9M/)
+    assert.match(payrollLevel(158858), /thousand persons/)
+    assert.equal(payrollLevel(null), null)
+  })
+})
+
+// ─── Unemployment: no one-sided slack claim against weak hiring ─────────────
+describe('unemployment interpretation', () => {
+  const falling = { key: 'unemployment', changePp: -0.2 }
+
+  test('reads mixed when unemployment falls alongside weak hiring', () => {
+    const m = { signals: { labour: { detail: { avg3mChangeThousands: 20 } } } }
+    const s = interpretIndicator(falling, MONITOR.thresholds, m)
+    assert.match(s, /slack interpretation mixed/)
+    assert.doesNotMatch(s, /less slack/)
+  })
+
+  test('still reads less slack when hiring is strong', () => {
+    const m = { signals: { labour: { detail: { avg3mChangeThousands: 220 } } } }
+    assert.match(interpretIndicator(falling, MONITOR.thresholds, m), /less slack/)
+  })
+
+  test('rising unemployment is unaffected by the hiring context', () => {
+    const m = { signals: { labour: { detail: { avg3mChangeThousands: 20 } } } }
+    assert.match(interpretIndicator({ key: 'unemployment', changePp: 0.3 }, MONITOR.thresholds, m), /more slack/)
+  })
+})
+
+// ─── The score is auditable ─────────────────────────────────────────────────
+describe('scoreAudit', () => {
+  // Two different claims, and conflating them is what makes fix 7's "===" wrong.
+  //
+  // On RAW figures the identity is exact by construction, so it is asserted at
+  // 1e-9 against a fixture built from the arithmetic rather than typed by hand.
+  test('the raw contributions reconcile to the score exactly', () => {
+    const parts = [
+      { key: 'inflation', weight: 0.45, score: 0.300 },
+      { key: 'labour', weight: 0.25, score: -0.314 },
+      { key: 'wages', weight: 0.15, score: -1.0 },
+      { key: 'expectations', weight: 0.10, score: -0.146 },
+      { key: 'oil', weight: 0.05, score: 1.0 },
+    ]
+    const total = parts.reduce((a, p) => a + p.weight, 0)
+    const contributions = parts.map(p => ({ ...p, contribution: (p.score * p.weight) / total }))
+    const score = contributions.reduce((a, p) => a + p.contribution, 0)
+    const a = scoreAudit({ composite: { score, coverage: total, contributions } })
+    assert.equal(a.reconciles, true)
+    assert.ok(Math.abs(a.residual) < 1e-9, `residual ${a.residual}`)
+  })
+
+  // On the live payload, whose contributions are stored rounded to 4dp, the sum
+  // lands 0.0001 away from the stated score. That gap is display rounding, not a
+  // scoring error - which is exactly what the brief's 0.001 tolerance is for.
+  test('the stored payload reconciles within the stated tolerance', () => {
+    const a = scoreAudit(MONITOR)
+    assert.ok(Math.abs(a.residual) < 0.001, `residual ${a.residual}`)
+  })
+
+  test('the displayed parts sum to the displayed score', () => {
+    const a = scoreAudit(MONITOR)
+    assert.equal(a.shownSum, a.shownScore)
+  })
+
+  test('carries the weight, sub-score and contribution for every component', () => {
+    for (const r of scoreAudit(MONITOR).rows) {
+      assert.ok(Number.isFinite(r.weight), `${r.key} has no weight`)
+      assert.ok(Number.isFinite(r.subScore), `${r.key} has no sub-score`)
+      assert.ok(Number.isFinite(r.contribution), `${r.key} has no contribution`)
+    }
+  })
+
+  test('states the normalization and the identity it claims', () => {
+    const a = scoreAudit(MONITOR)
+    assert.match(a.normalization, /clamped/)
+    assert.match(a.normalization, /renormalised/)
+    assert.match(a.identity, /macro score/)
+  })
+
+  test('is null rather than a fabricated breakdown with no score', () => {
+    assert.equal(scoreAudit({ composite: { score: null, contributions: [] } }), null)
+    assert.equal(scoreAudit(null), null)
+  })
+})
+
+// ─── Provenance ─────────────────────────────────────────────────────────────
+describe('provenance', () => {
+  test('is a closed set', () => {
+    assert.deepEqual(Object.keys(PROVENANCE).sort(), ['DERIVED', 'LIVE', 'MODEL', 'OFFICIAL'])
+    for (const [k, v] of Object.entries(PROVENANCE)) assert.equal(k, v)
+  })
+
+  test('cannot be extended at runtime', () => {
+    assert.throws(() => { PROVENANCE.GUESS = 'GUESS' }, TypeError)
+  })
+
+  // Fix 8 asks that every scored component carry exactly one badge. The score
+  // itself is a model output, so its components' badges are asserted here
+  // against the audit rows the panel renders.
+  test('every scored component appears exactly once in the audit', () => {
+    const keys = scoreAudit(MONITOR).rows.map(r => r.key)
+    assert.equal(new Set(keys).size, keys.length)
+    assert.deepEqual(keys.sort(), ['expectations', 'inflation', 'labour', 'oil', 'wages'])
   })
 })

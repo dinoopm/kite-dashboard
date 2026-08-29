@@ -174,6 +174,56 @@ function displayContributions(monitor, decimals = 3) {
   return cs.map((c, i) => ({ ...c, display: rounded[i] }));
 }
 
+/**
+ * Everything needed to check the headline score by hand.
+ *
+ * The score is a MODEL output: no agency publishes it, and it exists only
+ * because of the rules in signals.js. A number like that has to show its
+ * construction or it is asking to be taken on trust.
+ *
+ * The identity is exact by construction, not approximately true:
+ *   contribution_i = score_i × weight_i / totalWeight
+ *   composite      = Σ(score_i × weight_i) / totalWeight  =  Σ contribution_i
+ * so `residual` on the RAW figures should be 0 to floating-point noise at any
+ * coverage. The displayed parts are a separate question — they are rounded, and
+ * distributeRounding is what makes them add up on screen — so both are reported.
+ */
+function scoreAudit(monitor, decimals = 3) {
+  const c = monitor?.composite;
+  if (!c || c.score == null) return null;
+  const rows = displayContributions(monitor, decimals).map(r => ({
+    key: r.key,
+    label: COMPONENT_LABEL[r.key] || r.key,
+    weight: r.weight,
+    // The sub-signal's own normalized score, before weighting.
+    subScore: r.score,
+    contribution: r.contribution,
+    display: r.display,
+    scored: r.score != null,
+  }));
+  const rawSum = rows.reduce((a, r) => a + (r.contribution ?? 0), 0);
+  const shownSum = rows.reduce((a, r) => a + (r.display ?? 0), 0);
+  return {
+    rows,
+    coverage: c.coverage,
+    score: c.score,
+    rawSum,
+    residual: c.score - rawSum,
+    shownSum: +shownSum.toFixed(decimals),
+    shownScore: +c.score.toFixed(decimals),
+    reconciles: Math.abs(c.score - rawSum) < 1e-9,
+    // Stated here rather than only in signals.js, because the reader checking
+    // the arithmetic is the one who needs to know what the inputs mean.
+    normalization:
+      'Each sub-signal is scaled onto -1..+1 between its cooling and tightening markers '
+      + '(signals.js `scale`), then clamped at ±1. No z-scores and no rolling window: the '
+      + 'markers are fixed levels, so a reading means the same thing in every period. '
+      + 'Missing sub-signals are dropped and the surviving weights renormalised — never scored 0, '
+      + 'which would make a broken feed read as "balanced".',
+    identity: 'Σ (sub-score × weight ÷ total weight) = macro score',
+  };
+}
+
 /** `in 2 days` / `today` / `tomorrow`, computed at render so it cannot go stale. */
 function countdown(daysAway) {
   if (daysAway == null || !Number.isFinite(daysAway)) return null;
@@ -380,7 +430,14 @@ function componentInterpretation(key, monitor) {
     case 'labour': {
       const pay = dt.avg3mChangeThousands, un = dt.unemploymentChangePp;
       const parts = [];
-      if (Number.isFinite(pay)) parts.push(`payroll momentum is averaging ${fmtK(pay)} a month`);
+      // Both figures, never the average alone — see payrollHeadline. `latest`
+      // rides on the labour detail so this reads the same series the row does.
+      const latest = dt.lastPayrollChangeThousands;
+      if (Number.isFinite(pay)) {
+        parts.push(Number.isFinite(latest)
+          ? `three-month average payroll growth is ${fmtK(pay)} a month with the latest monthly change at ${fmtK(latest)}`
+          : `payroll momentum is averaging ${fmtK(pay)} a month`);
+      }
       if (Number.isFinite(un)) parts.push(`unemployment has ${un > 0 ? 'edged higher' : un < 0 ? 'edged lower' : 'held flat'} by ${n2(Math.abs(un))}pp over six months`);
       return parts.length ? `${cap(parts.join(' while '))}.` : 'No current reading.';
     }
@@ -614,29 +671,191 @@ function sixMonthRead(ind) {
 
 const signed = (v, d = 2) => (v == null || !Number.isFinite(v) ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(d)}`);
 
+// ─── Provenance ─────────────────────────────────────────────────────────────
+//
+// Every number on the panel is one of exactly three things, and the panel used
+// to present them alike. The distinction is not cosmetic: OFFICIAL can be
+// checked against the agency that published it, DERIVED can be recomputed from
+// the series, MODEL exists only because this codebase decided on a rule.
+//
+// Frozen rather than a TS enum — this project is JSX, with no TypeScript
+// anywhere (no tsconfig, no .ts files), so the brief's "add types for the
+// provenance enum" is satisfied with a frozen const plus the JSDoc typedef.
+//
+/** @typedef {'OFFICIAL'|'DERIVED'|'MODEL'|'LIVE'} Provenance */
+const PROVENANCE = Object.freeze({
+  OFFICIAL: 'OFFICIAL',
+  DERIVED: 'DERIVED',
+  MODEL: 'MODEL',
+  // Not in the brief's list of three, and needed: the WTI row carries a
+  // continuously-quoted CL=F futures print (monitor.js liveOil) that is neither
+  // an agency observation nor computed here. Calling it OFFICIAL would claim
+  // BEA/BLS provenance it does not have; calling it DERIVED would claim we
+  // computed it. It is a fourth thing and says so.
+  LIVE: 'LIVE',
+});
+
+const PROVENANCE_TITLE = Object.freeze({
+  OFFICIAL: 'Reported by the source agency — a BEA/BLS figure as published, via a FRED observation.',
+  DERIVED: 'Computed here from the published series: six-month changes and annualized paces.',
+  MODEL: 'Model output — the score, regime, confidence and policy reading are this codebase\'s rules, not anyone\'s published figure.',
+  LIVE: 'A continuously-quoted market price, shown for freshness only. Never an input to the six-month score.',
+});
+
+// The six-month annualized figures cannot be reproduced from the index levels
+// shown on screen, because those are rounded for display and the arithmetic is
+// not. That is expected rather than a defect, but it is only obvious if said.
+const ANNUALIZATION_TOOLTIP =
+  'Derived: endpoint-to-endpoint over 6 months, compounded ×2, from unrounded series values.';
+
+/**
+ * Do the latest month and the trend average disagree in sign?
+ *
+ * Zero counts as agreement with everything: sign(0) is not a direction, and
+ * flagging "diverging" on a flat month would fire on the one case where the two
+ * measures are closest to saying the same thing.
+ */
+function payrollsDiverging(ind) {
+  const latest = ind?.lastChange, avg = ind?.avg3mChange;
+  if (!Number.isFinite(latest) || !Number.isFinite(avg)) return false;
+  if (latest === 0 || avg === 0) return false;
+  return (latest > 0) !== (avg > 0);
+}
+
+/**
+ * The payroll row's headline: both numbers, never the average alone.
+ *
+ * The panel showed "+20k" over "payroll momentum is averaging +20k a month"
+ * while the latest month was -23k. Both figures were correct; showing only the
+ * smoother one hid the turn.
+ *
+ * Three months, not six: avg3mChange is what calc.js computes, what
+ * signals.js scores against payrollsCool/payrollsHot, and what the column
+ * beside it is labelled. There is no six-month payroll average in the payload,
+ * so quoting one would mean inventing a figure to match the wording.
+ */
+function payrollHeadline(ind) {
+  if (!ind) return null;
+  const latest = ind.lastChange, avg = ind.avg3mChange;
+  if (!Number.isFinite(latest) && !Number.isFinite(avg)) return null;
+  const parts = [];
+  if (Number.isFinite(latest)) parts.push(`Latest month: ${fmtK(latest)}`);
+  if (Number.isFinite(avg)) parts.push(`3m average: ${fmtK(avg)}/month`);
+  return parts.join(' · ');
+}
+
+/**
+ * Total nonfarm payrolls is a LEVEL in thousands of persons, so the raw 158858
+ * reads as a count of people and is wrong by a factor of a thousand.
+ */
+function payrollLevel(v) {
+  if (v == null || !Number.isFinite(v)) return null;
+  return `${(v / 1000).toFixed(1)}M (${Math.round(v).toLocaleString('en-US')} thousand persons)`;
+}
+
+// ─── Inflation against the 2% target ────────────────────────────────────────
+//
+// Bands on YEAR-OVER-YEAR core inflation. The label used to be driven by the
+// six-month annualized pace against cool6m/hot6m (2.0/3.5), which meant 3.46%
+// — well above a 2% target — fell in the middle and read "Near target". That
+// is the bug these bands exist to close.
+//
+// Two decisions the brief left open, both resolved toward the gentler reading:
+//
+// 1. BOUNDARIES. It wrote "<= 2.3" and "2.3-2.8", both claiming 2.3. Each cut
+//    point here belongs to the LOWER band, so 2.30 is "Near target" and 2.80 is
+//    "Moderately above". A value sitting exactly on a boundary is never
+//    escalated by a rounding artefact.
+// 2. THE BOTTOM. The brief gives three bands, the lowest being "<= 2.3 Near
+//    target" — which would call 0.8% "near target" and reproduce the original
+//    error with the sign flipped. The pre-existing "Below target —
+//    disinflationary" reading is kept as a fourth band rather than dropped.
+const INFLATION_BANDS = { below: 1.7, near: 2.3, moderate: 2.8 };
+
+/**
+ * Target-relative band for a year-over-year core inflation rate.
+ *
+ * Exported so the boundary behaviour is testable directly rather than only
+ * through the sentence it ends up inside.
+ */
+function inflationTargetLabel(yoyPct) {
+  if (yoyPct == null || !Number.isFinite(yoyPct)) return null;
+  if (yoyPct < INFLATION_BANDS.below) return 'Below target';
+  if (yoyPct <= INFLATION_BANDS.near) return 'Near target';
+  if (yoyPct <= INFLATION_BANDS.moderate) return 'Moderately above target';
+  return 'Above target';
+}
+
+/**
+ * Is the three-month pace running above or below the six-month one?
+ *
+ * The brief asked for the fixed phrase "elevated but not accelerating". Printed
+ * unconditionally that is the same species of error as "near target" — a claim
+ * about momentum asserted without checking momentum — so the clause is chosen
+ * from the two derived paces instead.
+ */
+function inflationMomentum(ind) {
+  const three = ind?.annualized3m, six = ind?.annualized6m;
+  if (!Number.isFinite(three) || !Number.isFinite(six)) return null;
+  const diff = three - six;
+  return diff <= -0.25 ? 'cooling' : diff >= 0.25 ? 'accelerating' : 'stable';
+}
+
 /** One-line reading of an indicator, in the panel's vocabulary. */
-function interpretIndicator(ind, thresholds) {
+function interpretIndicator(ind, thresholds, monitor) {
   if (!ind) return '';
   const T = thresholds || {};
   switch (ind.key) {
     case 'corePce':
     case 'coreCpi': {
-      const v = ind.annualized6m;
-      if (!Number.isFinite(v)) return 'No current reading';
-      if (v > (T.inflation?.hot6m ?? 3.5)) return 'Above target — still firm';
-      if (v < (T.inflation?.cool6m ?? 2.0)) return 'Below target — disinflationary';
-      return 'Near target — no longer adding pressure';
+      const band = inflationTargetLabel(ind.yoyPct);
+      const six = ind.annualized6m;
+      // No YoY (a series without twelve months behind it) must not silently
+      // fall back to the old rule — that is the path that produced the wrong
+      // label. Say what is missing instead.
+      if (!band) {
+        return Number.isFinite(six)
+          ? `Six-month annualized pace ${n2(six)}%; no year-over-year reading yet, so no target comparison`
+          : 'No current reading';
+      }
+      const mom = inflationMomentum(ind);
+      const clause = band === 'Below target'
+        ? 'disinflationary'
+        : band === 'Near target'
+          ? (mom === 'accelerating' ? 'firming' : 'no longer adding pressure')
+          : (mom === 'accelerating' ? 'elevated and still accelerating' : 'elevated but not accelerating');
+      // The label is on YoY; the SCORE is on the six-month annualized pace
+      // (signals.js inflationSignal). Naming both stops a reader matching this
+      // verdict to the different number in the column beside it — the same
+      // convention the wages case below already uses.
+      const basis = Number.isFinite(six)
+        ? ` (${n2(ind.yoyPct)}% YoY; scored on the ${n2(six)}% six-month annualized pace)`
+        : ` (${n2(ind.yoyPct)}% YoY)`;
+      return `${band} — ${clause}${basis}`;
     }
     case 'payrolls': {
       const v = ind.avg3mChange;
       if (!Number.isFinite(v)) return 'No current reading';
-      if (v < (T.labour?.payrollsCool ?? 50)) return 'Hiring moderating — labour cooling';
-      if (v > (T.labour?.payrollsHot ?? 200)) return 'Hiring strong — labour tightening';
-      return 'Hiring steady — neither adding nor easing pressure';
+      const base = v < (T.labour?.payrollsCool ?? 50) ? 'Hiring moderating — labour cooling'
+        : v > (T.labour?.payrollsHot ?? 200) ? 'Hiring strong — labour tightening'
+        : 'Hiring steady — neither adding nor easing pressure';
+      // The trend average and the latest month can point opposite ways, and the
+      // average alone hides it — a +20k trend reads as mild growth when the
+      // most recent month was -23k. Sign disagreement is called out.
+      return `${base}${payrollsDiverging(ind) ? ' (trend diverging)' : ''}`;
     }
     case 'unemployment': {
       const v = ind.changePp;
       if (!Number.isFinite(v)) return 'No current reading';
+      // Falling unemployment alongside weak hiring is not evidence of tighter
+      // demand — it is equally consistent with people leaving the labour force.
+      // With payrolls under the cooling marker the honest reading is that the
+      // two disagree, so neither a tightening nor a cooling claim is made.
+      const pay = monitor?.signals?.labour?.detail?.avg3mChangeThousands;
+      const weakHiring = Number.isFinite(pay) && pay < (T.labour?.payrollsCool ?? 50);
+      if (v < -0.1 && weakHiring) {
+        return 'Unemployment rate lower over six months; slack interpretation mixed alongside weak hiring';
+      }
       if (v > 0.1) return 'Unemployment rising — more slack';
       if (v < -0.1) return 'Unemployment falling — less slack than before';
       return 'Unemployment flat — slack unchanged';
@@ -693,4 +912,7 @@ export {
   whatWouldChangeByDirection, levers,
   freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
   shortTitle, reportMonth, approxWhen, signed, fmtK,
+  PROVENANCE, PROVENANCE_TITLE, ANNUALIZATION_TOOLTIP, INFLATION_BANDS,
+  inflationTargetLabel, inflationMomentum,
+  payrollsDiverging, payrollHeadline, payrollLevel, scoreAudit,
 };

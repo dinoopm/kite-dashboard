@@ -215,6 +215,12 @@ function labourSignal({ payrolls, unemployment } = {}, opts = {}) {
   const detail = {
     payrollsScore: pay, unemploymentScore: un,
     avg3mChangeThousands: payrolls?.avg3mChange ?? null,
+    // The most recent month on its own. The panel showed only the three-month
+    // average, so a +20k trend read as mild growth on a month that was -23k.
+    // Carried alongside rather than instead: the average is what is scored, the
+    // latest month is what the average can hide.
+    lastPayrollChangeThousands: payrolls?.lastChange ?? null,
+    payrollsLevelThousands: payrolls?.latest ?? null,
     payrollsSeriesId: 'PAYEMS',
     monthlyChanges: payrolls?.monthlyChanges ?? [],
     unemploymentChangePp: unemployment?.changePp ?? null,
