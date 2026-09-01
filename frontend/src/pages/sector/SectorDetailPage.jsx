@@ -15,6 +15,7 @@ import {
   computeSMA, resampleToWeeklyHighs, findHiddenLeaders,
 } from '../../lib/sectorAnalytics';
 import SectorBreadthPanel from '../../components/SectorBreadthPanel';
+import SectorAdxChart from '../../components/SectorAdxChart';
 
 const ALERTS_REFRESH_MS = 60_000;
 
@@ -562,6 +563,11 @@ export default function SectorDetailPage({ market }) {
           ))}
         </div>
       )}
+
+      {/* Trend strength over time. Gated on bars actually being in hand: the
+          card's own "not available" state is for a sector that can never have
+          ADX, not for one that is still loading. */}
+      {sectorHistory.length > 0 && <SectorAdxChart bars={sectorHistory} />}
 
       {/* Sector breadth analyser */}
       <SectorBreadthPanel breadth={sectorBreadth} />
