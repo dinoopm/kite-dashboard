@@ -25,6 +25,7 @@ const { computeVcpScore, computeVcpContractions } = require('./screener/vcp');
 const { getSP500, getNasdaq100 } = require('./usUniverses');
 const { hvSpike } = require('./volMath');
 const { getEtfHoldings } = require('./etfHoldings');
+const { alpacaGet, sanitizeBar, fetchBarsMulti, isConfigured, FEED, DATA_BASE, API_KEY, API_SECRET } = require('./alpacaData');
 const MIN_SCREENER_BARS = 60;
 
 // Supabase for persisting US user data (baskets, virtual portfolios, screens).
@@ -35,11 +36,9 @@ const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY)
   : null;
 const requireDb = (res) => { if (!supabase) { res.status(503).json({ error: 'Supabase not configured' }); return false; } return true; };
 
-const DATA_BASE = 'https://data.alpaca.markets/v2';
 // Trading API base — used only for read-only asset metadata (company names).
 // Paper keys work against the paper host; override if using a live account.
 const TRADING_BASE = process.env.ALPACA_TRADING_BASE || 'https://paper-api.alpaca.markets';
-const FEED = process.env.ALPACA_DATA_FEED || 'sip';                 // historical bars
 const SNAPSHOT_FEED = process.env.ALPACA_SNAPSHOT_FEED || 'delayed_sip'; // live snapshots
 
 const { compareCloses, describeDisagreement } = require('./feedAgreement');
@@ -50,10 +49,6 @@ const { compareCloses, describeDisagreement } = require('./feedAgreement');
 // shows up more clearly on mid-priced, less-frenetic names than on mega-caps.
 const FEED_PROBE_SYMBOLS = (process.env.ALPACA_FEED_PROBE || 'AAPL,MSFT,INTC,KO,F').split(',').map(s => s.trim()).filter(Boolean);
 let feedHealth = { checked: false, agrees: null, detail: null, at: null };
-
-const API_KEY = process.env.ALPACA_API_KEY || process.env.APCA_API_KEY_ID;
-const API_SECRET = process.env.ALPACA_API_SECRET || process.env.APCA_API_SECRET_KEY;
-const isConfigured = () => Boolean(API_KEY && API_SECRET);
 
 // Broad-market index proxies, shown as headline cards.
 const BROAD_INDICES = [
@@ -81,46 +76,6 @@ const SECTOR_ETFS = [
 
 const META_BY_SYMBOL = {};
 for (const m of [...BROAD_INDICES, ...SECTOR_ETFS]) META_BY_SYMBOL[m.symbol] = m;
-
-// ─── Tiny in-memory cache (keyed by request URL) ───────────────────────────
-const cache = {}; // url -> { data, ts }
-const inflight = {}; // url -> Promise (coalesce concurrent identical fetches)
-
-async function alpacaGet(path, params = {}, ttlMs = 60_000) {
-  if (!isConfigured()) {
-    const err = new Error('Alpaca API keys are not configured');
-    err.statusCode = 503;
-    err.notConfigured = true;
-    throw err;
-  }
-  const qs = new URLSearchParams({ ...params, feed: params.feed || FEED }).toString();
-  const url = `${DATA_BASE}${path}${qs ? `?${qs}` : ''}`;
-
-  const hit = cache[url];
-  if (hit && Date.now() - hit.ts < ttlMs) return hit.data;
-  if (inflight[url]) return inflight[url];
-
-  inflight[url] = (async () => {
-    const resp = await fetch(url, {
-      headers: {
-        'APCA-API-KEY-ID': API_KEY,
-        'APCA-API-SECRET-KEY': API_SECRET,
-        'Accept': 'application/json',
-      },
-    });
-    if (!resp.ok) {
-      const body = await resp.text().catch(() => '');
-      const err = new Error(`Alpaca ${resp.status}: ${body.slice(0, 300)}`);
-      err.statusCode = resp.status === 429 ? 429 : 502;
-      throw err;
-    }
-    const data = await resp.json();
-    cache[url] = { data, ts: Date.now() };
-    return data;
-  })().finally(() => { delete inflight[url]; });
-
-  return inflight[url];
-}
 
 // ─── Company-name lookup (Alpaca asset metadata, 24h cache) ─────────────────
 const assetNameCache = {}; // symbol -> { name, ts }
@@ -317,20 +272,6 @@ router.get('/snapshot/:symbol', async (req, res) => {
     res.status(err.statusCode || 500).json({ error: err.message, configured: !err.notConfigured });
   }
 });
-
-// Alpaca SIP bars occasionally carry an off-exchange misprint in a wick
-// (seen live: SPY 2026-02-02 daily low of 68.64 against a 686–693 body — a
-// dropped digit). A wick more than 2× away from the open/close body on either
-// side is treated as a bad print and clamped to the body: real extremes that
-// large drag the close with them, misprints don't. Applied at every point
-// where raw Alpaca bars are normalised, so charts, indicators, red flags and
-// the screener all see clean data.
-const sanitizeBar = (b) => {
-  const bodyLo = Math.min(b.open, b.close), bodyHi = Math.max(b.open, b.close);
-  const low = (b.low <= 0 || b.low < bodyLo * 0.5) ? bodyLo : b.low;
-  const high = b.high > bodyHi * 2 ? bodyHi : b.high;
-  return (low === b.low && high === b.high) ? b : { ...b, low, high };
-};
 
 // Is an ISO timestamp inside the US regular session (9:30 AM–4:00 PM ET)?
 // DST-safe via the America/New_York timezone. Alpaca's intraday bars include
@@ -2170,28 +2111,6 @@ router.post('/historical-batch', async (req, res) => {
 });
 
 // ─── US Screener ────────────────────────────────────────────────────────────
-// Fetch daily bars for many symbols using Alpaca's multi-symbol bars endpoint
-// (one request per ~100 symbols), then run the shared screener engine per stock.
-async function fetchBarsMulti(symbols, start) {
-  const out = {}; // symbol -> candles[]
-  const CHUNK = 100;
-  for (let i = 0; i < symbols.length; i += CHUNK) {
-    const chunk = symbols.slice(i, i + CHUNK);
-    let pageToken = null, guard = 0;
-    do {
-      const params = { symbols: chunk.join(','), timeframe: '1Day', start: start.toISOString(), limit: 10000, adjustment: 'all' };
-      if (pageToken) params.page_token = pageToken;
-      const data = await alpacaGet('/stocks/bars', params, 60 * 60 * 1000);
-      const bars = data?.bars || {};
-      for (const s of Object.keys(bars)) {
-        (out[s] = out[s] || []).push(...bars[s].map(b => sanitizeBar({ date: b.t, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v })));
-      }
-      pageToken = data?.next_page_token || null;
-    } while (pageToken && ++guard < 60);
-  }
-  return out;
-}
-
 async function resolveUsUniverse(scope) {
   if (scope.type === 'nasdaq100') return { label: 'Nasdaq 100', symbols: (await getNasdaq100()).map(x => x.symbol) };
   if (scope.type === 'sector') {
