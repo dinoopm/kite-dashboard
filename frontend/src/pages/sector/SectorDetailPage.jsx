@@ -22,6 +22,15 @@ const ALERTS_REFRESH_MS = 60_000;
 const API = import.meta.env.VITE_API_URL || '';
 
 const HIST_FETCH_DELAY_MS = 1500;
+// Above this many constituents the per-symbol loop is the wrong tool: at 1.5s
+// per uncached name a 500-stock index would take twelve minutes. Below it the
+// batch round trip buys nothing, and the per-symbol path is the one every
+// market supports.
+const BATCH_HISTORY_MIN = 30;
+// Symbols per batch request. The endpoint caps at 120; 60 keeps each response
+// (four years of daily bars per symbol) small enough that the first rows appear
+// quickly instead of after one huge payload.
+const BATCH_HISTORY_CHUNK = 60;
 const HIST_CACHE_DELAY_MS = 50;
 const RRG_POLL_MS = 10_000;
 const RRG_MAX_WARMUP_POLLS = 18;
@@ -76,6 +85,12 @@ export default function SectorDetailPage({ market }) {
   const [sectorRsi14, setSectorRsi14] = useState(null);
   const [benchmarkReturns, setBenchmarkReturns] = useState(null);
   const [constituents, setConstituents] = useState([]);
+  // Which keys the ROTATION GRAPH plots, when that is deliberately not the
+  // constituent list. A broad index drills into all 500 of its members for the
+  // table, but 500 dots is not a rotation graph, so the API hands back the
+  // eleven sector ETFs for the RRG. Empty means "same as the constituents",
+  // which is every other page.
+  const [rrgKeys, setRrgKeys] = useState([]);
   // Holdings the fund really owns but this app cannot price — foreign listings
   // and cash-sweep funds. Reported by the API so a short list is explained.
   const [excluded, setExcluded] = useState([]);
@@ -198,6 +213,7 @@ export default function SectorDetailPage({ market }) {
         // Constituents
         if (constRes.status === 'fulfilled' && constRes.value?.constituents) {
           setConstituents(constRes.value.constituents);
+          setRrgKeys(constRes.value.rrgKeys || []);
           setExcluded(constRes.value.excluded || []);
           if (constRes.value.sector?.name) setFetchedName(constRes.value.sector.name);
         } else if (constRes.status === 'fulfilled' && constRes.value?.error) {
@@ -214,6 +230,17 @@ export default function SectorDetailPage({ market }) {
     load();
     return () => controller.abort();
   }, [sectorKey, market]);
+
+  // What the RRG is actually plotting. Normally the constituents themselves —
+  // but a broad index drills into all 500 members for the table while the
+  // rotation graph stays on the eleven sector ETFs, and rrgExtraProps feeds
+  // `defaultVisibleKeys`. Passing the 500 stock keys there would mark every
+  // sector dot the API returned as "not in the default set" and start the
+  // chart completely empty.
+  const rrgUniverse = useMemo(
+    () => (rrgKeys.length ? rrgKeys.map(k => ({ key: k, symbol: k, name: k })) : constituents),
+    [rrgKeys, constituents]
+  );
 
   // Constituents we can actually load history for. A row with no resolvable
   // token (delisted / merged-away name the data source no longer quotes) can
@@ -265,8 +292,109 @@ export default function SectorDetailPage({ market }) {
       });
       setStockData(initial);
 
-      // Progressively load history
-      for (const c of constituents) {
+      // One symbol's candles → the patch the table row renders. Extracted so
+      // the batched loader and the one-at-a-time loader below cannot drift into
+      // computing different columns for the same stock.
+      const rowPatchFrom = (arr) => {
+        if (!arr?.length) return null;
+        const sorted = [...arr].sort((a, b) => a.date.localeCompare(b.date));
+        const price = sorted[sorted.length - 1]?.close ?? 0;
+        const returns = calculateHistoricalReturns(sorted, price);
+        const rsi14 = computeRsi14(sorted);
+        const closes = sorted.map(cc => cc.close);
+        const sma20 = computeSMA(closes, 20);
+        const sma200 = computeSMA(closes, 200);
+        const lastClose = closes[closes.length - 1];
+        const prevDayClose = sorted[sorted.length - 2]?.close;
+        const weeklyHighs = resampleToWeeklyHighs(sorted);
+
+        // Past raw momentum, anchored 5 trading days back. Uses trading-day
+        // index lookups (5/22/66) so the 1W rank-change in the table stays
+        // comparable to the SectorIndices "Momentum Ranking" delta logic.
+        const N = sorted.length;
+        const anchorPastIdx = N - 1 - 5;
+        let pastRawMomentum = null;
+        if (anchorPastIdx >= 66) {
+          const anchor = sorted[anchorPastIdx]?.close;
+          const c1w = sorted[anchorPastIdx - 5]?.close;
+          const c1m = sorted[anchorPastIdx - 22]?.close;
+          const c3m = sorted[anchorPastIdx - 66]?.close;
+          if (anchor && c1w && c1m && c3m) {
+            const r1w = ((anchor - c1w) / c1w) * 100;
+            const r1m = ((anchor - c1m) / c1m) * 100;
+            const r3m = ((anchor - c3m) / c3m) * 100;
+            const pastRsi14 = computeRsi14(sorted.slice(0, anchorPastIdx + 1));
+            pastRawMomentum = (r1w * W_1W + r1m * W_1M + r3m * W_3M) * rsiMultiplierFor(pastRsi14);
+          }
+        }
+        return {
+          returns, price, prevDayClose, rsi14, sma20, sma200, lastClose,
+          breakout: breakoutRank(sorted), weeklyHighs, pastRawMomentum,
+        };
+      };
+
+      const applyRow = (key, p) => setStockData(prev => prev.map(s =>
+        s.key === key
+          // When the live quote was missing (price 0 — e.g. a stock dark on
+          // NSE but served from BSE history), recover both the price and the
+          // 1D from the history series so the row isn't a blank dash / flat
+          // 0.00%. 1D uses the last two daily closes, matching how 1W–3Y are
+          // derived. A real live price keeps its real-time price and 1D.
+          ? { ...s, ...p.returns, price: s.price || p.price, '1D': (!s.price && p.prevDayClose) ? ((p.price - p.prevDayClose) / p.prevDayClose) * 100 : s['1D'], rsi14: p.rsi14, sma20: p.sma20, sma200: p.sma200, aboveSma20: p.sma20 != null ? p.lastClose >= p.sma20 : null, aboveSma200: p.sma200 != null ? p.lastClose >= p.sma200 : null, breakout: p.breakout, weeklyHighs: p.weeklyHighs, pastRawMomentum: p.pastRawMomentum, histLoaded: true }
+          : s
+      ));
+
+      const loadable = constituents.filter(c => c.token);
+
+      // ── Batched history, where the market offers it ──
+      //
+      // The one-at-a-time loop below paces itself at 1.5s per uncached symbol
+      // to stay under the upstream rate limit. That is fine for a ten-name ETF
+      // and unusable for an index: the S&P 500 drill-down would take twelve
+      // minutes to fill its last row. Where a batch endpoint exists it answers
+      // a chunk of symbols per round trip, and each chunk is applied as it
+      // lands so rows keep filling progressively rather than all at the end.
+      //
+      // A failed chunk falls through to the per-symbol path for its members
+      // rather than leaving those rows permanently blank.
+      const missed = [];
+      if (market.batchHistoryPath && loadable.length > BATCH_HISTORY_MIN) {
+        for (let i = 0; i < loadable.length; i += BATCH_HISTORY_CHUNK) {
+          if (signal.aborted) return;
+          const chunk = loadable.slice(i, i + BATCH_HISTORY_CHUNK);
+          try {
+            const bRes = await fetchWithAbort(`${API}/api${market.batchHistoryPath}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ symbols: chunk.map(c => c.token) }),
+              signal,
+            });
+            const bData = await bRes.json();
+            const bars = bData?.bars || {};
+            if (signal.aborted) return;
+            let done = 0;
+            for (const c of chunk) {
+              const patch = rowPatchFrom(bars[c.token]);
+              if (patch) { applyRow(c.key, patch); done++; }
+              // No bars in the batch response — retried one at a time below,
+              // so it is counted there and not here.
+              else missed.push(c);
+            }
+            setHistLoadedCount(n => n + done);
+          } catch (e) {
+            if (e.name === 'AbortError' || signal.aborted) return;
+            console.warn('batch history failed for', chunk.length, 'symbols:', e.message);
+            missed.push(...chunk);
+          }
+        }
+      }
+
+      // Progressively load history — everything the batch path did not cover,
+      // which is the whole list on India and on any market without the endpoint.
+      const sequential = (market.batchHistoryPath && loadable.length > BATCH_HISTORY_MIN)
+        ? missed
+        : constituents;
+      for (const c of sequential) {
         if (signal.aborted) break;
         if (!c.token) continue;
 
@@ -281,49 +409,8 @@ export default function SectorDetailPage({ market }) {
             try { const p = JSON.parse(hData.content[0].text); if (Array.isArray(p)) arr = p; } catch {}
           }
 
-          if (arr?.length && !signal.aborted) {
-            const sorted = [...arr].sort((a, b) => a.date.localeCompare(b.date));
-            const price = sorted[sorted.length - 1]?.close ?? 0;
-            const returns = calculateHistoricalReturns(sorted, price);
-            const rsi14 = computeRsi14(sorted);
-            const closes = sorted.map(cc => cc.close);
-            const sma20 = computeSMA(closes, 20);
-            const sma200 = computeSMA(closes, 200);
-            const lastClose = closes[closes.length - 1];
-            const prevDayClose = sorted[sorted.length - 2]?.close;
-            const weeklyHighs = resampleToWeeklyHighs(sorted);
-
-            // Past raw momentum, anchored 5 trading days back. Uses trading-day
-            // index lookups (5/22/66) so the 1W rank-change in the table stays
-            // comparable to the SectorIndices "Momentum Ranking" delta logic.
-            const N = sorted.length;
-            const anchorPastIdx = N - 1 - 5;
-            let pastRawMomentum = null;
-            if (anchorPastIdx >= 66) {
-              const anchor = sorted[anchorPastIdx]?.close;
-              const c1w = sorted[anchorPastIdx - 5]?.close;
-              const c1m = sorted[anchorPastIdx - 22]?.close;
-              const c3m = sorted[anchorPastIdx - 66]?.close;
-              if (anchor && c1w && c1m && c3m) {
-                const r1w = ((anchor - c1w) / c1w) * 100;
-                const r1m = ((anchor - c1m) / c1m) * 100;
-                const r3m = ((anchor - c3m) / c3m) * 100;
-                const pastRsi14 = computeRsi14(sorted.slice(0, anchorPastIdx + 1));
-                pastRawMomentum = (r1w * W_1W + r1m * W_1M + r3m * W_3M) * rsiMultiplierFor(pastRsi14);
-              }
-            }
-
-            setStockData(prev => prev.map(s =>
-              s.key === c.key
-                // When the live quote was missing (price 0 — e.g. a stock dark on
-                // NSE but served from BSE history), recover both the price and the
-                // 1D from the history series so the row isn't a blank dash / flat
-                // 0.00%. 1D uses the last two daily closes, matching how 1W–3Y are
-                // derived. A real live price keeps its real-time price and 1D.
-                ? { ...s, ...returns, price: s.price || price, '1D': (!s.price && prevDayClose) ? ((price - prevDayClose) / prevDayClose) * 100 : s['1D'], rsi14, sma20, sma200, aboveSma20: sma20 != null ? lastClose >= sma20 : null, aboveSma200: sma200 != null ? lastClose >= sma200 : null, breakout: breakoutRank(sorted), weeklyHighs, pastRawMomentum, histLoaded: true }
-                : s
-            ));
-          }
+          const patch = arr?.length && !signal.aborted ? rowPatchFrom(arr) : null;
+          if (patch) applyRow(c.key, patch);
         } catch (e) {
           if (e.name === 'AbortError' || signal.aborted) break;
           console.warn('history failed for', c.symbol, e.message);
@@ -348,7 +435,7 @@ export default function SectorDetailPage({ market }) {
   const fetchRRG = useCallback(async (signal) => {
     if (constituents.length === 0) return false;
     try {
-      const securities = constituents.filter(c => c.key).map(c => c.key).join(',');
+      const securities = (rrgKeys.length ? rrgKeys : constituents.filter(c => c.key).map(c => c.key)).join(',');
       const url = `${API}/api${market.apiPrefix}/rrg?benchmark=${encodeURIComponent(sectorKey)}&securities=${encodeURIComponent(securities)}`;
       const res = await fetchWithAbort(url, { signal });
       const data = await res.json();
@@ -362,7 +449,7 @@ export default function SectorDetailPage({ market }) {
       console.warn('RRG fetch failed:', e.message);
     }
     return false;
-  }, [sectorKey, constituents, market]);
+  }, [sectorKey, constituents, rrgKeys, market]);
 
   useEffect(() => {
     if (constituents.length === 0) return;
@@ -1195,7 +1282,7 @@ export default function SectorDetailPage({ market }) {
             rrgContainerRef={rrgContainerRef}
             navigate={navigate}
             benchmarkReadOnly={true}
-            {...market.rrgExtraProps(constituents)}
+            {...market.rrgExtraProps(rrgUniverse)}
           />
         )}
         {activeTab === 'stocks' && renderStocks()}

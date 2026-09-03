@@ -58,11 +58,16 @@ export const US_MARKET = {
   instrumentHref: (s) => `/us/${encodeURIComponent(s.token)}`,
   // No /api/us/sector-alerts endpoint exists, so the tab stays hidden.
   hasAlertsTab: false,
+  // Alpaca answers 100 symbols of daily bars in one request, so the drill-down
+  // does not have to walk an index one stock at a time. India has no equivalent
+  // bulk endpoint, so it keeps the per-symbol path.
+  batchHistoryPath: '/us/historical-batch',
   // US sector keys are plain tickers, so the RRG can link straight to them
   // and needs no name shortening.
   rrgExtraProps: (constituents) => ({
     getNavHref: (sector) => `/us/${encodeURIComponent(sector.key)}`,
     shortNameFn: (name) => name,
     defaultVisibleKeys: constituents.map(c => c.key),
+    subtitleFn: subtitleFromConstituents(constituents),
   }),
 };

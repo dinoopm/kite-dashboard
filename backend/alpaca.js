@@ -701,7 +701,17 @@ router.post('/quotes', async (req, res) => {
     const instruments = Array.isArray(req.body?.instruments) ? req.body.instruments : [];
     const symbols = instruments.map(s => String(s).toUpperCase());
     if (symbols.length === 0) return res.json({ content: [{ type: 'text', text: '{}' }] });
-    const data = await alpacaGet('/stocks/snapshots', { symbols: symbols.join(','), feed: SNAPSHOT_FEED }, 60_000);
+    // Chunked because the S&P 500 drill-down asks for 500 symbols at once, and
+    // a query string that long is where the snapshots endpoint starts refusing
+    // or truncating — which would show as a table of zero prices rather than as
+    // an error.
+    const SNAPSHOT_CHUNK = 100;
+    const data = {};
+    for (let i = 0; i < symbols.length; i += SNAPSHOT_CHUNK) {
+      const chunk = symbols.slice(i, i + SNAPSHOT_CHUNK);
+      const part = await alpacaGet('/stocks/snapshots', { symbols: chunk.join(','), feed: SNAPSHOT_FEED }, 60_000);
+      Object.assign(data, part || {});
+    }
     const out = {};
     for (const sym of symbols) {
       const snap = data?.[sym];
@@ -895,9 +905,33 @@ function getSoftwareIndexMembers() {
   return softwareInflight;
 }
 
+// Broad indices whose real membership is known and worth listing in full.
+// SPY and RSP hold the same 500 names (RSP just weights them equally), so both
+// resolve to the S&P 500 scrape. VTI/IWB/MDY/IJR are deliberately absent: no
+// membership list for them exists in this app, so they keep the curated sector
+// map rather than silently showing a list that is not theirs.
+const BROAD_INDEX_MEMBERS = {
+  SPY: { name: 'S&P 500', fetch: getSP500 },
+  RSP: { name: 'S&P 500 (equal weight)', fetch: getSP500 },
+};
+
 router.get('/sector-constituents/:symbol', async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
   try {
+    // The full index. The RRG stays on the eleven sector ETFs on purpose: 500
+    // dots on a rotation graph is not a chart, and the sector view is the one
+    // that actually answers "what is leading". The two lists are returned
+    // together so the table and the rotation graph can differ deliberately
+    // rather than by accident.
+    const broad = BROAD_INDEX_MEMBERS[sym];
+    if (broad) {
+      const members = await broad.fetch();
+      return res.json({
+        sector: { key: sym, name: broad.name },
+        constituents: members.map(m => mkConstituent(m.symbol, m.name)),
+        rrgKeys: US_CONSTITUENTS[sym] || [],
+      });
+    }
     // Full GICS sector membership (names already come from the index scrape).
     const gics = SECTOR_ETF_TO_GICS[sym];
     if (gics) {
@@ -2087,6 +2121,51 @@ router.get('/analysts/:symbol', async (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── POST /api/us/historical-batch — daily bars for many symbols at once ────
+//
+// /historical-full serves one symbol per request, which the sector drill-down
+// walks sequentially with a 1.5s gap to stay inside Alpaca's rate limit. That
+// is fine for a ten-name ETF and impossible for the S&P 500: 500 symbols at
+// 1.5s each is twelve minutes before the last row fills.
+//
+// Alpaca's own multi-symbol endpoint answers 100 symbols in one request, and
+// fetchBarsMulti (below, written for the screener) already speaks it. This
+// exposes that to the browser so a 500-name table loads in a handful of round
+// trips instead of five hundred.
+const BATCH_HISTORY_MAX = 120;
+
+router.post('/historical-batch', async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body?.symbols) ? req.body.symbols : [];
+    const symbols = [...new Set(raw.map(s => String(s).toUpperCase()).filter(Boolean))];
+    if (symbols.length === 0) return res.json({ bars: {} });
+    // A cap, not a silent truncation: a caller asking for more than this is
+    // doing something the pagination on the other side was meant to prevent,
+    // and quietly returning a subset would show a half-empty table as if it
+    // were the whole index.
+    if (symbols.length > BATCH_HISTORY_MAX) {
+      return res.status(400).json({ error: `Too many symbols (${symbols.length}); request at most ${BATCH_HISTORY_MAX} per call.` });
+    }
+    // Four years, matching /historical-full — the table needs 3Y returns and a
+    // 200-day SMA, so a shorter window would leave the right-hand columns blank.
+    const start = new Date(Date.now() - 4 * 365 * 24 * 60 * 60 * 1000);
+    const full = await fetchBarsMulti(symbols, start);
+    // date/close/high only, which is everything the drill-down table computes
+    // from: returns, RSI and the SMAs read close, the weekly-high resample and
+    // the breakout rank read high. Carrying open, low and volume as well more
+    // than doubles the response — 500 names is 50 MB with them and 22 MB
+    // without — for columns nothing on the page renders. A caller that needs
+    // full OHLCV wants /historical-full, which serves it per symbol.
+    const bars = {};
+    for (const [sym, candles] of Object.entries(full)) {
+      bars[sym] = candles.map(c => ({ date: c.date, close: c.close, high: c.high }));
+    }
+    res.json({ bars });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message, configured: !err.notConfigured });
   }
 });
 
