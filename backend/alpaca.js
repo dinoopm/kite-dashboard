@@ -26,6 +26,7 @@ const { getSP500, getNasdaq100 } = require('./usUniverses');
 const { hvSpike } = require('./volMath');
 const { getEtfHoldings } = require('./etfHoldings');
 const { alpacaGet, sanitizeBar, fetchBarsMulti, isConfigured, FEED, DATA_BASE, API_KEY, API_SECRET } = require('./alpacaData');
+const { barFlags } = require('./usRedFlags');
 const MIN_SCREENER_BARS = 60;
 
 // Supabase for persisting US user data (baskets, virtual portfolios, screens).
@@ -356,81 +357,8 @@ router.get('/red-flags/:symbol', async (req, res) => {
   try {
     const all = await fetchDailyBars(sym, 1);
     const bars = all.slice(-60);
-    const flags = [];
-    const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
-    const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const h = s.length >> 1; return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2; };
+    const flags = barFlags(all.slice(-60));
     const r1 = (v) => (v == null || !isFinite(v) ? null : +v.toFixed(1));
-
-    if (bars.length >= 25) {
-      const last20 = bars.slice(-20);
-
-      // 1) Thin liquidity — easiest stock to manipulate is one nobody trades.
-      const dollarVol = median(last20.map(b => b.close * b.volume));
-      if (dollarVol != null && dollarVol < 1e6) {
-        flags.push({
-          id: 'thin-liquidity', severity: 'amber',
-          title: `Thin liquidity (~$${(dollarVol / 1e6).toFixed(2)}M/day median)`,
-          detail: 'Median dollar volume under $1M/day — wide spreads, easy to ramp, hard to exit. Micro-float names are the primary pump-and-dump vehicle in the US.',
-        });
-      }
-
-      // 2) Pump-and-fade — vertical ramp followed by a break from the peak.
-      const win = bars.slice(-30);
-      let peakIdx = 0;
-      win.forEach((b, i) => { if (b.close > win[peakIdx].close) peakIdx = i; });
-      const preIdx = Math.max(0, peakIdx - 10);
-      const ramp = win[preIdx].close > 0 ? win[peakIdx].close / win[preIdx].close - 1 : 0;
-      const offPeak = win[peakIdx].close > 0 ? 1 - win[win.length - 1].close / win[peakIdx].close : 0;
-      if (ramp >= 0.4 && offPeak >= 0.2) {
-        flags.push({
-          id: 'pump-fade', severity: 'red',
-          title: 'Pump-and-fade pattern',
-          detail: `Price ran +${r1(ramp * 100)}% into a peak within ~10 sessions, then dropped ${r1(offPeak * 100)}% from it — the footprint of a promoted ramp being distributed.`,
-        });
-      }
-
-      // 3) Rising price on fading volume (distribution; volume is the best
-      //    US proxy — there is no delivery % here).
-      const run20 = last20[0].close > 0 ? last20[last20.length - 1].close / last20[0].close - 1 : 0;
-      const volRecent = mean(last20.slice(-5).map(b => b.volume));
-      const volPrior = mean(last20.slice(0, 15).map(b => b.volume));
-      if (run20 >= 0.15 && volPrior > 0 && volRecent < volPrior * 0.65) {
-        flags.push({
-          id: 'fading-volume', severity: 'amber',
-          title: 'Price rising on fading volume',
-          detail: `Price +${r1(run20 * 100)}% over ~20 sessions while volume fell ${r1((1 - volRecent / volPrior) * 100)}% — fewer real buyers behind each new high.`,
-        });
-      }
-
-      // 4) Gap-and-fade days — gapped open sold into all day.
-      let gapFades = 0;
-      for (let i = bars.length - 15; i < bars.length; i++) {
-        const prev = bars[i - 1];
-        if (prev && bars[i].open >= prev.close * 1.03 && bars[i].close <= bars[i].open * 0.985) gapFades++;
-      }
-      if (gapFades >= 3) {
-        flags.push({
-          id: 'gap-fade', severity: 'amber',
-          title: `Repeated gap-and-fade sessions (${gapFades} of last 15)`,
-          detail: 'Opens gapped up 3%+ then closed below the open — excitement at the open is being sold into, a common promoted-stock signature.',
-        });
-      }
-
-      // 5) Volume spikes with no price move — churn/crossing prints.
-      const medVol = median(last20.map(b => b.volume));
-      let quietSpikes = 0;
-      for (let i = bars.length - 10; i < bars.length; i++) {
-        const prev = bars[i - 1];
-        if (prev && medVol > 0 && bars[i].volume >= 5 * medVol && Math.abs(bars[i].close / prev.close - 1) < 0.015) quietSpikes++;
-      }
-      if (quietSpikes >= 2) {
-        flags.push({
-          id: 'quiet-volume-spike', severity: 'amber',
-          title: `Volume spikes without price movement (${quietSpikes} day(s))`,
-          detail: '5×+ normal volume with the price barely moving — block crossings or churn, not directional buying.',
-        });
-      }
-    }
 
     // 6) Volatility spike — daily swings far outside the stock's own past
     // year (computed on the full 1y series, not the 60-bar slice). Abnormal
@@ -1292,63 +1220,69 @@ router.get('/news/:symbol', async (req, res) => {
 // portfolio (the US side has no brokerage holdings).
 let earningsCalCache = { data: null, ts: 0 };
 const EARNINGS_CAL_TTL = 12 * 60 * 60 * 1000;
-router.get('/earnings-calendar', async (req, res) => {
+
+/** Upcoming earnings across S&P 500 + Nasdaq 100 + watched symbols, cached 12h. */
+async function getEarningsCalendar() {
   if (earningsCalCache.data && Date.now() - earningsCalCache.ts < EARNINGS_CAL_TTL) {
-    return res.json({ ...earningsCalCache.data, cached: true });
+    return { ...earningsCalCache.data, cached: true };
   }
+  // "Your" US symbols: union of basket symbol arrays + portfolio holdings.
+  // Resolved BEFORE the universe is built, not after. They used to be looked
+  // up only to flag rows the index scan had already produced, which meant a
+  // symbol outside the S&P 500 and Nasdaq 100 was never queried, never
+  // appeared, and so could never be flagged. Every small-cap in a basket was
+  // invisible on this page — QBTS, RGTI, GSAT, ASTS, LUNR, IONQ — while
+  // NVDA and RKLB showed up fine because they happen to be index members.
+  const mine = await usWatchedSymbols();
+  const mineSet = new Set(mine);
+
+  const [sp, ndx] = await Promise.all([getSP500().catch(() => []), getNasdaq100().catch(() => [])]);
+  const symbols = [...new Set([...[...sp, ...ndx].map(x => x.symbol), ...mine])];
+
+  // Yahoo uses dashes for share classes (BRK-B), the universe lists use
+  // dots (BRK.B) — query in Yahoo form, report in the app's form. Dotted
+  // symbols also return stub objects that fail the lib's schema validation
+  // and would kill the whole chunk, hence validateResult: false.
+  const appSymbol = new Map(symbols.map(s => [s.replace(/\./g, '-'), s]));
+  const rows = [];
+  const ySymbols = [...appSymbol.keys()];
+  for (let i = 0; i < ySymbols.length; i += 100) {
+    try {
+      const quotes = await yf.quote(ySymbols.slice(i, i + 100), {}, { validateResult: false });
+      for (const q of Array.isArray(quotes) ? quotes : [quotes]) {
+        const start = q.earningsTimestampStart, end = q.earningsTimestampEnd;
+        if (!start) continue;
+        const d = new Date(start);
+        rows.push({
+          symbol: appSymbol.get(q.symbol) || q.symbol,
+          name: q.shortName || q.longName || q.symbol,
+          date: d.toISOString().slice(0, 10),
+          // NYSE/Nasdaq regular session starts 13:30/14:30 UTC — a slot
+          // before that is pre-market, after ~20:00 UTC is post-close.
+          session: d.getUTCHours() < 13 ? 'before open' : d.getUTCHours() >= 20 ? 'after close' : 'during market',
+          estimated: end && new Date(end).toISOString().slice(0, 10) !== d.toISOString().slice(0, 10),
+          marketCap: q.marketCap ?? null,
+        });
+      }
+    } catch (e) { console.warn('[earnings-calendar] chunk failed:', e.message); }
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const horizon = new Date(); horizon.setDate(horizon.getDate() + 60);
+  const hz = horizon.toISOString().slice(0, 10);
+  const events = rows
+    .filter(r => r.date >= today && r.date <= hz)
+    .map(r => ({ ...r, mine: mineSet.has(r.symbol) }))
+    .sort((a, b) => a.date.localeCompare(b.date) || (b.marketCap ?? 0) - (a.marketCap ?? 0));
+
+  const data = { events, universe: symbols.length, source: `Yahoo batched quotes over S&P 500 + Nasdaq 100 + ${mine.length} symbols you track` };
+  earningsCalCache = { data, ts: Date.now() };
+  return data;
+}
+
+router.get('/earnings-calendar', async (req, res) => {
   try {
-    // "Your" US symbols: union of basket symbol arrays + portfolio holdings.
-    // Resolved BEFORE the universe is built, not after. They used to be looked
-    // up only to flag rows the index scan had already produced, which meant a
-    // symbol outside the S&P 500 and Nasdaq 100 was never queried, never
-    // appeared, and so could never be flagged. Every small-cap in a basket was
-    // invisible on this page — QBTS, RGTI, GSAT, ASTS, LUNR, IONQ — while
-    // NVDA and RKLB showed up fine because they happen to be index members.
-    const mine = await usWatchedSymbols();
-    const mineSet = new Set(mine);
-
-    const [sp, ndx] = await Promise.all([getSP500().catch(() => []), getNasdaq100().catch(() => [])]);
-    const symbols = [...new Set([...[...sp, ...ndx].map(x => x.symbol), ...mine])];
-
-    // Yahoo uses dashes for share classes (BRK-B), the universe lists use
-    // dots (BRK.B) — query in Yahoo form, report in the app's form. Dotted
-    // symbols also return stub objects that fail the lib's schema validation
-    // and would kill the whole chunk, hence validateResult: false.
-    const appSymbol = new Map(symbols.map(s => [s.replace(/\./g, '-'), s]));
-    const rows = [];
-    const ySymbols = [...appSymbol.keys()];
-    for (let i = 0; i < ySymbols.length; i += 100) {
-      try {
-        const quotes = await yf.quote(ySymbols.slice(i, i + 100), {}, { validateResult: false });
-        for (const q of Array.isArray(quotes) ? quotes : [quotes]) {
-          const start = q.earningsTimestampStart, end = q.earningsTimestampEnd;
-          if (!start) continue;
-          const d = new Date(start);
-          rows.push({
-            symbol: appSymbol.get(q.symbol) || q.symbol,
-            name: q.shortName || q.longName || q.symbol,
-            date: d.toISOString().slice(0, 10),
-            // NYSE/Nasdaq regular session starts 13:30/14:30 UTC — a slot
-            // before that is pre-market, after ~20:00 UTC is post-close.
-            session: d.getUTCHours() < 13 ? 'before open' : d.getUTCHours() >= 20 ? 'after close' : 'during market',
-            estimated: end && new Date(end).toISOString().slice(0, 10) !== d.toISOString().slice(0, 10),
-            marketCap: q.marketCap ?? null,
-          });
-        }
-      } catch (e) { console.warn('[earnings-calendar] chunk failed:', e.message); }
-    }
-
-    const today = new Date().toISOString().slice(0, 10);
-    const horizon = new Date(); horizon.setDate(horizon.getDate() + 60);
-    const hz = horizon.toISOString().slice(0, 10);
-    const events = rows
-      .filter(r => r.date >= today && r.date <= hz)
-      .map(r => ({ ...r, mine: mineSet.has(r.symbol) }))
-      .sort((a, b) => a.date.localeCompare(b.date) || (b.marketCap ?? 0) - (a.marketCap ?? 0));
-
-    const data = { events, universe: symbols.length, source: `Yahoo batched quotes over S&P 500 + Nasdaq 100 + ${mine.length} symbols you track` };
-    earningsCalCache = { data, ts: Date.now() };
-    res.json(data);
+    res.json(await getEarningsCalendar());
   } catch (err) {
     res.status(err.statusCode || 502).json({ error: err.message });
   }
@@ -2073,9 +2007,9 @@ router.get('/analysts/:symbol', async (req, res) => {
 // 1.5s each is twelve minutes before the last row fills.
 //
 // Alpaca's own multi-symbol endpoint answers 100 symbols in one request, and
-// fetchBarsMulti (below, written for the screener) already speaks it. This
-// exposes that to the browser so a 500-name table loads in a handful of round
-// trips instead of five hundred.
+// fetchBarsMulti (imported from ./alpacaData, written for the screener) already
+// speaks it. This exposes that to the browser so a 500-name table loads in a
+// handful of round trips instead of five hundred.
 const BATCH_HISTORY_MAX = 120;
 
 router.post('/historical-batch', async (req, res) => {
@@ -2553,6 +2487,7 @@ module.exports = {
   alpacaRouter: router,
   isAlpacaConfigured: isConfigured,
   checkFeedAgreement,
+  getEarningsCalendar,
   // Exported for the range-coverage test — see TNX_RANGES.
   TNX_RANGES, TNX_DEFAULT_RANGE, tnxRangeConfig,
   // Exported for the income-statement merge tests — see /pnl/:symbol.
