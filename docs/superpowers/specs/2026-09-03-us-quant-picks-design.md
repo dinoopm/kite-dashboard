@@ -153,10 +153,12 @@ be backtested — earns or loses its weight honestly.
 
 ## Daily job
 
-`dailyJobs.js` gains a US step that runs on ticks after 21:30 IST (US close plus
-settlement). Completion is decided by asking `us_pick_snapshots` whether a row for
-the latest SPY bar date exists — the same DB-decided pattern the Indian snapshot
-uses, so a restart neither repeats nor skips the day. Revisions are refreshed in
+`dailyJobs.js` gains a US step. It is due when the latest SPY daily bar from
+Alpaca is newer than the latest `us_pick_snapshots.snap_date` **and** that
+session has closed — the bar's date is before today (UTC) or it is at or past
+21:00 UTC (16:00 ET plus settlement, either DST regime). Completion is decided by
+the table, not a flag — the same DB-decided pattern the Indian snapshot uses, so
+a restart neither repeats nor skips the day. Revisions are refreshed in
 the same step (Yahoo, chunked, 24h cache) before ranking.
 
 ## Scoring
