@@ -58,17 +58,35 @@ function present(stats) {
  * index rather than raw return, because raw return mostly measures the market
  * and would flatter every signal in a rising one.
  */
-function headline(rows, { source, blockedReason } = {}) {
+function headline(rows, { source, blockedReason, direction = 'bullish' } = {}) {
   if (blockedReason) return { state: 'unscoreable', text: 'Cannot be scored yet', detail: blockedReason };
   const mid = rows.find(r => r.horizon === '10d') || rows[0];
   if (!mid || !mid.n) return { state: 'no-data', text: 'No resolved firings yet', detail: 'Nothing has fired long enough ago to have an outcome.' };
   if (mid.underSampled) return { state: 'thin', text: `n=${mid.n} — too few to judge`, detail: `Needs ${MIN_N}+ resolved firings before a direction means anything.` };
   const edge = mid.medianExcessPct;
   if (edge == null) return { state: 'no-benchmark', text: `median ${mid.medianPct}% (no benchmark)`, detail: 'Index unavailable, so this is raw return and mostly reflects the market.' };
+  const measured = `Median ${edge > 0 ? 'beat' : 'lagged'} the index by ${Math.abs(edge)}% over 10 sessions across ${mid.n} resolved firings${source === 'reconstructed' ? ', reconstructed from stored prices' : ''}.`;
+  const sign = `${edge > 0 ? '+' : ''}${edge}% vs NIFTY over 10d (n=${mid.n})`;
+
+  // A bearish signal is a warning, so the arithmetic that VINDICATES it is the
+  // opposite of the arithmetic that vindicates a buy. Reusing the bullish
+  // states here would paint a warning that correctly called weakness in the
+  // colour this app uses for "beat the index" — the single most misreadable
+  // thing a badge could do — so warnings get their own two states and never
+  // borrow the green one.
+  if (direction === 'bearish') {
+    const held = edge < 0;
+    return {
+      state: held ? 'held' : 'refuted',
+      text: `${sign} — warning ${held ? 'held' : 'did not hold'}`,
+      detail: `${measured}\n\nThis signal claims weakness, so lagging the index is the claim HOLDING and beating it is the claim being refuted. ${held ? 'It held over this sample.' : 'It did not hold: the flagged bars went on to beat the index, which is evidence against acting on the warning.'}`,
+    };
+  }
+
   return {
     state: edge > 0 ? 'positive' : 'negative',
-    text: `${edge > 0 ? '+' : ''}${edge}% vs NIFTY over 10d (n=${mid.n})`,
-    detail: `Median ${edge > 0 ? 'beat' : 'lagged'} the index by ${Math.abs(edge)}% over 10 sessions across ${mid.n} resolved firings${source === 'reconstructed' ? ', reconstructed from stored prices' : ''}.`,
+    text: sign,
+    detail: measured,
   };
 }
 
@@ -121,8 +139,9 @@ async function runSignalScorecard() {
       symbols: new Set(emissions.map(e => e.symbol)).size,
       firstFired: dates[0],
       lastFired: dates[dates.length - 1],
+      direction: meta?.direction || 'bullish',
       horizons: rows,
-      headline: headline(rows, { source }),
+      headline: headline(rows, { source, direction: meta?.direction }),
     });
   }
 
@@ -133,9 +152,17 @@ async function runSignalScorecard() {
   const neverFired = ALL_SIGNALS
     .filter(s => !seen.has(s.name) && !s.blockedReason)
     .map(s => ({
-      signal: s.name, label: s.label, source: s.source,
+      signal: s.name, label: s.label, source: s.source, direction: s.direction || 'bullish',
       firings: 0, symbols: 0, horizons: [],
-      headline: { state: 'no-data', text: 'Never recorded', detail: 'This signal is in the registry but nothing has been written for it — check the recorder.' },
+      // "Check the recorder" is the right default — a signal shipping in the UI
+      // with no emissions is usually a recording bug. It is the WRONG message
+      // for a signal already measured to be unreachable, where the empty row is
+      // the finding rather than a fault, so such an entry carries its own note.
+      headline: {
+        state: 'no-data',
+        text: s.neverFiredNote ? 'Never fires' : 'Never recorded',
+        detail: s.neverFiredNote || 'This signal is in the registry but nothing has been written for it — check the recorder.',
+      },
     }));
 
   signals.sort((a, b) => b.firings - a.firings);

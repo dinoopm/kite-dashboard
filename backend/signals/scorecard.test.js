@@ -58,6 +58,28 @@ describe('headline', () => {
     assert.match(h.detail, /reconstructed from stored prices/);
   });
 
+  // A warning is vindicated by the OPPOSITE arithmetic to a buy, and the badge
+  // colours follow `state`, so getting this backwards would paint a correct
+  // warning in the colour this app uses for "beat the index".
+  test('a bearish signal that lagged the index is the claim HOLDING', () => {
+    const h = headline(rows({ '10d': { n: 60, unresolved: 0, medianExcessPct: -1.4 } }), { direction: 'bearish' });
+    assert.equal(h.state, 'held');
+    assert.match(h.text, /warning held/);
+    assert.ok(!/positive|negative/.test(h.state), 'must not borrow the bullish states');
+  });
+
+  test('a bearish signal that BEAT the index is the claim refuted', () => {
+    const h = headline(rows({ '10d': { n: 60, unresolved: 0, medianExcessPct: 1.4 } }), { direction: 'bearish' });
+    assert.equal(h.state, 'refuted');
+    assert.match(h.text, /warning did not hold/);
+    assert.match(h.detail, /evidence against acting on the warning/);
+  });
+
+  test('direction does not let a thin sample speak either way', () => {
+    const h = headline(rows({ '10d': { n: 4, unresolved: 0, medianExcessPct: -9 } }), { direction: 'bearish' });
+    assert.equal(h.state, 'thin');
+  });
+
   test('degrades to raw return when there is no benchmark', () => {
     const h = headline(rows({ '10d': { n: 60, unresolved: 0, medianPct: 2, medianExcessPct: null } }));
     assert.equal(h.state, 'no-benchmark');

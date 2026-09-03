@@ -95,3 +95,55 @@ describe('generateSignals', () => {
     assert.equal((out.nearMisses).length, 0)
   })
 })
+
+// ─── The standalone dead-cat bounce ──────────────────────────────────────────
+//
+// Same three properties the backend detector is tested on, because the markers
+// drawn from this array carry the badge scored from that detector: if the two
+// rules drift apart, the badge describes bars that are not on screen.
+
+/** Flat, then a hard fall, then whatever `after` says. */
+function dropped(after, { flat = 40, from = 100, to = 82, legs = 8 } = {}) {
+  const closes = []
+  for (let i = 0; i < flat; i++) closes.push(from)
+  for (let i = 1; i <= legs; i++) closes.push(from - ((from - to) * i) / legs)
+  closes.push(...after)
+  return closes.map((c, i) => ({
+    date: new Date(2025, 0, 1 + i).toISOString().slice(0, 10),
+    open: c, high: c * 1.002, low: c * 0.998, close: c, volume: 1000,
+  }))
+}
+
+describe('deadCatBounces', () => {
+  test('flags the first up day inside a sharp drop', () => {
+    const out = generateSignals(dropped([83]))
+    assert.equal(out.deadCatBounces.length, 1)
+    const b = out.deadCatBounces[0]
+    assert.equal(b.index, dropped([83]).length - 1)
+    assert.ok(b.dropPct >= 10, `drop was ${b.dropPct}%`)
+    assert.ok(b.close < b.mid, 'still under the 20-bar mean')
+  })
+
+  test('a run of green days is ONE marker, not four', () => {
+    const out = generateSignals(dropped([83, 84, 85, 86]))
+    assert.equal(out.deadCatBounces.length, 1)
+  })
+
+  test('a down day between rallies makes the second one a fresh marker', () => {
+    const out = generateSignals(dropped([83, 82, 83.5]))
+    assert.equal(out.deadCatBounces.length, 2)
+  })
+
+  test('a shallow dip is not a dead cat', () => {
+    const out = generateSignals(dropped([97], { to: 96 }))
+    assert.equal(out.deadCatBounces.length, 0)
+  })
+
+  // The same guarantee nearMisses carries: Instrument.jsx and UsInstrument.jsx
+  // paint anything inside `signals` as a buy or a sell, so a bearish flag in
+  // there would render as a sell call nobody made.
+  test('never leaks into signals', () => {
+    const out = generateSignals(dropped([83, 84, 85]))
+    for (const s of out.signals) assert.notEqual(s.type, 'dead-cat-bounce')
+  })
+})

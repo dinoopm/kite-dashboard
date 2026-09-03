@@ -198,12 +198,14 @@ function crossedUpAt(S, i) {
  * these from its buy tally, so scoring them as buys would score a rule nobody
  * is shown.
  */
-function deadCatAt(S, i) {
-  const mid = smaSeries(S, CROSS_MID)[i];
-  if (mid == null || !(S.closes[i] < mid)) return false;
+function deadCatAt(S, i, opts = {}) {
+  const { dropPct = DROP_PCT, lookback = DROP_LOOKBACK, midPeriod = CROSS_MID, requireBelowMean = true } = opts;
+  const mid = smaSeries(S, midPeriod)[i];
+  if (mid == null) return false;
+  if (requireBelowMean && !(S.closes[i] < mid)) return false;
   let peak = -Infinity;
-  for (let j = Math.max(0, i - DROP_LOOKBACK); j <= i; j++) peak = Math.max(peak, S.closes[j]);
-  return peak > 0 && (peak - S.closes[i]) / peak >= DROP_PCT;
+  for (let j = Math.max(0, i - lookback); j <= i; j++) peak = Math.max(peak, S.closes[j]);
+  return peak > 0 && (peak - S.closes[i]) / peak >= dropPct;
 }
 
 /**
@@ -249,6 +251,116 @@ function maCrossVolume(S, i) {
 function maCrossQuiet(S, i) {
   const hit = maCrossUp(S, i);
   return hit && !hit.confirmed ? hit : null;
+}
+
+// ─── The dead cat, promoted from veto to signal ──────────────────────────────
+//
+// Until now the dead-cat rule existed only as a REFUSAL: maCrossUp throws away
+// a golden cross that fires below the 20-bar mean right after a sharp drop, and
+// the chart paints those crosses amber and excludes them from its buy tally. A
+// refusal is still a claim about the future — it says those bounces fail — and
+// nothing has ever checked it. An unmeasured filter is worse than an unmeasured
+// signal: it removes evidence about itself every time it fires.
+//
+// Two entries, because "dead cat" names two different sets of bars and pooling
+// them would answer neither question:
+//
+//   dead_cat_bounce  the standalone rule — the first up day inside a sharp
+//                    drawdown while price is still under the 20-bar mean. No
+//                    crossover is involved, so it fires on the far commoner
+//                    case the guard never sees: a market or stock that simply
+//                    rallies a day after falling hard.
+//   dead_cat_cross   exactly the amber DC markers — a 10/50 golden cross with
+//                    RSI > 50 that the guard vetoed. Disjoint from ma_cross_up
+//                    and, with it, every RSI-passing cross, so the pair says
+//                    whether the veto earns its keep. Their n must never be
+//                    added together for the same reason the volume split's
+//                    cannot.
+//
+// Both are BEARISH claims, declared as `direction: 'bearish'`, and the
+// scorecard reads a NEGATIVE excess as the claim HOLDING. Without that
+// declaration a warning that correctly predicted weakness would render green —
+// the colour this app uses for "beat the index" — beside a marker telling you
+// not to buy, and a badge that mislabels its own direction is worse than no
+// badge at all.
+
+/**
+ * Is bar i a bounce bar: an up close, inside a sharp drawdown, still below the
+ * 20-bar mean?
+ *
+ * deadCatAt supplies the context (drop ≥ DROP_PCT from the highest close of the
+ * prior DROP_LOOKBACK bars, close under the mean); this adds the bounce itself.
+ * An unchanged close is not a bounce — same treatment an unchanged close gets
+ * in isThrustBar, and for the same reason: the pattern is a rally that fails,
+ * so there has to be a rally.
+ */
+function isDeadCatBounceBar(S, i, opts) {
+  if (!deadCatAt(S, i, opts)) return false;
+  const prev = S.closes[i - 1];
+  return prev != null && S.closes[i] > prev;
+}
+
+/** How far bar i sits below the highest close of the prior DROP_LOOKBACK bars. */
+function dropFromPeak(S, i, lookback = DROP_LOOKBACK) {
+  let peak = -Infinity;
+  for (let j = Math.max(0, i - lookback); j <= i; j++) peak = Math.max(peak, S.closes[j]);
+  if (!(peak > 0)) return null;
+  return { peak, pct: ((peak - S.closes[i]) / peak) * 100 };
+}
+
+/**
+ * The standalone signal: the FIRST up day of a bounce inside a sharp drop.
+ *
+ * `opts` exists for one reason only — deadCatStudy.js sweeps the thresholds —
+ * exactly as isThrustBar's `mult` does. The shipped signal is always the bare
+ * call: 10% below the 10-bar peak, under the 20-bar mean. A threshold picked by
+ * eye and never varied is indistinguishable from one picked to flatter the
+ * result, and the sweep is what makes that checkable.
+ *
+ * The run guard is the same one volumeThrust uses and matters more here, since
+ * a failing bounce typically runs three or four green days in a row. Recording
+ * each of them would file one episode four times, and — because those four rows
+ * sit one bar apart on the same symbol — their forward windows overlap almost
+ * completely, so n would quadruple while the independent evidence stayed at
+ * one. A quiet or down day ends the run; the next up day inside a still-live
+ * drawdown is a fresh call.
+ */
+function deadCatBounce(S, i, opts = {}) {
+  if (!isDeadCatBounceBar(S, i, opts)) return null;
+  if (isDeadCatBounceBar(S, i - 1, opts)) return null;
+  const drop = dropFromPeak(S, i, opts.lookback ?? DROP_LOOKBACK);
+  const mid = smaSeries(S, opts.midPeriod ?? CROSS_MID)[i];
+  const rsi = S.rsi14[i];
+  return {
+    close: S.closes[i],
+    mid: +mid.toFixed(2),
+    dropPct: +drop.pct.toFixed(2),
+    // Carried so the sample can be re-cut later by how deep the hole was,
+    // without re-recording anything.
+    peak: +drop.peak.toFixed(2),
+    rsi: rsi == null ? null : +rsi.toFixed(1),
+  };
+}
+
+/**
+ * The vetoed crosses — the amber DC markers, and nothing else.
+ *
+ * Deliberately NOT a mirror of maCrossUp with the guard inverted by hand: it
+ * calls crossedUpAt and deadCatAt directly, the same two functions maCrossUp
+ * calls, so the two sets cannot drift apart into an overlap or a gap.
+ */
+function deadCatCross(S, i) {
+  if (!crossedUpAt(S, i)) return null;
+  const rsi = S.rsi14[i];
+  if (rsi == null || !(rsi > 50)) return null;
+  if (!deadCatAt(S, i)) return null;
+  const drop = dropFromPeak(S, i);
+  return {
+    close: S.closes[i],
+    rsi: +rsi.toFixed(1),
+    mid: +smaSeries(S, CROSS_MID)[i].toFixed(2),
+    dropPct: +drop.pct.toFixed(2),
+  };
 }
 
 // Signals derived from daily OHLCV. `source: 'reconstructed'` is an admission,
@@ -329,6 +441,42 @@ const PRICE_SIGNALS = [
     source: 'reconstructed',
     detect: maCrossQuiet,
   },
+  {
+    name: 'dead_cat_bounce',
+    label: 'Dead-cat bounce (first up day in a sharp drop)',
+    description: `The bounce rule on its own, no crossover required: close is at least ${DROP_PCT * 100}% below the highest close of the prior ${DROP_LOOKBACK} sessions AND still under the ${CROSS_MID}-bar mean, on the first up day of that bounce. A BEARISH claim — it says the rally fades, so a negative excess is the claim holding. MEASURED ON US HISTORY and so far NOT supported: deadCatStudy.js finds 4,451 firings across 118 S&P 500 names, 2014-2026, with a 10-day median excess over the S&P of +0.13% (t=1.7, n=4,431) — the wrong sign for the claim, and inside noise. At looser thresholds the wrong sign becomes significant (+0.07%, t=3.5 at a 5% drop; +0.10%, t=3.0 over a 20-bar lookback). The Indian figure below is measured separately and is the one this badge reports.`,
+    direction: 'bearish',
+    // 20 bars for the mean, plus one so the run guard's previous bar has a mean
+    // of its own. Without that extra bar the guard reads a null mean, treats the
+    // second day of a bounce as a fresh one, and doubles the sample.
+    minBars: 21,
+    source: 'reconstructed',
+    detect: deadCatBounce,
+  },
+  {
+    name: 'dead_cat_cross',
+    label: 'Golden cross the dead-cat guard vetoed',
+    description: `The amber DC markers: a ${CROSS_FAST}/${CROSS_SLOW} cross with RSI over 50 that fired below the ${CROSS_MID}-bar mean after a sharp drop, which the chart refuses to show as a buy. Disjoint from ma_cross_up and together with it every RSI-passing cross, so the two must never have their n added. A BEARISH claim: the veto is only worth having if these do measurably worse than the buys it keeps.`,
+    direction: 'bearish',
+    minBars: 51,
+    source: 'reconstructed',
+    detect: deadCatCross,
+    // Measured before shipping, and the measurement is the point: this fires
+    // ZERO times in 118,104 US daily bars across 50 symbols spanning 2015-2026
+    // — 1,411 golden crosses, not one of them vetoed — and zero times in 3,000
+    // fat-tailed random walks of 300 bars each. The gates are close to mutually
+    // exclusive by construction: SMA10 can only cross ABOVE SMA50 on a bar
+    // where recent closes are pulling the fast average up, and "10% below the
+    // 10-bar peak, still under the 20-bar mean" is the opposite condition.
+    //
+    // So the amber DC marker, its tally and its legend line describe an event
+    // the chart has never drawn, and maCrossUp's dead-cat exclusion has never
+    // excluded anything. Kept live rather than deleted for two reasons: the
+    // detector is the definition of what those UI elements claim to show, and
+    // if the thresholds are ever loosened this starts recording immediately
+    // instead of silently going unmeasured.
+    neverFiredNote: 'Not a recording bug: this signal is close to unreachable by construction. A 10/50 golden cross needs recent closes pulling the fast average up; the dead-cat guard needs price 10% below its 10-bar peak and under the 20-bar mean. Across 118,104 US daily bars (50 symbols, 2015-2026, 1,411 golden crosses) and 3,000 fat-tailed random walks, the two conditions never once met on the same bar. The consequence is that the chart\'s amber DC marker has never been drawn and its exclusion from the buy tally has never removed a buy — the guard is decoration, not a filter.',
+  },
 ];
 
 // Signals that cannot be evaluated from the history currently stored. Kept in
@@ -403,5 +551,6 @@ module.exports = {
   signalMeta, detectAll, supertrendFlipUp, breakout, squeezeStart,
   volumeThrust, isThrustBar, relativeVolume, VOLUME_THRUST_MULT,
   maCrossUp, maCrossVolume, maCrossQuiet, crossedUpAt, deadCatAt, thrustWithin, smaSeries,
-  CROSS_FAST, CROSS_SLOW, CONFIRM_WINDOW,
+  deadCatBounce, deadCatCross, isDeadCatBounceBar, dropFromPeak,
+  CROSS_FAST, CROSS_SLOW, CROSS_MID, CONFIRM_WINDOW, DROP_LOOKBACK, DROP_PCT,
 };

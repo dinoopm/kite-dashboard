@@ -18,6 +18,14 @@ const TONE = {
   'no-data':     { color: 'var(--text-secondary)', border: 'var(--border)', bg: 'transparent' },
   'no-benchmark':{ color: 'var(--text-secondary)', border: 'var(--border)', bg: 'transparent' },
   unscoreable:   { color: '#fcd34d', border: 'rgba(252,211,77,0.35)', bg: 'rgba(252,211,77,0.08)' },
+  // A bearish signal is a warning, and a warning that worked must never be
+  // green: green means "beat the index" everywhere else in this app, and next
+  // to a marker saying do-not-buy it would read as the opposite of what it
+  // measures. Amber — the dead cat's own colour on the chart — for a warning
+  // that held; grey for one the data refused to support, which is a signal
+  // being wrong, not a loss being made.
+  held:          { color: '#fbbf24', border: 'rgba(251,191,36,0.35)', bg: 'rgba(251,191,36,0.10)' },
+  refuted:       { color: 'var(--text-secondary)', border: 'var(--border)', bg: 'transparent' },
 }
 
 // Everything in signal_emissions comes from nse_bhavcopy and is scored against
@@ -29,7 +37,7 @@ const TONE = {
 const NO_RECORD = {
   state: 'unscoreable',
   text: 'not measured here',
-  detail: 'The scorecard is built from nse_bhavcopy and scored against NIFTY 50, so every figure in it was measured on Indian prices. Nothing has been measured on US prices, and showing the Indian number here would attach it to a market it says nothing about.\n\nbackend/volumeThrustStudy.js asks the same question of a decade of US history — run it for the US answer. Its result is not wired into this badge.',
+  detail: 'The scorecard is built from nse_bhavcopy and scored against NIFTY 50, so every figure in it was measured on Indian prices. Nothing has been measured on US prices, and showing the Indian number here would attach it to a market it says nothing about.\n\nbackend/volumeThrustStudy.js (the volume-confirmed cross) and backend/deadCatStudy.js (the dead-cat bounce) ask the same questions of a decade of US history — run those for the US answer. Their results are not wired into this badge.',
 }
 
 /**

@@ -4,7 +4,7 @@ import { hasTradedVolume } from '../lib/volume';
 import { volumeStats, confirmedAt, THRUST_MULT, AVG_PERIOD, CONFIRM_WINDOW } from '../lib/volumeThrust';
 import SignalScore from './SignalScore';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
-import { generateSignals } from '../lib/signalEngine';
+import { generateSignals, DROP_LOOKBACK } from '../lib/signalEngine';
 
 // ─── MA-crossover + RSI signal chart (TradingView Lightweight Charts) ─────────
 // Candlestick price with Fast/Slow SMA overlays and algorithmic Buy/Sell markers.
@@ -18,6 +18,11 @@ const BUY_COLOR = '#22c55e';
 const SELL_COLOR = '#ef4444';
 const BB_COLOR = '#a78bfa';   // violet — distinct from the SMA blue/orange
 const DEADCAT_COLOR = '#fbbf24'; // amber — flagged/ignored buy
+// The standalone bounce rule shares the dead cat's amber but at half strength,
+// and sits above the bar rather than below it. Same family, plainly not the
+// same marker: one is a crossover the guard vetoed, the other is a bounce day
+// with no crossover anywhere near it, and they are scored separately.
+const BOUNCE_COLOR = 'rgba(251,191,36,0.6)';
 // Grey, and deliberately the dimmest marker on the chart: a near-miss is a
 // cross the rule REJECTED. It has to be visible enough to explain the gap where
 // a marker isn't, and quiet enough that it is never mistaken for a call.
@@ -160,7 +165,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
 
   // Recompute the engine output whenever bars or the control params change.
   const engine = useMemo(
-    () => (bars.length ? generateSignals(bars, fastPeriod, slowPeriod) : { fast: [], slow: [], mid: [], rsi: [], signals: [], nearMisses: [] }),
+    () => (bars.length ? generateSignals(bars, fastPeriod, slowPeriod) : { fast: [], slow: [], mid: [], rsi: [], signals: [], nearMisses: [], deadCatBounces: [] }),
     [bars, fastPeriod, slowPeriod]
   );
 
@@ -237,6 +242,10 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
   // Crosses the RSI gate rejected. Same clipping as the signals so the tally
   // and the markers describe the same window.
   const visibleNearMisses = useMemo(() => clipToView(engine.nearMisses || []), [engine, clipToView]);
+  // Bounce days from the standalone dead-cat rule. Clipped the same way, and
+  // independent of the SMA sliders — the rule uses neither moving average — so
+  // unlike the cross markers these stay scored whatever the sliders say.
+  const visibleBounces = useMemo(() => clipToView(engine.deadCatBounces || []), [engine, clipToView]);
 
   // Create the chart once per bars set (timeframe change). Sets candle data,
   // resize observer, and the crosshair tooltip handler.
@@ -343,6 +352,20 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
         tip.style.display = 'block';
         const cwd = containerRef.current.clientWidth;
         tip.style.left = `${Math.min(Math.max(param.point.x + 14, 8), cwd - 190)}px`;
+        tip.style.top = `${Math.max(param.point.y - 10, 8)}px`;
+        return;
+      }
+      // A bounce day names the two facts that made it one, because "dc" on a
+      // green candle is otherwise indistinguishable from the chart disagreeing
+      // with the day's move for no stated reason.
+      if (sig.type === 'dead-cat-bounce') {
+        tip.innerHTML = `<strong style="color:${DEADCAT_COLOR}">Dead-cat bounce — first up day</strong><br/>`
+          + `An up day while still ${sig.dropPct.toFixed(1)}% below the ${DROP_LOOKBACK}-bar peak,<br/>`
+          + `and under the ${BB_PERIOD}-bar mean (${sig.mid.toFixed(1)}).<br/>`
+          + `A bearish read: the rule claims this rally fades.`;
+        tip.style.display = 'block';
+        const cwb = containerRef.current.clientWidth;
+        tip.style.left = `${Math.min(Math.max(param.point.x + 14, 8), cwb - 190)}px`;
         tip.style.top = `${Math.max(param.point.y - 10, 8)}px`;
         return;
       }
@@ -531,6 +554,15 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
       if (!map.has(time)) map.set(time, { ...s, vol: null });
       return { time, position: 'belowBar', color: NEARMISS_COLOR, shape: 'circle', text: '✕' };
     });
+    // Bounce days go ABOVE the bar, so a bar that is both a bounce day and a
+    // vetoed cross carries both marks instead of one hiding the other. The
+    // tooltip is claimed only if nothing else wants the bar: a crossover is the
+    // rarer and more specific event, so it wins the hover.
+    const bounceMarkers = visibleBounces.map((s) => {
+      const time = barTime(s.bar);
+      if (!map.has(time)) map.set(time, { ...s, vol: null });
+      return { time, position: 'aboveBar', color: BOUNCE_COLOR, shape: 'circle', text: 'dc' };
+    });
     const markers = visibleSignals.map((s) => {
       const time = barTime(s.bar);
       map.set(time, { ...s, vol: confirmation.get(s.index) || null });
@@ -556,8 +588,8 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
     // nothing at all if they are not, so the two lists are merged and sorted
     // rather than concatenated.
     const key = (m) => m.time.year * 10000 + m.time.month * 100 + m.time.day;
-    candleRef.current.setMarkers([...markers, ...nearMissMarkers].sort((a, b) => key(a) - key(b)));
-  }, [visibleSignals, visibleNearMisses, strict, bars, confirmation]);
+    candleRef.current.setMarkers([...markers, ...nearMissMarkers, ...bounceMarkers].sort((a, b) => key(a) - key(b)));
+  }, [visibleSignals, visibleNearMisses, visibleBounces, strict, bars, confirmation]);
 
   // Zoom the time axis to the chosen view (runs after chart creation since both
   // depend on `bars`, and on its own when the view button changes).
@@ -595,6 +627,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
   const sellCount = visibleSignals.filter(s => s.type === 'sell').length;
   const deadCatCount = visibleSignals.filter(s => s.type === 'buy' && s.deadCat).length;
   const nearMissCount = visibleNearMisses.length;
+  const bounceCount = visibleBounces.length;
   // RSI readout — the crosshair value when hovering, else the latest bar.
   // >70 overbought (red), <30 oversold (green).
   let latestRsi = null;
@@ -693,6 +726,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
           </span>
           <span style={{ color: SELL_COLOR }}>▼ {sellCount} sell</span>
           {deadCatCount > 0 && <span style={{ color: DEADCAT_COLOR }} title="Golden-cross buys ignored as likely dead-cat bounces (below the 20-bar middle band after a sharp drop)">⊘ {deadCatCount} dead-cat</span>}
+          {bounceCount > 0 && <span style={{ color: BOUNCE_COLOR }} title={`Bounce days from the standalone dead-cat rule: the first up day while price is still 10% or more below its ${DROP_LOOKBACK}-bar peak and under the ${BB_PERIOD}-bar mean. No crossover involved, so this is counted and scored apart from the vetoed crosses.`}>⌃ {bounceCount} bounce-day</span>}
           {nearMissCount > 0 && <span style={{ color: NEARMISS_COLOR }} title="Golden crosses that did not become buys because RSI was at or below 50 on the crossing bar. Shown so a crossing with no marker on it is legible as a rejection rather than an oversight.">✕ {nearMissCount} no momentum</span>}
         </span>
       </div>
@@ -715,6 +749,17 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
             so no track record applies to what is drawn here.
           </span>
         )}
+      </div>
+
+      {/* The dead cat's own record. Two badges, never one: the vetoed crosses
+          and the standalone bounce days are different bars answering different
+          questions, and a single number over both would describe neither. The
+          bounce badge is outside the atScoredSettings gate because that rule
+          reads no moving average the sliders can change. */}
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.7rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+        <span>Dead cat (bearish — a warning, so lagging the index is the claim holding):</span>
+        <SignalScore signal="dead_cat_bounce" label="⌃ bounce day" market={market} />
+        {atScoredSettings && <SignalScore signal="dead_cat_cross" label="⊘ vetoed cross" market={market} />}
       </div>
 
       {/* Price chart */}
@@ -749,6 +794,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
         <span><span style={{ color: BUY_COLOR }}>▲ B</span> = Buy (golden cross, RSI &gt; 50)</span>
         <span><span style={{ color: SELL_COLOR }}>▼ S</span> = Sell (death cross, RSI &lt; 50)</span>
         <span><span style={{ color: DEADCAT_COLOR }}>● DC</span> = Dead-cat bounce (buy ignored: below {BB_PERIOD}-bar mid after sharp drop)</span>
+        <span><span style={{ color: BOUNCE_COLOR }}>● dc</span> = Bounce day, no crossover (first up day still ≥10% under the {DROP_LOOKBACK}-bar peak and below the {BB_PERIOD}-bar mid)</span>
         <span><span style={{ color: NEARMISS_COLOR }}>● ✕</span> = Golden cross, no buy (RSI ≤ 50 on the crossing bar)</span>
         <span><span style={{ color: FAST_COLOR }}>━</span> Fast SMA · <span style={{ color: SLOW_COLOR }}>━</span> Slow SMA</span>
         {showBB && <span><span style={{ color: BB_COLOR }}>━</span> Bollinger ({BB_PERIOD}, {BB_MULT})</span>}

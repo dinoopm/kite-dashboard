@@ -38,6 +38,13 @@ export function rsi(closes, period = 14) {
   return out;
 }
 
+// How far, and over how long, counts as the drop a dead cat bounces out of.
+// Module scope because two rules read them — the crossover guard and the
+// standalone bounce signal — and they must never drift apart, nor apart from
+// DROP_LOOKBACK / DROP_PCT in backend/signals/registry.js.
+export const DROP_LOOKBACK = 10;
+export const DROP_PCT = 0.10;
+
 // Moving-average crossover + RSI momentum filter.
 //   Buy : fast SMA crosses ABOVE slow SMA (golden cross) AND RSI > 50
 //   Sell: fast SMA crosses BELOW slow SMA (death cross)  AND RSI < 50
@@ -55,8 +62,6 @@ export function generateSignals(bars, fastPeriod = 10, slowPeriod = 50, rsiPerio
   // Sharp-drop detector: a fall of ≥ DROP_PCT from the highest close over the
   // prior DROP_LOOKBACK bars — i.e. a recent steep decline that a bounce would
   // be retracing.
-  const DROP_LOOKBACK = 10;
-  const DROP_PCT = 0.10;
   const sharpDropAt = (i) => {
     let peak = -Infinity;
     for (let j = Math.max(0, i - DROP_LOOKBACK); j <= i; j++) peak = Math.max(peak, closes[j]);
@@ -103,5 +108,45 @@ export function generateSignals(bars, fastPeriod = 10, slowPeriod = 50, rsiPerio
       });
     }
   }
-  return { fast, slow, mid, rsi: rsiArr, signals, nearMisses };
+  // ─── The dead-cat bounce, standing on its own ──────────────────────────────
+  //
+  // Above, the dead cat is only a GUARD: it flags a crossover that fires inside
+  // a sharp drop. But the pattern itself needs no crossover, and the far
+  // commoner case — a hard fall, then a green day while price is still under
+  // the mean — has no marker at all today. Those are the bars someone points at
+  // and asks whether the rally is real, so they are drawn, counted, and scored.
+  //
+  // Mirrors `dead_cat_bounce` in backend/signals/registry.js exactly — same
+  // 10% drop over the same 10-bar lookback, same middle band, same run guard —
+  // so the bars drawn here are the bars the scorecard has rows for. Diverging
+  // would put a track record beside markers it does not describe.
+  //
+  // The run guard is the load-bearing part: a failing bounce usually runs three
+  // or four green days, and marking each of them would show one episode as four
+  // calls whose forward windows almost entirely overlap.
+  const bounceBarAt = (i) => (
+    mid[i] != null && closes[i] < mid[i] && sharpDropAt(i)
+    && closes[i - 1] != null && closes[i] > closes[i - 1]
+  );
+  const peakBefore = (i) => {
+    let peak = -Infinity;
+    for (let j = Math.max(0, i - DROP_LOOKBACK); j <= i; j++) peak = Math.max(peak, closes[j]);
+    return peak;
+  };
+  // Kept out of `signals` on purpose, exactly as nearMisses are: Instrument.jsx
+  // and UsInstrument.jsx both render anything in that array as a buy or a sell,
+  // so a bearish third kind inside it would be painted as a sell call.
+  const deadCatBounces = [];
+  for (let i = 1; i < bars.length; i++) {
+    if (!bounceBarAt(i) || bounceBarAt(i - 1)) continue;
+    const peak = peakBefore(i);
+    deadCatBounces.push({
+      index: i, type: 'dead-cat-bounce', bar: bars[i],
+      close: closes[i], mid: mid[i], rsi: rsiArr[i],
+      dropPct: ((peak - closes[i]) / peak) * 100,
+      peak,
+    });
+  }
+
+  return { fast, slow, mid, rsi: rsiArr, signals, nearMisses, deadCatBounces };
 }

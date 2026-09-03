@@ -388,3 +388,127 @@ describe('the split holds across a random corpus', () => {
     assert.equal(confirmed + quiet, all);
   });
 });
+
+const { deadCatBounce, deadCatCross, smaSeries, DROP_PCT } = require('./registry');
+
+/**
+ * A series that falls hard and then twitches upward without recovering — the
+ * shape the whole dead-cat rule is about. `bounce` supplies the closes after
+ * the drop, so a test can make the bounce one day, several days, or interrupted.
+ */
+const droppedSeries = (bounce, { pre = 40, from = 100, to = 82 } = {}) => {
+  const closes = [];
+  for (let i = 0; i < pre; i++) closes.push(from);
+  const legs = 8;
+  for (let i = 1; i <= legs; i++) closes.push(from - ((from - to) * i) / legs);
+  closes.push(...bounce);
+  return buildSeries(closes.map((c, i) => ({
+    date: `d${String(i).padStart(4, '0')}`, high: c * 1.002, low: c * 0.998, close: c, volume: 1000,
+  })));
+};
+
+describe('deadCatBounce', () => {
+  test('fires on the first up day inside a sharp drop', () => {
+    const S = droppedSeries([83]);
+    const i = S.closes.length - 1;
+    const hit = deadCatBounce(S, i);
+    assert.ok(hit, 'an up day under the mean after an 18% fall is the pattern');
+    assert.ok(hit.dropPct >= DROP_PCT * 100, `drop ${hit.dropPct}% should clear the ${DROP_PCT * 100}% bar`);
+    assert.ok(hit.close < hit.mid, 'still below the 20-bar mean');
+  });
+
+  // The rule the registry exists to enforce, and the one that matters most
+  // here: a failing bounce runs several green days in a row.
+  test('a run of green days is ONE firing', () => {
+    const S = droppedSeries([83, 84, 85]);
+    const first = S.closes.length - 3;
+    assert.ok(deadCatBounce(S, first), 'the first up day');
+    assert.equal(deadCatBounce(S, first + 1), null, 're-fired on day two of the same bounce');
+    assert.equal(deadCatBounce(S, first + 2), null, 're-fired on day three of the same bounce');
+  });
+
+  test('a down day between two rallies makes the second one a fresh call', () => {
+    const S = droppedSeries([83, 82, 83.5]);
+    const first = S.closes.length - 3;
+    assert.ok(deadCatBounce(S, first), 'the first up day');
+    assert.equal(deadCatBounce(S, first + 1), null, 'the down day is not a bounce');
+    assert.ok(deadCatBounce(S, first + 2), 'a new rally after the pause is a new call');
+  });
+
+  test('does not fire on a down day, however deep the hole', () => {
+    const S = droppedSeries([81]);
+    assert.equal(deadCatBounce(S, S.closes.length - 1), null);
+  });
+
+  test('does not fire on an unchanged close', () => {
+    const S = droppedSeries([82, 82]);
+    assert.equal(deadCatBounce(S, S.closes.length - 1), null);
+  });
+
+  // The two halves of the context, each removed in turn.
+  test('needs the drop: an up day in a shallow dip is not a dead cat', () => {
+    const S = droppedSeries([97], { to: 96 }); // ~4% off, nowhere near the bar
+    assert.equal(deadCatBounce(S, S.closes.length - 1), null);
+  });
+
+  test('needs to be below the mean: a bounce that has reclaimed it is not one', () => {
+    // Fall hard, then rally all the way back through the 20-bar mean.
+    const S = droppedSeries([86, 90, 94, 99, 103]);
+    const i = S.closes.length - 1;
+    assert.ok(S.closes[i] > smaSeries(S, 20)[i], 'fixture should sit above the mean');
+    assert.equal(deadCatBounce(S, i), null);
+  });
+
+  test('minBars leaves the run guard warm — the previous bar has a mean too', () => {
+    const meta = signalMeta('dead_cat_bounce');
+    const S = droppedSeries([83]);
+    // At the first bar detectAll will test, isDeadCatBounceBar(i-1) must be
+    // answerable rather than silently false for want of a moving average.
+    assert.ok(smaSeries(S, 20)[meta.minBars - 1] != null,
+      'the run guard would read a null mean and double the sample');
+  });
+
+  test('is declared bearish, because the arithmetic that vindicates it is negative', () => {
+    assert.equal(signalMeta('dead_cat_bounce').direction, 'bearish');
+    assert.equal(signalMeta('dead_cat_cross').direction, 'bearish');
+  });
+});
+
+describe('deadCatCross', () => {
+  // These two fixtures are the ones the rest of this file already trusts: a
+  // clean ramp into a golden cross, and the sharp-drop series the maCrossUp
+  // test uses to assert the guard excludes something.
+  const droppedThenCrossing = () => {
+    const candles = [];
+    for (let i = 0; i < 60; i++) candles.push(100 + i * 0.5);
+    for (let i = 0; i < 12; i++) candles.push(130 - i * 2.2);
+    for (let i = 0; i < 8; i++) candles.push(103.6 + i * 0.15);
+    return buildSeries(candles.map((c, i) => ({
+      date: `d${String(i).padStart(4, '0')}`, high: c * 1.002, low: c * 0.998, close: c, volume: 1000,
+    })));
+  };
+
+  test('never overlaps maCrossUp — the two halves of a cross cannot both fire', () => {
+    for (const S of [rampSeries(), droppedThenCrossing(), droppedSeries([83, 84, 85])]) {
+      for (let i = 51; i < S.dates.length; i++) {
+        assert.ok(!(deadCatCross(S, i) && maCrossUp(S, i)), `both fired at ${i}`);
+      }
+    }
+  });
+
+  test('ignores a healthy cross', () => {
+    const S = rampSeries();
+    for (let i = 51; i < S.dates.length; i++) assert.equal(deadCatCross(S, i), null);
+  });
+
+  // The finding, pinned so it cannot rot silently. If a threshold is ever
+  // changed and this signal becomes reachable, the note in the registry — which
+  // tells the scorecard to say "never fires" instead of "check the recorder" —
+  // is no longer true and must go.
+  test('declares why it never fires, because the empty row is the finding', () => {
+    const meta = signalMeta('dead_cat_cross');
+    assert.ok(meta.neverFiredNote, 'an unreachable signal must say so itself');
+    assert.match(meta.neverFiredNote, /never once met on the same bar/);
+    assert.ok(typeof meta.detect === 'function', 'the detector stays live so a future firing is still recorded');
+  });
+});
