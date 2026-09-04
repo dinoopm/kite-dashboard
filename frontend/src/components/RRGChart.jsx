@@ -60,6 +60,12 @@ export default function RRGChart({
   defaultVisibleKeys = DEFAULT_VISIBLE_SECTORS,
   getNavHref = (sector) => `/instrument/${sector.token}?symbol=${encodeURIComponent(sector.key.split(':')[1])}`,
   shortNameFn = (name) => name.replace('NIFTY ', '').replace('NIFTY', ''),
+  // The dot label on the plot has to stay short — a dozen full company names
+  // overlapping is unreadable — so the ticker stays on the chart and the human
+  // name goes underneath it in the legend and in the tooltip. Only the sector
+  // drill-downs know the real names (they hold the constituent list), so index
+  // pages leave this null and lose nothing.
+  subtitleFn = () => null,
 }) {
   const CHART_W = 1000, CHART_H = 650;
   const PAD = { top: 40, right: 60, bottom: 65, left: 75 };
@@ -449,7 +455,8 @@ export default function RRGChart({
                         onMouseEnter={(e) => {
                           const rect = rrgContainerRef.current?.getBoundingClientRect();
                           setRrgTooltip({
-                            name: sector.name, rsRatio: p.rsRatio, rsMomentum: p.rsMomentum,
+                            name: sector.name, subtitle: subtitleFn(sector),
+                            rsRatio: p.rsRatio, rsMomentum: p.rsMomentum,
                             date: p.date, quadrant: getQuadrantLabel(p.rsRatio, p.rsMomentum),
                             color, x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0)
                           });
@@ -484,9 +491,14 @@ export default function RRGChart({
             boxShadow: `0 4px 24px rgba(0,0,0,0.6), 0 0 12px ${rrgTooltip.color}20`,
             zIndex: 100, pointerEvents: 'none', minWidth: '190px'
           }}>
-            <div style={{ fontWeight: 700, color: rrgTooltip.color, marginBottom: '0.3rem', fontSize: '0.95rem' }}>
+            <div style={{ fontWeight: 700, color: rrgTooltip.color, marginBottom: rrgTooltip.subtitle ? '0.1rem' : '0.3rem', fontSize: '0.95rem' }}>
               {rrgTooltip.name}
             </div>
+            {rrgTooltip.subtitle && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-primary)', marginBottom: '0.3rem' }}>
+                {rrgTooltip.subtitle}
+              </div>
+            )}
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
               Week of {new Date(rrgTooltip.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
             </div>
@@ -537,11 +549,14 @@ export default function RRGChart({
                   {sectors.map(s => {
                     const color = RRG_COLORS[s.colorIdx % RRG_COLORS.length];
                     const hidden = rrgHidden[s.key] || (quadrantFilter && s.quadrant !== quadrantFilter);
+                    const label = shortNameFn(s.name);
+                    const subtitle = subtitleFn(s);
                     return (
                       <button key={s.key}
                         onClick={() => setRrgHidden(prev => ({ ...prev, [s.key]: !prev[s.key] }))}
+                        title={subtitle ? `${label} — ${subtitle}` : label}
                         style={{
-                          display: 'flex', alignItems: 'center', gap: '0.4rem',
+                          display: 'flex', alignItems: subtitle ? 'flex-start' : 'center', gap: '0.4rem',
                           padding: '0.2rem 0.4rem', borderRadius: '4px', border: 'none',
                           background: hidden ? 'transparent' : 'rgba(255,255,255,0.04)',
                           cursor: 'pointer', fontSize: '0.78rem',
@@ -549,8 +564,16 @@ export default function RRGChart({
                           opacity: hidden ? 0.35 : 1, transition: 'all 0.15s', textAlign: 'left'
                         }}
                       >
-                        <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: hidden ? 'var(--text-secondary)' : color, display: 'inline-block', flexShrink: 0 }} />
-                        {shortNameFn(s.name)}
+                        <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: hidden ? 'var(--text-secondary)' : color, display: 'inline-block', flexShrink: 0, marginTop: subtitle ? '0.3rem' : 0 }} />
+                        <span style={{ minWidth: 0 }}>
+                          <span style={{ display: 'block' }}>{label}</span>
+                          {subtitle && (
+                            <span style={{
+                              display: 'block', fontSize: '0.68rem', color: 'var(--text-secondary)',
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                            }}>{subtitle}</span>
+                          )}
+                        </span>
                       </button>
                     );
                   })}

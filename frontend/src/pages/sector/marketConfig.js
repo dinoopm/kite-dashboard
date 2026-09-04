@@ -29,6 +29,20 @@ const US_LABELS = {
   HYDR: 'Hydrogen Energy', REMX: 'Rare Earth Metals', URA: 'Uranium',
 };
 
+// The RRG plots one dot per constituent and labels it with the ticker, which is
+// all that fits on the chart but tells you nothing about the company. Both
+// markets already hold the real names in the constituent list, so build a
+// key → name lookup the legend and tooltip can show underneath the ticker.
+// Names identical to the ticker (the RRG's own fallback) are dropped rather
+// than rendered twice.
+const subtitleFromConstituents = (constituents) => {
+  const byKey = {};
+  for (const c of constituents || []) {
+    if (c.key && c.name && c.name !== c.key && c.name !== c.symbol) byKey[c.key] = c.name;
+  }
+  return (sector) => byKey[sector.key] || null;
+};
+
 export const INDIA_MARKET = {
   id: 'india',
   // Route segment inserted after /api — India endpoints are unprefixed.
@@ -43,7 +57,9 @@ export const INDIA_MARKET = {
   instrumentHref: (s) => `/instrument/${s.token}?symbol=${encodeURIComponent(s.symbol)}`,
   // Technical Alerts is backed by /api/sector-alerts, which is India-only.
   hasAlertsTab: true,
-  rrgExtraProps: () => ({}),
+  rrgExtraProps: (constituents) => ({
+    subtitleFn: subtitleFromConstituents(constituents),
+  }),
 };
 
 export const US_MARKET = {
