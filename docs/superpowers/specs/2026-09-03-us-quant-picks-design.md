@@ -92,31 +92,46 @@ Default weights: momentum 30, volume 20, fiftyTwo 15, relStrength 20, revisions 
 
 ## What the backtest found, before anything shipped
 
-Run 2026-09-04 over 484 evaluation dates (2017-01-13 → 2026-08-25, 518 names),
-four price factors, revisions at weight 0. Recorded here because it governs how
-the page must present itself.
+Two runs matter. The first used momentum 20/5 and is what prompted the switch to
+252/21; the second is the model that actually ships. Both are recorded because
+the difference between them is itself the finding.
+
+**Shipped model — momentum 252/21**, 481 evaluation dates (2017-01-13 →
+2026-08-04, 518 names), four price factors, revisions at weight 0:
 
 | horizon | top-25 vs SPY | t | hit rate | Q1 → Q5 (top → bottom) |
 |---|---|---|---|---|
-| 5d | +0.20% | 2.07 | 51.4% | 0.36 / 0.32 / 0.33 / 0.36 / 0.43 |
-| 10d | +0.41% | 3.15 | 51.3% | 0.75 / 0.65 / 0.68 / 0.71 / 0.82 |
-| 22d | +0.90% | 4.28 | 50.3% | 1.59 / 1.38 / 1.41 / 1.48 / 1.75 |
+| 5d | +0.26% | 2.72 | 52.2% | 0.42 / 0.35 / 0.32 / 0.31 / 0.42 |
+| 10d | +0.52% | 3.89 | 52.3% | 0.83 / 0.69 / 0.63 / 0.62 / 0.79 |
+| 22d | +0.97% | 4.57 | 51.2% | 1.65 / 1.45 / 1.34 / 1.34 / 1.67 |
 
-The t-statistics look like an edge. Three facts say they are not:
+Information coefficients at 10d: momentum +0.016 (t=1.55), volume +0.002,
+52-week −0.007, relative strength −0.010, **composite +0.005 (t=0.46)**.
 
-1. **The quintiles are inverted.** Q5 — the bottom-ranked fifth — beats Q1 at
-   every horizon. A composite that ranked would produce returns descending from
-   Q1 to Q5. Instead both extremes beat the middle and the bottom beats the top:
-   a U-shape, which is the signature of volatility, not of skill.
-2. **Every information coefficient is ≈ 0 and mostly negative** — composite
-   −0.009 (t=−1.05, n=483), momentum −0.006, 52-week −0.007, relative strength
-   −0.009, volume +0.002. No factor's rank order predicts the next ten days.
-3. **The hit rate is 50–51%**, a coin flip, at all three horizons.
+**The honest read: no measurable ranking skill.** The composite's IC is +0.005
+with t=0.46 — indistinguishable from zero over 478 dates. Momentum is the only
+factor pulling in the right direction and it does not reach significance either.
+A hit rate of 51–52% is a coin flip with a thumb on it.
 
-The most plausible source of the top-25 excess is beta. The top 25 is the top 5%
-of ~500 names — the extreme tail of the composite, which selects the highest-
-volatility names — measured across a decade-long bull market. That is the market
-being collected by a filter that happens to select for it, not alpha.
+**The quintiles are U-shaped, not monotonic.** At every horizon the MIDDLE
+quintiles are the trough and both ends are raised: at 22d the run is 1.65 / 1.45
+/ 1.34 / 1.34 / 1.67, with the bottom fifth still edging the top. A model that
+ranked would descend from Q1 to Q5. A U says the composite is selecting for
+something both tails share — most plausibly volatility — rather than ordering
+stocks by future return.
+
+That is also the most likely source of the top-25 excess. The top 25 is the
+extreme tail of ~500 names, and the extreme tail of a volatility-loaded score is
+a basket of high-beta stocks, measured across a decade-long bull market. The
+t-statistics are real; the interpretation "this ranks stocks" is not supported.
+
+**Why the earlier 20/5 run is kept.** At momentum 20/5 the same code produced a
+composite IC of −0.009 (t=−1.05) and quintiles that were outright INVERTED — the
+bottom fifth beat the top at all three horizons. Switching to 252/21 moved the
+composite IC positive, lifted the hit rate about a point, and pulled Q1 back
+above Q5 at 10 days. The direction of that change is evidence the momentum
+window was doing real damage at 20/5; the fact that it still does not reach
+significance is evidence the model does not rank.
 
 A methodological caveat found in the same pass: `excessVsMedian` compares the
 MEAN return of the top 25 against the MEDIAN return of the universe. Equity
@@ -127,10 +142,10 @@ an unknown amount. (`picks/backtest.js` shares this flaw — it is where the
 pattern was copied from.)
 
 **The page must therefore lead with this, not bury it.** The backtest panel
-states that no ranking skill was measurable and that the excess is likely beta.
-The recorded scorecard remains the honest forward test and starts empty. Shipping
-a screen whose own evidence says it does not rank is only defensible while that
-sentence is the first thing a reader sees.
+states that no ranking skill was measurable and that the excess is likely beta,
+before any t-statistic. The recorded scorecard remains the honest forward test
+and starts empty. Shipping a screen whose own evidence says it does not rank is
+only defensible while that sentence is the first thing a reader sees.
 
 ## Exclusions
 
