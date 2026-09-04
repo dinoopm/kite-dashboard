@@ -49,7 +49,23 @@ router.get('/scorecard', async (req, res) => {
     scorecardCache = { data, ts: Date.now() };
     res.json(data);
   } catch (err) {
-    if (missingTable(err)) return res.json({ available: false, signals: [], hint: 'us_pick_snapshots does not exist yet — run migrate_us_pick_snapshots.js.' });
+    if (missingTable(err)) {
+      // Return the real empty-rows shape, not `signals: []`.
+      //
+      // With no entries the badge falls through to SignalScore's NO_RECORD copy
+      // — "this signal is in neither scorecard, so there is nothing to show" —
+      // which is false: us_picks_top25 IS the US quant picks, registered and
+      // wired, with no rows yet. runUsPicksScorecard already words that case
+      // correctly ("No snapshots recorded yet"), so hand back its output and
+      // append the migration hint as a caveat.
+      const empty = await runUsPicksScorecard({ fetchRows: async () => [], context: async () => null });
+      return res.json({
+        ...empty,
+        available: false,
+        hint: 'us_pick_snapshots does not exist yet — run migrate_us_pick_snapshots.js.',
+        caveats: [...empty.caveats, 'The snapshot table has not been created yet, so nothing has been recorded. Run backend/migrate_us_pick_snapshots.js and paste the SQL it prints.'],
+      });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -88,4 +104,18 @@ router.post('/snapshot', async (req, res) => {
   }
 });
 
-module.exports = { usPicksRouter: router };
+/**
+ * Store an already-built universe in the route's cache.
+ *
+ * The daily snapshot job builds this exact object once a session and used to
+ * throw it away, so the first visitor after a restart rebuilt it — 518 symbols
+ * of bars plus up to 518 Yahoo calls, 39 seconds, behind a spinner. Nobody
+ * should pay twice for the same work.
+ */
+function primeUniverseCache(universe) {
+  if (!universe) return false;
+  universeCache = { data: universe, ts: Date.now() };
+  return true;
+}
+
+module.exports = { usPicksRouter: router, primeUniverseCache };

@@ -11,10 +11,10 @@ import { rankRows } from '../../lib/picksRank'
 // nothing a slider does touches it.
 
 const FACTORS = [
-  { key: 'momentum',    raw: 'momentumRaw',    label: 'Momentum',      color: '#38bdf8', help: '252-session return skipping the latest 21 (twelve months, skipping the most recent one). Widened from the Indian page\'s 20/5 window — a sweep of {20/5, 60/5, 120/20, 252/21} over 481 evaluation dates found 252/21 the only setup with a positive information coefficient; the others, including 20/5, were flat or negative.' },
-  { key: 'volume',      raw: 'volumeRaw',      label: 'Volume',        color: '#a3e635', help: 'Last-5 volume vs the stock\'s own 20-session baseline, scaled by authenticity (price corroboration + persistence). No delivery % exists in the US.' },
-  { key: 'fiftyTwo',    raw: 'fiftyTwoRaw',    label: '52-week',       color: '#f59e0b', help: 'Fresh 252-session high (+1) or low (−1) in the last 5 sessions, plus proximity to the high. Adjusted closes.' },
-  { key: 'relStrength', raw: 'relStrengthRaw', label: 'Rel. strength', color: '#c084fc', help: '~3-month return minus SPY\'s, in points.' },
+  { key: 'momentum',    raw: 'momentumRaw',    label: 'Momentum',      color: '#38bdf8', help: '252-session return skipping the latest 21 (twelve months, skipping the most recent one). Measured information coefficient +0.016 (t=1.55) — the best of the five and still NOT statistically significant. A sweep of {20/5, 60/5, 120/20, 252/21} put it ahead of the others, which were flat or negative; "least bad" is what that means, not "works".' },
+  { key: 'volume',      raw: 'volumeRaw',      label: 'Volume',        color: '#a3e635', help: 'Last-5 volume against the stock\'s own prior 15 sessions (i−19..i−5), scaled by authenticity (price corroboration + persistence). No delivery % exists in the US. Measured information coefficient +0.002 (t=0.74) — indistinguishable from zero. Scores 0 unless the surge exceeds 25%, so most stocks tie at the bottom and land mid-rank.' },
+  { key: 'fiftyTwo',    raw: 'fiftyTwoRaw',    label: '52-week',       color: '#f59e0b', help: 'Fresh 252-session high (+1) or low (−1) in the last 5 sessions, plus proximity to the high. Adjusted closes. Measured information coefficient −0.007 (t=−0.69) — it ranked slightly BACKWARDS over the sample, though not significantly.' },
+  { key: 'relStrength', raw: 'relStrengthRaw', label: 'Rel. strength', color: '#c084fc', help: '~3-month (63-session) return minus SPY\'s, in points. Measured information coefficient −0.010 (t=−1.16) — the most negative of the five; it ranked backwards over the sample, though not significantly.' },
   { key: 'revisions',   raw: 'revisionsRaw',   label: 'EPS revisions', color: '#f472b6', help: 'Net analyst EPS revisions over 30 days and the change in the current-year estimate (Yahoo). Missing = ranked neutral. Cannot be backtested — scored forward only.' },
 ]
 const DEFAULT_WEIGHTS = { momentum: 30, volume: 20, fiftyTwo: 15, relStrength: 20, revisions: 15 }
@@ -25,6 +25,17 @@ const PRESETS = [
 ]
 const PREFS_KEY = 'usStockPicks.prefs.v1'
 const loadPrefs = () => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {} } catch { return {} } }
+
+// "10-27" is not a date anyone reads at a glance. Render the day and the month
+// name, and put the full date with the year in the tooltip.
+const fmtEarnings = (iso, full = false) => {
+  const d = new Date(`${iso}T00:00:00Z`)
+  if (Number.isNaN(d.getTime())) return iso
+  const opts = full
+    ? { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }
+    : { day: 'numeric', month: 'short', timeZone: 'UTC' }
+  return d.toLocaleDateString('en-US', opts)
+}
 
 const fmtUsd = (v) => (v == null ? '—' : `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })}`)
 const fmtPct = (v, d = 1) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(d)}%`)
@@ -125,6 +136,19 @@ export default function UsStockPicks() {
         S&P 500 + Nasdaq 100, five factors, percentile-ranked, your weights. Deterministic — the AI brief only explains the ranking it is given.
       </p>
 
+      {/* The finding, above the table rather than under it.
+          A reader who scrolls to the picks and stops — which is most of them —
+          would otherwise see a ranked list with bold scores and never meet the
+          sentence saying the ranking was measured and does not rank. The full
+          numbers stay in the backtest panel below; this is the part that must
+          not be scrollable-past. */}
+      <div className="glass-panel" style={{ padding: '0.85rem 1.25rem', marginBottom: '1rem', border: '1px solid rgba(239,68,68,0.35)', background: 'rgba(239,68,68,0.06)' }}>
+        <strong style={{ color: '#fca5a5', fontSize: '0.85rem' }}>This ranking has no measured predictive skill.</strong>
+        <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginLeft: '0.4rem' }}>
+          Backtested over 478 evaluation dates (2017–2026), the composite's information coefficient is +0.005 (t=0.46) — indistinguishable from zero — and the quintiles are U-shaped rather than descending, which is what a volatility-selecting score looks like, not a ranking one. Order these rows however you like; the order is not evidence about what happens next. Full numbers in the backtest panel below.
+        </span>
+      </div>
+
       {/* Regime + universe */}
       {data && (
         <div className="glass-panel" style={{ padding: '0.85rem 1.25rem', marginBottom: '1rem', display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center', border: `1px solid ${riskOff ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.25)'}` }}>
@@ -155,7 +179,15 @@ export default function UsStockPicks() {
         </div>
       </div>
 
-      {loading ? <div className="loader" /> : error ? (
+      {loading ? (
+        <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center' }}>
+          <div className="loader" style={{ margin: '0 auto 1rem' }} />
+          <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+            Building the factor universe from ~500 symbols — daily bars plus analyst estimates for each.
+            The first load after a server restart takes about 40 seconds; later ones are instant.
+          </div>
+        </div>
+      ) : error ? (
         <div className="glass-panel" style={{ padding: '1.5rem', color: '#ef4444' }}>Failed to load: {error}</div>
       ) : !top.length ? (
         <div className="glass-panel" style={{ padding: '1.5rem', color: 'var(--text-secondary)' }}>Nothing to rank.</div>
@@ -197,7 +229,7 @@ export default function UsStockPicks() {
                       {r.factors.trapRisk && <Chip color="#fbbf24" title={r.factors.trapReason}>trap</Chip>}
                       {r.factors.newHigh5 && <Chip color="#34d399" title="Fresh 252-session high in the last 5 sessions">52w high</Chip>}
                       {r.flags.map(f => <Chip key={f.id} color="#fbbf24" title={f.title}>{f.id}</Chip>)}
-                      {r.earningsDate && <Chip color="#c084fc" title="Next earnings date">📅 {r.earningsDate.slice(5)}</Chip>}
+                      {r.earningsDate && <Chip color="#c084fc" title={`Next earnings: ${fmtEarnings(r.earningsDate, true)}`}>📅 {fmtEarnings(r.earningsDate)}</Chip>}
                       {r.factors.revisionsRaw == null && <Chip title="No EPS revisions data — ranked neutral on that factor">no rev.</Chip>}
                     </td>
                   </tr>
@@ -215,7 +247,7 @@ export default function UsStockPicks() {
       <div className="glass-panel" style={{ marginTop: '1.5rem', padding: '1rem 1.25rem' }}>
         <button onClick={loadBacktest} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.85rem', padding: 0 }}>{backtestOpen ? '▾' : '▸'} Backtest — four price factors, 2015 → today</button>
         <div style={{ fontSize: '0.78rem', color: '#fca5a5', fontWeight: 500, marginTop: '0.35rem', lineHeight: 1.5 }}>
-          No ranking skill measurable across 481 evaluation dates (2017–2026, 518 names): the composite information coefficient is +0.005 (t=0.46), indistinguishable from zero — momentum comes closest at +0.016 (t=1.55) and still falls short of significance. The quintiles are U-shaped, not descending: the trough sits in the middle ranks and both tails are raised — tied at 5 days (0.42% each), Q1 ahead at 10 days (0.83% vs 0.79%), Q5 back ahead at 22 days (1.67% vs 1.65%) — and the hit rate is a coin flip at 51–52%. The +0.52% top-25 edge over SPY at 10 days (t=3.89) is most plausibly beta, not skill: the top 25 is the extreme tail of a volatility-loaded composite across ~500 names, measured across a decade-long bull market — a U-shape, where both tails beat the middle, is what a volatility-selecting score looks like, not a ranking score.
+          As of the 2026-08-04 run — no ranking skill measurable across 481 evaluation dates (2017–2026, 518 names): the composite information coefficient is +0.005 (t=0.46), indistinguishable from zero — momentum comes closest at +0.016 (t=1.55) and still falls short of significance. The quintiles are U-shaped, not descending: the trough sits in the middle ranks and both tails are raised — tied at 5 days (0.42% each), Q1 ahead at 10 days (0.83% vs 0.79%), Q5 back ahead at 22 days (1.67% vs 1.65%) — and the hit rate is a coin flip at 51–52%. The +0.52% top-25 edge over SPY at 10 days (t=3.89) is most plausibly beta, not skill: the top 25 is the extreme tail of a volatility-loaded composite across ~500 names, measured across a decade-long bull market — a U-shape, where both tails beat the middle, is what a volatility-selecting score looks like, not a ranking score.
         </div>
         {backtestOpen && (backtestLoading ? <div className="loader" /> : backtest?.error ? <div style={{ color: '#ef4444', marginTop: '0.5rem' }}>{backtest.error}</div> : backtest ? (
           <div style={{ marginTop: '0.75rem', fontSize: '0.8rem' }}>

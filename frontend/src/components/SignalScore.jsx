@@ -44,7 +44,9 @@ const NO_RECORD = {
  * @param {string} signal  registry name, e.g. 'breakout_20d'
  * @param {string} [label] leading text; defaults to "Track record"
  * @param {string} [market] which market the SIGNAL IS BEING SHOWN ON, not which
- *   one it was scored on. Anything other than 'IN' has no record to show.
+ *   one it was scored on. 'IN' reads the India scorecard; 'US' reads the US
+ *   picks scorecard, which carries us_picks_top25/top10 and nothing else. A US
+ *   signal absent from it still renders the explicitly-empty badge.
  */
 export default function SignalScore({ signal, label, source, style, market = 'IN' }) {
   const { entry, error, loading } = useSignalScore(signal, { source, market })

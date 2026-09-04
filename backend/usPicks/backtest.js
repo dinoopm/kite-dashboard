@@ -171,9 +171,9 @@ async function runUsBacktest({ from = HISTORY_FROM, step = 5, topN = 25, horizon
     caveats: [
       'Scores the FOUR price factors with EPS revisions at weight 0; the live composite includes revisions at 15. This is the same model with one input unavailable, not a different one.',
       'Survivorship bias: the universe is today\'s index members, so companies that were delisted or dropped never appear. That flatters every long-horizon US backtest, this one included.',
-      'Evaluation dates are a week apart and picks overlap between them, so n overstates the independent evidence.',
+      'Evaluation dates are a week apart and picks overlap between them, so n overstates the independent evidence. The t-statistics assume independent dates: with 5-session steps against 10- and 22-session horizons, consecutive windows share 50% and ~77% of their span, so the reported t is roughly 1.4-2.1x too large. That inflation runs toward the positive numbers, not away from them.',
       'Entry at the evaluation-date close; costs, slippage and liquidity are not modeled.',
-      'Earnings and red-flag exclusions cannot be reconstructed for past dates, so the backtest universe is slightly wider than the live one.',
+      'The EARNINGS exclusion cannot be reconstructed for past dates, so the backtest universe is slightly wider than the live one. The red-flag exclusion IS reconstructed — barFlags runs on bars ending at the evaluation date, exactly as it does live.',
       'Where this and the scorecard disagree, the scorecard is the honest number.',
     ],
     generatedAt: new Date().toISOString(),

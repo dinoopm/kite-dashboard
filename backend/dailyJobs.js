@@ -118,6 +118,14 @@ async function runUsPickSnapshot() {
   const { buildUsFactorUniverse, saveDailySnapshot } = require('./usPicks/engine');
   const universe = await buildUsFactorUniverse();
   const r = await saveDailySnapshot(universe);
+  // Hand the universe to the route's cache. Required lazily because
+  // usPicks/routes pulls in the engine, the scorecard and the backtest, and
+  // this module is imported at server startup.
+  //
+  // Only on the path that was going to build it anyway — the `not due` return
+  // above short-circuits first, and warming a cache is not worth 518 Yahoo
+  // calls every thirty-minute tick.
+  try { require('./usPicks/routes').primeUniverseCache(universe); } catch { /* routes not mounted */ }
   return { ...r, spyLast, was: snapLast };
 }
 
