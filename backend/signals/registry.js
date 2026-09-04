@@ -523,6 +523,14 @@ const RECORDED_SIGNALS = [
   { name: 'picks_top25', label: 'Quant picks (top 25)', source: 'recorded', description: 'Every symbol written to stock_pick_snapshots that day.' },
   { name: 'picks_top10', label: 'Quant picks (top 10)', source: 'recorded', description: 'The top 10 of the same snapshot — tests whether rank ordering carries information.' },
   { name: 'high_52w',    label: 'New 52-week high',     source: 'recorded', description: 'nse_52_week_high_low reported the stock set its 52-week high that session.' },
+
+  // US picks. Recorded to us_pick_snapshots and scored against SPY by
+  // usPicks/scorecard.js — NOT by signals/scorecard.js, whose calendar and
+  // benchmark are Indian. `market` is the flag that scorer honours; without it
+  // an entry here would be scored against NIFTY on a bhavcopy calendar and
+  // rendered as if that meant something.
+  { name: 'us_picks_top25', label: 'US quant picks (top 25)', source: 'recorded', market: 'US', scoredBy: '/api/us/stock-picks/scorecard', description: 'Every symbol written to us_pick_snapshots that day. Excess over SPY.' },
+  { name: 'us_picks_top10', label: 'US quant picks (top 10)', source: 'recorded', market: 'US', scoredBy: '/api/us/stock-picks/scorecard', description: 'The top 10 of the same snapshot — tests whether rank ordering carries information.' },
 ];
 
 const ALL_SIGNALS = [...PRICE_SIGNALS, ...RECORDED_SIGNALS, ...BLOCKED_SIGNALS];

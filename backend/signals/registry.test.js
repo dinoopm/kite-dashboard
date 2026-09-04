@@ -512,3 +512,15 @@ describe('deadCatCross', () => {
     assert.ok(typeof meta.detect === 'function', 'the detector stays live so a future firing is still recorded');
   });
 });
+
+describe('US signals in the registry', () => {
+  test('are declared as scored elsewhere, never against NIFTY', () => {
+    for (const name of ['us_picks_top25', 'us_picks_top10']) {
+      const s = signalMeta(name);
+      assert.ok(s, `${name} is registered`);
+      assert.equal(s.market, 'US');
+      assert.equal(s.source, 'recorded');
+      assert.match(s.scoredBy, /\/api\/us\/stock-picks\/scorecard/);
+    }
+  });
+});

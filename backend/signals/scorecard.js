@@ -58,7 +58,7 @@ function present(stats) {
  * index rather than raw return, because raw return mostly measures the market
  * and would flatter every signal in a rising one.
  */
-function headline(rows, { source, blockedReason, direction = 'bullish' } = {}) {
+function headline(rows, { source, blockedReason, direction = 'bullish', benchmarkLabel = 'NIFTY' } = {}) {
   if (blockedReason) return { state: 'unscoreable', text: 'Cannot be scored yet', detail: blockedReason };
   const mid = rows.find(r => r.horizon === '10d') || rows[0];
   if (!mid || !mid.n) return { state: 'no-data', text: 'No resolved firings yet', detail: 'Nothing has fired long enough ago to have an outcome.' };
@@ -66,7 +66,7 @@ function headline(rows, { source, blockedReason, direction = 'bullish' } = {}) {
   const edge = mid.medianExcessPct;
   if (edge == null) return { state: 'no-benchmark', text: `median ${mid.medianPct}% (no benchmark)`, detail: 'Index unavailable, so this is raw return and mostly reflects the market.' };
   const measured = `Median ${edge > 0 ? 'beat' : 'lagged'} the index by ${Math.abs(edge)}% over 10 sessions across ${mid.n} resolved firings${source === 'reconstructed' ? ', reconstructed from stored prices' : ''}.`;
-  const sign = `${edge > 0 ? '+' : ''}${edge}% vs NIFTY over 10d (n=${mid.n})`;
+  const sign = `${edge > 0 ? '+' : ''}${edge}% vs ${benchmarkLabel} over 10d (n=${mid.n})`;
 
   // A bearish signal is a warning, so the arithmetic that VINDICATES it is the
   // opposite of the arithmetic that vindicates a buy. Reusing the bullish
@@ -150,7 +150,9 @@ async function runSignalScorecard() {
   // omitting it would hide exactly that.
   const seen = new Set(signals.map(s => s.signal));
   const neverFired = ALL_SIGNALS
-    .filter(s => !seen.has(s.name) && !s.blockedReason)
+    // market:'US' entries are recorded and scored by their own endpoint (see
+    // registry); listing them here as "never recorded" would be false.
+    .filter(s => !seen.has(s.name) && !s.blockedReason && s.market !== 'US')
     .map(s => ({
       signal: s.name, label: s.label, source: s.source, direction: s.direction || 'bullish',
       firings: 0, symbols: 0, horizons: [],

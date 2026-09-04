@@ -85,4 +85,9 @@ describe('headline', () => {
     assert.equal(h.state, 'no-benchmark');
     assert.match(h.detail, /mostly reflects the market/);
   });
+
+  test('names the benchmark it was given', () => {
+    const h = headline(rows({ '10d': { n: 60, unresolved: 0, medianExcessPct: 1.4 } }), { benchmarkLabel: 'SPY' });
+    assert.match(h.text, /vs SPY over 10d/);
+  });
 });
