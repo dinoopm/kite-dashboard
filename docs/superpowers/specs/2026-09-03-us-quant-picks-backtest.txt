@@ -1,0 +1,26 @@
+◇ injected env (9) from ../.env // tip: ◈ encrypted .env [www.dotenvx.com]
+484 evaluation dates, 2017-01-13 → 2026-08-25, universe 518
+
+ 5d  top25 vs median 0.2% (t=2)   vs SPY 0.2% (t=2.07)   top10 vs SPY 0.23%   hit 51.4%   Q1…Q5 0.36 / 0.32 / 0.33 / 0.36 / 0.43
+10d  top25 vs median 0.44% (t=3.28)   vs SPY 0.41% (t=3.15)   top10 vs SPY 0.54%   hit 51.3%   Q1…Q5 0.75 / 0.65 / 0.68 / 0.71 / 0.82
+22d  top25 vs median 0.96% (t=4.41)   vs SPY 0.9% (t=4.28)   top10 vs SPY 1.14%   hit 50.3%   Q1…Q5 1.59 / 1.38 / 1.41 / 1.48 / 1.75
+
+IC (10d):
+  momentum     -0.006  t=-0.82  n=483
+  volume       0.002  t=0.78  n=483
+  fiftyTwo     -0.007  t=-0.71  n=483
+  relStrength  -0.009  t=-1.08  n=483
+  composite    -0.009  t=-1.05  n=483
+
+Momentum sweep (10d, vs SPY):
+  20/5 ←shipped  0.41% (t=3.15)  IC -0.009
+  60/5  0.43% (t=3.43)  IC -0.006
+  120/20  0.42% (t=3.3)  IC -0.002
+  252/21  0.51% (t=3.86)  IC 0.004
+
+· Scores the FOUR price factors with EPS revisions at weight 0; the live composite includes revisions at 15. This is the same model with one input unavailable, not a different one.
+· Survivorship bias: the universe is today's index members, so companies that were delisted or dropped never appear. That flatters every long-horizon US backtest, this one included.
+· Evaluation dates are a week apart and picks overlap between them, so n overstates the independent evidence.
+· Entry at the evaluation-date close; costs, slippage and liquidity are not modeled.
+· Earnings and red-flag exclusions cannot be reconstructed for past dates, so the backtest universe is slightly wider than the live one.
+· Where this and the scorecard disagree, the scorecard is the honest number.
