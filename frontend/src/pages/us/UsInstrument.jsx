@@ -368,6 +368,25 @@ function EarningsReaction({ sym }) {
     return () => { on = false; };
   }, [sym]);
   if (!d) return null;
+  // "Typically moves ±11.16%" off two reports is not a typical anything, and
+  // amber styling plus "size accordingly" turns that noise into a position
+  // instruction. The house rule is to refuse to speak on a small sample; the
+  // 20-firing bar it names is unreachable here by construction, since reports
+  // are quarterly and fetchDailyBars only goes back 4 years (16 at best). So
+  // the bar is 8 — two years of quarters, and what the API returns in `recent`.
+  // Under it the observations are still shown, just as observations: the raw
+  // moves, with no average drawn through them and no advice attached.
+  const MIN_REPORTS = 8;
+  if (d.n < MIN_REPORTS) {
+    const moves = (d.recent || []).map(r => `${r.movePct > 0 ? '+' : ''}${r.movePct}%`).join(', ');
+    return (
+      <div style={{ fontSize: '0.72rem', color: GREY, margin: '-0.5rem 0 0.9rem' }}
+        title={`${d.source} · ${d.n} report${d.n === 1 ? '' : 's'} on file · fewer than ${MIN_REPORTS}, so no average is drawn`}>
+        Earnings history: only {d.n} report{d.n === 1 ? '' : 's'} on file — too few to call a typical move.
+        {moves && <> Observed: {moves}.</>}
+      </div>
+    );
+  }
   const hot = d.avgAbsPct >= 5;
   return (
     <div style={{ fontSize: '0.72rem', color: GREY, margin: '-0.5rem 0 0.9rem' }}
@@ -496,7 +515,38 @@ function PnL({ sym }) {
     { key: 'netMargin', label: 'Net Margin', pct: true },
   ];
   const fmtCell = (m, v) => v == null ? '—' : m.pct ? pctF(v) : m.eps ? `$${v.toFixed(2)}` : fmtBig(v);
+
+  // A per-revenue ratio only describes something when revenue is a material
+  // part of what the company actually ran that period. UEC's FY2024 is the
+  // case that forced this: it held its uranium off the market and booked
+  // $224k of revenue against a $56.8M cost base — every figure correctly
+  // filed. Dividing by that denominator is arithmetically fine and tells you
+  // nothing: it printed a -25,246.88% operating margin, and for the year
+  // after, +29,737.9% revenue growth. Both true. Neither is information.
+  //
+  // The gate is on the DENOMINATOR, never on the ratio looking extreme — a
+  // genuinely awful margin is exactly what this tab exists to show. Revenue
+  // under 1% of the period's cost base means the company essentially did not
+  // sell that year, so 'margin' has no subject.
+  const NEGLIGIBLE_REVENUE_FRAC = 0.01;
+  const costBaseOf = (r) => Math.abs(r.costOfRevenue || 0) + Math.abs(r.operatingExpense || 0);
+  const noSalesYear = (r) => {
+    if (r.revenue == null) return false;
+    const costBase = costBaseOf(r);
+    if (!costBase) return false;
+    return Math.abs(r.revenue) < costBase * NEGLIGIBLE_REVENUE_FRAC;
+  };
+  const nmTitle = (r) => `${r.label}: revenue ${fmtBig(r.revenue)} against a cost base of `
+    + `${fmtBig(costBaseOf(r))} — too small a denominator for this ratio to mean `
+    + 'anything. The dollar figures themselves are as filed.';
+
   const yoy = (i, key) => { if (i === 0) return null; const c = rows[i][key], p = rows[i - 1][key]; if (c == null || p == null || p === 0) return null; return ((c - p) / Math.abs(p)) * 100; };
+  // Growth measured off a no-sales year divides by the same empty denominator.
+  // Only revenue growth is suppressed: operating income and net income keep
+  // their own scale through such a year, so their growth still compares like
+  // with like. The collapse INTO the no-sales year stays visible — that one
+  // has a real base and is the fact worth seeing.
+  const growthUnmeasurable = (i, key) => i > 0 && key === 'revenue' && noSalesYear(rows[i - 1]);
   const th = { textAlign: 'right', padding: '0.55rem 0.8rem', color: GREY, whiteSpace: 'nowrap', fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.03em' };
   const stickyBg = { position: 'sticky', left: 0, background: 'var(--bg-panel, #0f172a)' };
 
@@ -532,10 +582,16 @@ function PnL({ sym }) {
               <tr key={m.key} style={{ borderTop: '1px solid var(--border)' }}>
                 <td style={{ textAlign: 'left', padding: '0.5rem 0.8rem', color: 'var(--text-secondary)', fontWeight: m.bold ? 700 : 400, ...stickyBg }}>{m.label}</td>
                 {rows.map((r, i) => {
-                  const g = m.growth ? yoy(i, m.key) : null;
+                  const ratioDead = !!m.pct && noSalesYear(r);
+                  const growthDead = !!m.growth && growthUnmeasurable(i, m.key);
+                  const g = m.growth && !growthDead ? yoy(i, m.key) : null;
                   return (
-                    <td key={i} style={{ textAlign: 'right', padding: '0.5rem 0.8rem', fontWeight: m.bold ? 700 : 500, fontVariantNumeric: 'tabular-nums' }}>
-                      {fmtCell(m, r[m.key])}
+                    <td key={i} style={{ textAlign: 'right', padding: '0.5rem 0.8rem', fontWeight: m.bold ? 700 : 500, fontVariantNumeric: 'tabular-nums' }}
+                      title={ratioDead ? nmTitle(r) : growthDead ? nmTitle(rows[i - 1]) : undefined}>
+                      {ratioDead
+                        ? <span style={{ color: GREY, cursor: 'help' }}>n/m</span>
+                        : fmtCell(m, r[m.key])}
+                      {growthDead && <div style={{ fontSize: '0.68rem', fontWeight: 600, color: GREY, cursor: 'help' }}>n/m</div>}
                       {g != null && <div style={{ fontSize: '0.68rem', fontWeight: 600, color: g >= 0 ? GREEN : RED }}>{g >= 0 ? '+' : ''}{g.toFixed(1)}%</div>}
                     </td>
                   );
@@ -548,6 +604,13 @@ function PnL({ sym }) {
       {rows.some(r => r.partial) && (
         <p style={{ fontSize: '0.7rem', color: AMBER, marginTop: '0.75rem' }}>
           * Yahoo has not published the detailed statement for this period yet — only revenue and net income are available. Blank cells are unpublished, not zero.
+        </p>
+      )}
+      {rows.some(noSalesYear) && (
+        <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.75rem' }}>
+          n/m = not meaningful. {rows.filter(noSalesYear).map(r => r.label).join(', ')} recorded almost no
+          revenue against a full cost base, so margins on it — and growth measured from it — divide by a
+          denominator that describes nothing. The dollar figures are as filed; only those ratios are withheld.
         </p>
       )}
       <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.75rem', fontStyle: 'italic' }}>
