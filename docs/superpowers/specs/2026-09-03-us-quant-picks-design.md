@@ -78,7 +78,7 @@ that date. Percentile ranking happens later.
 
 | factor | raw value | notes |
 |---|---|---|
-| `momentumRaw` | `close[t−5] / close[t−25] − 1` | 20 sessions skipping the latest 5. Identical to India's `ret_20_5`. |
+| `momentumRaw` | `close[t−21] / close[t−273] − 1` | 252 sessions skipping the latest 21 — twelve months, skipping the most recent one. Chosen by the sweep in `deadCatStudy`-style fashion: of `{20/5, 60/5, 120/20, 252/21}` it was the strongest (+0.51% 10d excess vs SPY, t=3.86) and the ONLY setting with a positive composite IC. It is also the momentum definition the academic literature settled on. India's 20/5 was kept for parity in the first draft and abandoned here because parity with an unvalidated setting is not a reason. |
 | `volumeRaw` | `max(0, surge) × authenticity` | `surge = mean(vol[t−4..t]) / mean(vol[t−19..t−5]) − 1`. `authenticity = 0.6·corroboration + 0.4·persistence`. `corroboration = clamp01(|ret5%| / (0.5 + surge%/200))` (India's formula). `persistence` = fraction of the last 5 sessions with volume > 1.5× the baseline. No delivery term — the data does not exist. |
 | `fiftyTwoRaw` | `(newHigh5 ? 1 : 0) − (newLow5 ? 1 : 0) + (close / high252 − 0.8)` | `high252`/`low252` = max/min close over the prior 252 sessions. `newHigh5` = any of the last 5 closes was the rolling 252-session high at that bar. Adjusted closes, so splits do not fake highs. |
 | `relStrengthRaw` | `(close/close[t−63] − 1) − (SPY/SPY[t−63] − 1)`, in percentage points | Deliberately a longer horizon than momentum. |
@@ -89,6 +89,48 @@ Trap names are excluded from the recorded snapshot and hidden in the UI by
 default; a toggle shows them, as on the Indian page.
 
 Default weights: momentum 30, volume 20, fiftyTwo 15, relStrength 20, revisions 15.
+
+## What the backtest found, before anything shipped
+
+Run 2026-09-04 over 484 evaluation dates (2017-01-13 → 2026-08-25, 518 names),
+four price factors, revisions at weight 0. Recorded here because it governs how
+the page must present itself.
+
+| horizon | top-25 vs SPY | t | hit rate | Q1 → Q5 (top → bottom) |
+|---|---|---|---|---|
+| 5d | +0.20% | 2.07 | 51.4% | 0.36 / 0.32 / 0.33 / 0.36 / 0.43 |
+| 10d | +0.41% | 3.15 | 51.3% | 0.75 / 0.65 / 0.68 / 0.71 / 0.82 |
+| 22d | +0.90% | 4.28 | 50.3% | 1.59 / 1.38 / 1.41 / 1.48 / 1.75 |
+
+The t-statistics look like an edge. Three facts say they are not:
+
+1. **The quintiles are inverted.** Q5 — the bottom-ranked fifth — beats Q1 at
+   every horizon. A composite that ranked would produce returns descending from
+   Q1 to Q5. Instead both extremes beat the middle and the bottom beats the top:
+   a U-shape, which is the signature of volatility, not of skill.
+2. **Every information coefficient is ≈ 0 and mostly negative** — composite
+   −0.009 (t=−1.05, n=483), momentum −0.006, 52-week −0.007, relative strength
+   −0.009, volume +0.002. No factor's rank order predicts the next ten days.
+3. **The hit rate is 50–51%**, a coin flip, at all three horizons.
+
+The most plausible source of the top-25 excess is beta. The top 25 is the top 5%
+of ~500 names — the extreme tail of the composite, which selects the highest-
+volatility names — measured across a decade-long bull market. That is the market
+being collected by a filter that happens to select for it, not alpha.
+
+A methodological caveat found in the same pass: `excessVsMedian` compares the
+MEAN return of the top 25 against the MEDIAN return of the universe. Equity
+returns are right-skewed, so the universe mean sits above its median and the
+comparison flatters the picks by construction. The vs-SPY column is a fair
+portfolio comparison and is the one to read; the vs-median column is inflated by
+an unknown amount. (`picks/backtest.js` shares this flaw — it is where the
+pattern was copied from.)
+
+**The page must therefore lead with this, not bury it.** The backtest panel
+states that no ranking skill was measurable and that the excess is likely beta.
+The recorded scorecard remains the honest forward test and starts empty. Shipping
+a screen whose own evidence says it does not rank is only defensible while that
+sentence is the first thing a reader sees.
 
 ## Exclusions
 
