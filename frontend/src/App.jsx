@@ -19,6 +19,7 @@ import UsMacro from './pages/us/UsMacro'
 import UsSectorDetail from './pages/us/UsSectorDetail'
 import UsInstrument from './pages/us/UsInstrument'
 import UsScreener from './pages/us/UsScreener'
+import UsStockPicks from './pages/us/UsStockPicks'
 import UsBasket from './pages/us/UsBasket'
 import UsBasketDetail from './pages/us/UsBasketDetail'
 import UsVirtualPortfolio from './pages/us/UsVirtualPortfolio'
@@ -265,6 +266,7 @@ function App() {
           <Route path="/us" element={<UsIndices />} />
           <Route path="/us/macro" element={<UsMacro />} />
           <Route path="/us/screener" element={<UsScreener />} />
+          <Route path="/us/stock-picks" element={<UsStockPicks />} />
           <Route path="/us/basket" element={<UsBasket />} />
           <Route path="/us/basket/:id" element={<UsBasketDetail />} />
           <Route path="/us/virtual" element={<UsVirtualPortfolio />} />
