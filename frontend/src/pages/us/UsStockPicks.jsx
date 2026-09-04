@@ -11,7 +11,7 @@ import { rankRows } from '../../lib/picksRank'
 // nothing a slider does touches it.
 
 const FACTORS = [
-  { key: 'momentum',    raw: 'momentumRaw',    label: 'Momentum',      color: '#38bdf8', help: '252-session return skipping the latest 21 (twelve months, skipping the most recent one). Widened from the Indian page\'s 20/5 window — a sweep of {20/5, 60/5, 120/20, 252/21} over 484 evaluation dates found 252/21 the only setup with a positive information coefficient; the others, including 20/5, were flat or negative.' },
+  { key: 'momentum',    raw: 'momentumRaw',    label: 'Momentum',      color: '#38bdf8', help: '252-session return skipping the latest 21 (twelve months, skipping the most recent one). Widened from the Indian page\'s 20/5 window — a sweep of {20/5, 60/5, 120/20, 252/21} over 481 evaluation dates found 252/21 the only setup with a positive information coefficient; the others, including 20/5, were flat or negative.' },
   { key: 'volume',      raw: 'volumeRaw',      label: 'Volume',        color: '#a3e635', help: 'Last-5 volume vs the stock\'s own 20-session baseline, scaled by authenticity (price corroboration + persistence). No delivery % exists in the US.' },
   { key: 'fiftyTwo',    raw: 'fiftyTwoRaw',    label: '52-week',       color: '#f59e0b', help: 'Fresh 252-session high (+1) or low (−1) in the last 5 sessions, plus proximity to the high. Adjusted closes.' },
   { key: 'relStrength', raw: 'relStrengthRaw', label: 'Rel. strength', color: '#c084fc', help: '~3-month return minus SPY\'s, in points.' },
@@ -215,7 +215,7 @@ export default function UsStockPicks() {
       <div className="glass-panel" style={{ marginTop: '1.5rem', padding: '1rem 1.25rem' }}>
         <button onClick={loadBacktest} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.85rem', padding: 0 }}>{backtestOpen ? '▾' : '▸'} Backtest — four price factors, 2015 → today</button>
         <div style={{ fontSize: '0.78rem', color: '#fca5a5', fontWeight: 500, marginTop: '0.35rem', lineHeight: 1.5 }}>
-          No ranking skill measurable across 484 evaluation dates (2017–2026, 518 names): every information coefficient is ≈0 and mostly negative, the quintiles are inverted — the bottom-ranked fifth beat the top-ranked fifth at every horizon — and the hit rate is a coin flip at 50–51%. The +0.41% top-25 edge over SPY at 10 days (t=3.15) is most plausibly beta, not skill: the top 25 is the highest-volatility tail of the composite, measured across a decade-long bull market.
+          No ranking skill measurable across 481 evaluation dates (2017–2026, 518 names): the composite information coefficient is +0.005 (t=0.46), indistinguishable from zero — momentum comes closest at +0.016 (t=1.55) and still falls short of significance. The quintiles are U-shaped, not descending: the trough sits in the middle ranks and both tails are raised — tied at 5 days (0.42% each), Q1 ahead at 10 days (0.83% vs 0.79%), Q5 back ahead at 22 days (1.67% vs 1.65%) — and the hit rate is a coin flip at 51–52%. The +0.52% top-25 edge over SPY at 10 days (t=3.89) is most plausibly beta, not skill: the top 25 is the extreme tail of a volatility-loaded composite across ~500 names, measured across a decade-long bull market — a U-shape, where both tails beat the middle, is what a volatility-selecting score looks like, not a ranking score.
         </div>
         {backtestOpen && (backtestLoading ? <div className="loader" /> : backtest?.error ? <div style={{ color: '#ef4444', marginTop: '0.5rem' }}>{backtest.error}</div> : backtest ? (
           <div style={{ marginTop: '0.75rem', fontSize: '0.8rem' }}>
@@ -227,7 +227,7 @@ export default function UsStockPicks() {
                 <th style={th} title="Mean return of the top 25 minus SPY's return over the same window — the fair comparison.">Top-25 vs SPY (fair)</th>
                 <th style={th}>Top-10 vs SPY</th>
                 <th style={th}>Hit rate</th>
-                <th style={th} title="Mean forward return by rank quintile, best-ranked (Q1) to worst-ranked (Q5). A working model shows Q1 highest, Q5 lowest — here it's inverted.">Q1…Q5</th>
+                <th style={th} title="Mean forward return by rank quintile, best-ranked (Q1) to worst-ranked (Q5). A working model shows Q1 highest, Q5 lowest, descending — here it's U-shaped: both ends beat the middle.">Q1…Q5</th>
               </tr></thead>
               <tbody>{backtest.summary.map(s => (
                 <tr key={s.horizon}><td style={td}>{s.horizon}d</td><td style={td}>{fmtPct(s.meanExcessVsMedianPct, 2)} <span style={{ color: 'var(--text-secondary)' }}>t={s.tVsMedian}</span></td><td style={td}>{fmtPct(s.meanExcessVsSpyPct, 2)} <span style={{ color: 'var(--text-secondary)' }}>t={s.tVsSpy}</span></td><td style={td}>{fmtPct(s.top10ExcessVsSpyPct, 2)}</td><td style={td}>{s.hitRatePct}%</td><td style={{ ...td, fontSize: '0.72rem' }}>{s.quintileMeansPct.map(q => q == null ? '—' : q.toFixed(2)).join(' / ')}</td></tr>
