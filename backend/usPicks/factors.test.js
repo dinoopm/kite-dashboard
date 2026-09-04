@@ -29,9 +29,17 @@ describe('volumeAt', () => {
     const v = F.volumeAt(closes, volumes, 24);
     assert.ok(Math.abs(v.surge - 2) < 1e-9, 'volume tripled');
     assert.equal(v.persistence, 1);
-    assert.ok(v.authenticity > 0.6);
+    // recent = volumes[20..24] = [3000]*5, base = volumes[5..19] = [1000]*15, baseAvg = 1000
+    // surge = 3000/1000 - 1 = 2, surgePct = 200
+    // cSkip = closes[19] = 100, ret5Abs = |closes[24]/closes[19] - 1| * 100 = |110/100 - 1| * 100 = 10
+    // corroboration = clamp01(10 / (0.5 + 200/200)) = clamp01(10 / 1.5) = clamp01(6.6667) = 1
+    // persistence = 5/5 = 1 (all 5 recent sessions > 1.5 * baseAvg)
+    // authenticity = clamp01(0.6*1 + 0.4*1) = 1
+    // volumeRaw = surgeSignal(true) ? max(0, surge) * authenticity : 0 = 2 * 1 = 2
+    assert.ok(Math.abs(v.corroboration - 1) < 1e-9);
+    assert.ok(Math.abs(v.authenticity - 1) < 1e-9);
     assert.equal(v.trapRisk, false);
-    assert.ok(v.volumeRaw > 0);
+    assert.ok(Math.abs(v.volumeRaw - 2) < 1e-9);
   });
   test('a heavy week with a flat price is a trap', () => {
     const closes = [...flat(20, 100), 100.1, 100, 100.2, 100.1, 100];
@@ -62,7 +70,10 @@ describe('fiftyTwoAt', () => {
     const closes = [...flat(260, 100), 99, 98, 97, 96, 95];
     const f = F.fiftyTwoAt(closes, closes.length - 1);
     assert.equal(f.newLow5, true);
-    assert.ok(f.fiftyTwoRaw < 0);
+    // high252 = 100 (the flat run), low252 = 95 (today's close)
+    // nearHighPct = clamp01(95/100) = 0.95
+    // fiftyTwoRaw = (newHigh5=0) - (newLow5=1) + (0.95 - 0.8) = -1 + 0.15 = -0.85
+    assert.ok(Math.abs(f.fiftyTwoRaw - (-0.85)) < 1e-9);
   });
   test('null before 252 sessions', () => {
     assert.equal(F.fiftyTwoAt(flat(100, 1), 99), null);
@@ -101,5 +112,10 @@ describe('factorRowAt', () => {
     for (const k of ['momentumRaw', 'volumeRaw', 'fiftyTwoRaw', 'relStrengthRaw']) assert.equal(typeof row[k], 'number', k);
     assert.equal(row.aboveSma50, true);
     assert.equal(row.aboveSma200, true);
+    // momentumRaw = close[294]/close[274] - 1 (20-session return, 5-session skip, i=299)
+    assert.ok(Math.abs(row.momentumRaw - (closes[294] / closes[274] - 1)) < 1e-9);
+    // relStrengthRaw = (63-session stock return - 63-session SPY return) * 100, b = 299 - 63 = 236
+    const relExpected = ((closes[299] / closes[236] - 1) - (spy[299] / spy[236] - 1)) * 100;
+    assert.ok(Math.abs(row.relStrengthRaw - relExpected) < 1e-9);
   });
 });

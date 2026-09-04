@@ -44,7 +44,10 @@ async function yahooEarningsTrend(symbol) {
 
 async function fetchRevisions(symbols, { fetchOne = yahooEarningsTrend, gapMs = 150 } = {}) {
   const bySymbol = new Map();
+  const failedSymbols = new Set(); // thrown this run — excluded from `missing`, never cached
+  const failures = []; // { symbol, message }, for the one summary console.warn below
   let missing = 0;
+  let failed = 0;
   const todo = [];
   for (const s of symbols) {
     const hit = cache.get(s);
@@ -53,16 +56,37 @@ async function fetchRevisions(symbols, { fetchOne = yahooEarningsTrend, gapMs = 
   }
   for (let i = 0; i < todo.length; i += CHUNK) {
     const chunk = todo.slice(i, i + CHUNK);
-    const rows = await Promise.all(chunk.map(s => fetchOne(s).catch(() => null)));
+    const results = await Promise.allSettled(chunk.map(s => fetchOne(s)));
     chunk.forEach((s, j) => {
-      const raw = revisionsRawFrom(rows[j]);
-      cache.set(s, { raw, ts: Date.now() });
-      bySymbol.set(s, raw);
+      const res = results[j];
+      if (res.status === 'rejected') {
+        // A thrown fetch ("we don't know") and a successful fetch that yields
+        // no usable data ("Yahoo genuinely has no estimates for this symbol")
+        // are different facts. The second is real information and is safe to
+        // cache for 24h; the first is a network blip or a rate limit and
+        // caching it the same way would silently turn an outage into a day
+        // of neutral scores for every symbol it touched. So a throw is
+        // counted and logged, not cached — bySymbol still reports null this
+        // run (a caller has to rank the symbol somehow) but the next call
+        // retries it instead of serving a stale non-answer.
+        failed++;
+        failedSymbols.add(s);
+        failures.push({ symbol: s, message: res.reason?.message || String(res.reason) });
+        bySymbol.set(s, null);
+      } else {
+        const raw = revisionsRawFrom(res.value);
+        cache.set(s, { raw, ts: Date.now() });
+        bySymbol.set(s, raw);
+      }
     });
     if (gapMs && i + CHUNK < todo.length) await new Promise(r => setTimeout(r, gapMs));
   }
-  for (const v of bySymbol.values()) if (v == null) missing++;
-  return { bySymbol, missing };
+  for (const [s, v] of bySymbol) if (v == null && !failedSymbols.has(s)) missing++;
+  if (failed > 0) {
+    const example = failures[0];
+    console.warn(`[usPicks/revisions] ${failed} of ${symbols.length} fetches threw and were left uncached for retry — e.g. ${example.symbol}: ${example.message}`);
+  }
+  return { bySymbol, missing, failed };
 }
 
 module.exports = { revisionsRawFrom, fetchRevisions, _resetCache };

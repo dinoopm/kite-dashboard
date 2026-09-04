@@ -79,19 +79,41 @@ function volumeAt(closes, volumes, i) {
 }
 
 /**
+ * Rolling 252-bar max and min at every j in [jStart, jEnd], in one forward
+ * sweep with monotonic deques (classic sliding-window-maximum) instead of a
+ * fresh O(window) scan per j. fiftyTwoAt needs up to 5 of these per call, and
+ * this runs across ~570 evaluation dates × ~560 symbols, so the naive version
+ * (up to 6 full 252-bar scans per call) is worth collapsing into one pass.
+ */
+function slidingExtrema(values, window, jStart, jEnd) {
+  const maxDeque = [], minDeque = []; // indices; values decreasing / increasing
+  const maxAt = new Map(), minAt = new Map();
+  for (let k = jStart - window + 1; k <= jEnd; k++) {
+    while (maxDeque.length && values[maxDeque[maxDeque.length - 1]] <= values[k]) maxDeque.pop();
+    maxDeque.push(k);
+    while (maxDeque[0] < k - window + 1) maxDeque.shift();
+    while (minDeque.length && values[minDeque[minDeque.length - 1]] >= values[k]) minDeque.pop();
+    minDeque.push(k);
+    while (minDeque[0] < k - window + 1) minDeque.shift();
+    if (k >= jStart) { maxAt.set(k, values[maxDeque[0]]); minAt.set(k, values[minDeque[0]]); }
+  }
+  return { maxAt, minAt };
+}
+
+/**
  * 52-week strength from adjusted closes. `newHigh5` asks whether any of the
  * last 5 closes was the rolling 252-session high AT THAT BAR — a stock that
  * printed a high on Monday and eased since still counts this week.
  */
 function fiftyTwoAt(closes, i) {
   if (i < FIFTY_TWO_WINDOW - 1) return null;
-  const rollingMax = (j) => { let m = -Infinity; for (let k = j - FIFTY_TWO_WINDOW + 1; k <= j; k++) m = Math.max(m, closes[k]); return m; };
-  const rollingMin = (j) => { let m = Infinity; for (let k = j - FIFTY_TWO_WINDOW + 1; k <= j; k++) m = Math.min(m, closes[k]); return m; };
-  const high252 = rollingMax(i), low252 = rollingMin(i);
+  const jStart = Math.max(FIFTY_TWO_WINDOW - 1, i - 4);
+  const { maxAt, minAt } = slidingExtrema(closes, FIFTY_TWO_WINDOW, jStart, i);
+  const high252 = maxAt.get(i), low252 = minAt.get(i);
   let newHigh5 = false, newLow5 = false;
-  for (let j = Math.max(FIFTY_TWO_WINDOW - 1, i - 4); j <= i; j++) {
-    if (closes[j] >= rollingMax(j)) newHigh5 = true;
-    if (closes[j] <= rollingMin(j)) newLow5 = true;
+  for (let j = jStart; j <= i; j++) {
+    if (closes[j] >= maxAt.get(j)) newHigh5 = true;
+    if (closes[j] <= minAt.get(j)) newLow5 = true;
   }
   const nearHighPct = high252 > 0 ? clamp01(closes[i] / high252) : null;
   const fiftyTwoRaw = (newHigh5 ? 1 : 0) - (newLow5 ? 1 : 0) + (nearHighPct != null ? nearHighPct - 0.8 : 0);
