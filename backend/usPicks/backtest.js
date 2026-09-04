@@ -27,6 +27,11 @@
 // server.js documents at its own dotenv.config() call.
 require('dotenv').config({ path: __dirname + '/../../.env' });
 const { loadInputs, buildUniverseFrom, rankUniverse, BACKTEST_WEIGHTS, indexAsOf } = require('./engine');
+// The sweep marks which row is the LIVE setting. Reading the constants rather
+// than restating them is the point: a hardcoded marker silently lies the moment
+// the default moves, and this one already did — it still said 20/5 after the
+// default became 252/21.
+const F = require('./factors');
 
 const HISTORY_FROM = '2015-01-01';
 const HORIZONS = [5, 10, 22];
@@ -156,7 +161,7 @@ async function runUsBacktest({ from = HISTORY_FROM, step = 5, topN = 25, horizon
     const ds = idxs.map(i => evaluateAt(inp, { asOf: inp.spyBars[i].date, momentum: m, horizons: [10], topN }));
     const ex = ds.map(d => d.horizons[10]?.excessVsSpy).filter(v => v != null);
     const ic = ds.map(d => d.icComposite).filter(v => v != null);
-    return { momentum: m, horizon: '10d', evalDates: ex.length, meanExcessVsSpyPct: pct(mean(ex)), tStat: tOfMean(ex), icComposite: ic.length ? +mean(ic).toFixed(3) : null, shipped: m.window === 20 && m.skip === 5 };
+    return { momentum: m, horizon: '10d', evalDates: ex.length, meanExcessVsSpyPct: pct(mean(ex)), tStat: tOfMean(ex), icComposite: ic.length ? +mean(ic).toFixed(3) : null, shipped: m.window === F.MOM_WINDOW && m.skip === F.MOM_SKIP };
   });
 
   return {
