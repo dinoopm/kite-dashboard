@@ -38,4 +38,34 @@ describe('evaluateAt', () => {
     const b = evaluateAt(inp, { asOf: day(300), horizons: [5], topN: 10 });
     assert.deepEqual(a.top.map(t => t.symbol), b.top.map(t => t.symbol));
   });
+
+  test('forward return requires an exact date match — a symbol missing its bar on the forward date drops out instead of borrowing a stale close', () => {
+    // asOf = day(300), horizon 5 -> the forward date is day(305). Baseline
+    // has every one of the 60 members trading that day, so all 60 score.
+    const baseline = evaluateAt(inputs(), { asOf: day(300), horizons: [5], topN: 60 });
+    assert.equal(baseline.horizons[5].scored, 60);
+
+    // Remove S0's bar for day(305) only — every other bar, including its
+    // ranking-relevant history up to asOf, is untouched. If forwardFrom fell
+    // back to indexAsOf's "last bar at or before" semantics on the forward
+    // end too, S0 would silently score against day(304)'s close instead of
+    // dropping. The exact-date guard must exclude it instead.
+    const gapped = inputs();
+    gapped.barsBySymbol.S0 = gapped.barsBySymbol.S0.filter(b => b.date !== day(305));
+    const withGap = evaluateAt(gapped, { asOf: day(300), horizons: [5], topN: 60 });
+    assert.equal(withGap.horizons[5].scored, 59, 'S0 must drop out of the scored rows, not contribute a return off a stale close');
+  });
+
+  test('quintile 1 is the best-ranked fifth, not the worst — composite order tracks forward-return order', () => {
+    // The shared fixture is built so S0 climbs fastest and S59 slowest, and
+    // momentum ranks S0 first — composite rank and forward return move
+    // together by construction. A reversed sort in rankUniverse, or flipped
+    // bucket arithmetic here, would still pass every other assertion in this
+    // file while inverting the report's conclusion.
+    const r = evaluateAt(inputs(), { asOf: day(300), horizons: [5], topN: 10 });
+    const q = r.horizons[5].quintiles;
+    assert.equal(q.length, 5);
+    assert.ok(q.every(v => v != null));
+    assert.ok(q[0] > q[4], `Q1 (best-ranked) should beat Q5 (worst-ranked): got ${q[0]} vs ${q[4]}`);
+  });
 });

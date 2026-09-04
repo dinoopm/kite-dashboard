@@ -92,6 +92,9 @@ function evaluateAt(inputs, { asOf, momentum = {}, horizons = HORIZONS, topN = 2
     const sorted = [...rows].sort((a, b) => a.rank - b.rank);
     const q = Math.floor(sorted.length / 5) || 1;
     const quintiles = [[], [], [], [], []];
+    // When sorted.length isn't divisible by 5, the remainder rows spill into
+    // the last bucket via Math.min(4, ...) — the worst-ranked quintile grows,
+    // Q1 (best-ranked) never does.
     sorted.forEach((r, k) => quintiles[Math.min(4, Math.floor(k / q))].push(r.ret));
     out.horizons[h] = {
       scored: rows.length, picks: top.length,
@@ -113,7 +116,12 @@ function evaluateAt(inputs, { asOf, momentum = {}, horizons = HORIZONS, topN = 2
 
 async function runUsBacktest({ from = HISTORY_FROM, step = 5, topN = 25, horizons = HORIZONS, inputs = null } = {}) {
   const inp = inputs || await loadInputs({ from, includeRevisions: false, includeEarnings: false });
-  const idxs = evalIndices(inp.spyBars, { from, step, minWarm: WARM_BARS, maxHorizon: Math.min(...horizons) });
+  // Reserve room for the LONGEST horizon, not the shortest. Reserving less
+  // doesn't corrupt any single number — forwardFrom's exact-date guard just
+  // returns null and the row drops — but it silently shortens the sample for
+  // the longer horizons, so the 5/10/22-day rows in the summary table would
+  // be measured over three different date sets instead of one shared sample.
+  const idxs = evalIndices(inp.spyBars, { from, step, minWarm: WARM_BARS, maxHorizon: Math.max(...horizons) });
   if (!idxs.length) throw new Error('Not enough history to evaluate');
 
   const perDate = [];
