@@ -97,7 +97,13 @@ reasons, like India's surveillance exclusion.
 
 - **Illiquid** — median 20-session dollar volume below $10M.
 - **Earnings within the next 5 sessions** — from the existing earnings-calendar
-  cache in `alpaca.js`. A binary event, not a factor bet.
+  cache in `alpaca.js`. A binary event, not a factor bet. The window is counted
+  in weekdays between the snapshot date and the earnings date, NOT along the
+  SPY bar calendar: earnings dates are in the future and the bar calendar stops
+  at the last close, so counting sessions on it would compare against dates
+  that do not exist yet. Weekdays ignore market holidays, which can make the
+  window one session generous around a holiday — the error is in the safe
+  direction (excluding a stock a day early).
 - **Red-severity red flag** — the `pump-fade` check from the US red-flags logic,
   called as a function on the already-fetched bars, never via HTTP. Amber flags
   (thin liquidity, fading volume, gap-and-fade) are shown as chips and do not
