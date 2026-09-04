@@ -42,7 +42,11 @@ async function main() {
     return;
   }
   const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-  const { error } = await supabase.from('us_pick_snapshots').select('snap_date', { count: 'exact', head: true });
+  // A real select, not a head/count probe: with `head: true` PostgREST answers
+  // a missing table with `count: null` and NO error, so the probe reports every
+  // table as reachable — including ones that cannot exist. This is the check
+  // migrate_pick_snapshots.js already uses, and the reason it is written this way.
+  const { error } = await supabase.from('us_pick_snapshots').select('snap_date').limit(1);
   if (error) console.log(`Not reachable yet: ${error.message}\nPaste the SQL above, then re-run this script.`);
   else console.log('us_pick_snapshots is reachable.');
 }
