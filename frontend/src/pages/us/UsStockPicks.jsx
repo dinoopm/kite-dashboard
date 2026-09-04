@@ -97,6 +97,39 @@ const filtersActive = (f) => !!(f.symbol.trim() || f.sector || f.flag
   || hasValue(f.minPrice) || hasValue(f.maxPrice) || hasValue(f.minScore)
   || Object.values(f.pct).some(hasValue))
 
+// ─── Column sorting ──────────────────────────────────────────────────────────
+//
+// Re-orders the rows on screen. Like the filters, it runs after the ranking and
+// cannot change it: the Top-N cut is taken on RANK first, so sorting by price
+// reorders the model's top 25 rather than handing back the 25 dearest stocks in
+// the universe. Sorting is a way to read the picks, not a way to choose them.
+//
+// Third click returns to rank order, so the model's own ordering is always one
+// click away and is where the table starts.
+const SORTS = {
+  rank: (r) => r.rank,
+  symbol: (r) => r.symbol,
+  sector: (r) => r.sector || 'Unknown',
+  price: (r) => r.lastClose,
+  score: (r) => r.composite,
+}
+
+// Nulls sort last in BOTH directions. A missing price is not a low price, and
+// letting it float to the top of an ascending sort would read as one.
+function sortRows(rows, key, dir) {
+  if (!key || key === 'rank') return rows
+  const get = SORTS[key] || ((r) => r.pct[key])
+  const sign = dir === 'asc' ? 1 : -1
+  return [...rows].sort((a, b) => {
+    const x = get(a), y = get(b)
+    if (x == null && y == null) return a.rank - b.rank
+    if (x == null) return 1
+    if (y == null) return -1
+    if (x === y) return a.rank - b.rank      // ties keep the model's order
+    return typeof x === 'string' ? sign * x.localeCompare(y) : sign * (x - y)
+  })
+}
+
 export default function UsStockPicks() {
   const navigate = useNavigate()
   const prefs = useRef(loadPrefs()).current
@@ -107,6 +140,9 @@ export default function UsStockPicks() {
   const [topN, setTopN] = useState([10, 25, 50].includes(prefs.topN) ? prefs.topN : 25)
   const [excludeTraps, setExcludeTraps] = useState(prefs.excludeTraps !== false)
   const [filters, setFilters] = useState(EMPTY_FILTERS)
+  // Not persisted, for the same reason the filters are not: a sort you forgot
+  // you set makes the top row look like the top pick when it is not.
+  const [sort, setSort] = useState({ key: 'rank', dir: 'asc' })
   const [summary, setSummary] = useState(null)
   const [summarizing, setSummarizing] = useState(false)
   const [history, setHistory] = useState(null)
@@ -136,7 +172,9 @@ export default function UsStockPicks() {
   // 25 best-ranked energy names, not however many energy names happened to fall
   // inside the overall top 25.
   const matching = useMemo(() => filterRows(ranked, filters), [ranked, filters])
-  const top = matching.slice(0, topN)
+  // Cut on rank, THEN sort. The other order would silently redefine what the
+  // Top-N means — "top 25 by price descending" is not a pick list.
+  const top = useMemo(() => sortRows(matching.slice(0, topN), sort.key, sort.dir), [matching, topN, sort])
   const isFiltered = filtersActive(filters)
 
   // The diff against the recorded snapshot and the crowding warning are claims
@@ -148,6 +186,15 @@ export default function UsStockPicks() {
     () => [...new Set(ranked.map(r => r.sector || 'Unknown'))].sort(),
     [ranked])
   const setPct = (key, v) => setFilters(f => ({ ...f, pct: { ...f.pct, [key]: v } }))
+
+  // First click on a column sorts it, second reverses, third returns to rank
+  // order. Numeric columns open DESCENDING, because "highest score" is the
+  // question being asked of them; text columns open A-Z.
+  const toggleSort = (key, numeric) => setSort(s => {
+    if (s.key !== key) return { key, dir: numeric ? 'desc' : 'asc' }
+    if (s.dir === (numeric ? 'desc' : 'asc')) return { key, dir: numeric ? 'asc' : 'desc' }
+    return { key: 'rank', dir: 'asc' }
+  })
 
   // Diff against the newest recorded snapshot: who is new, who dropped.
   const diff = useMemo(() => {
@@ -199,6 +246,19 @@ export default function UsStockPicks() {
   const fth = { padding: '0.25rem 0.5rem 0.45rem', borderBottom: '1px solid var(--border)', textAlign: 'left', fontWeight: 400 }
   const fInput = { background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text-primary)', fontSize: '0.7rem', padding: '0.2rem 0.3rem', maxWidth: '100%' }
   const clearBtn = { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.7rem', padding: 0, textDecoration: 'underline' }
+  // The arrow is the only thing that says a column is sorted, so it also gets
+  // aria-sort — colour and a glyph are not state for a screen reader.
+  const SortTh = ({ sk, label, title, numeric = false }) => {
+    const on = sort.key === sk
+    return (
+      <th style={{ ...th, cursor: 'pointer', userSelect: 'none', color: on ? 'var(--accent)' : th.color }}
+        aria-sort={on ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+        title={title ? `${title}\n\nClick to sort` : 'Click to sort'}
+        onClick={() => toggleSort(sk, numeric)}>
+        {label}<span style={{ marginLeft: '0.25rem', opacity: on ? 1 : 0.25 }}>{on ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}</span>
+      </th>
+    )
+  }
   const riskOff = data?.regime?.breadth?.label === 'risk-off'
 
   return (
@@ -312,8 +372,14 @@ export default function UsStockPicks() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
               <thead>
                 <tr>
-                  <th style={th}>#</th><th style={th}>Symbol</th><th style={th}>Sector</th><th style={th}>Price</th><th style={th} title="Weighted blend of the factor percentiles">Score</th>
-                  {FACTORS.map(f => <th key={f.key} style={th} title={f.help}>{f.label}</th>)}
+                  {/* Flags holds a set of chips with no order to put them in,
+                      so it is the one column that does not sort. */}
+                  <SortTh sk="rank" numeric label="#" title="The model's own order" />
+                  <SortTh sk="symbol" label="Symbol" />
+                  <SortTh sk="sector" label="Sector" />
+                  <SortTh sk="price" numeric label="Price" />
+                  <SortTh sk="score" numeric label="Score" title="Weighted blend of the factor percentiles" />
+                  {FACTORS.map(f => <SortTh key={f.key} sk={f.key} numeric label={f.label} title={f.help} />)}
                   <th style={th}>Flags</th>
                 </tr>
                 {/* One filter per column, typed to what the column holds: text
