@@ -170,7 +170,27 @@ export default function UsStockPicks() {
             </label>
           ))}
           <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-            {PRESETS.map(p => <button key={p.name} onClick={() => setWeights(p.weights)} style={{ padding: '0.3rem 0.6rem', fontSize: '0.72rem', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}>{p.name}</button>)}
+            {/* Which preset you are on has to be visible, as it is on the
+                Indian page: the sliders can be dragged anywhere, so without
+                this the row says three presets exist but never which one is
+                loaded — and after a reload, prefs restore the weights with no
+                button lit at all. Matched against the weights themselves, so
+                dragging back onto a preset's numbers lights it again and
+                dragging off it goes dark. */}
+            {PRESETS.map(p => {
+              const active = FACTORS.every(f => weights[f.key] === p.weights[f.key])
+              return (
+                <button key={p.name} onClick={() => setWeights({ ...p.weights })}
+                  aria-pressed={active}
+                  style={{
+                    padding: '0.3rem 0.6rem', fontSize: '0.72rem', borderRadius: 4, cursor: 'pointer',
+                    fontWeight: active ? 700 : 500,
+                    border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+                    background: active ? 'var(--accent)' : 'transparent',
+                    color: active ? '#04141f' : 'var(--text-secondary)',
+                  }}>{p.name}</button>
+              )
+            })}
           </div>
           <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Show <select value={topN} onChange={e => setTopN(+e.target.value)}>{[10, 25, 50].map(n => <option key={n} value={n}>{n}</option>)}</select></label>
           <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
