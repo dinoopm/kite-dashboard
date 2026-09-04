@@ -7,14 +7,16 @@ const flat = (n, v) => Array.from({ length: n }, () => v);
 const ramp = (n, from, step) => Array.from({ length: n }, (_, i) => from + i * step);
 
 describe('momentumAt', () => {
-  test('is the 20-session return ending 5 sessions ago', () => {
-    const closes = ramp(40, 100, 1); // close[i] = 100 + i
-    const i = 39;
-    // close[34] / close[14] - 1 = 134/114 - 1
-    assert.ok(Math.abs(F.momentumAt(closes, i) - (134 / 114 - 1)) < 1e-12);
+  test('is the 252-session return ending 21 sessions ago', () => {
+    const closes = ramp(300, 100, 1); // close[i] = 100 + i
+    const i = 299;
+    // a = i - skip = 278, b = a - window = 26
+    // close[278] / close[26] - 1 = 378/126 - 1 = 2
+    assert.ok(Math.abs(F.momentumAt(closes, i) - (378 / 126 - 1)) < 1e-12);
   });
   test('is null before the window is warm', () => {
-    assert.equal(F.momentumAt(ramp(20, 100, 1), 19), null);
+    // window(252) + skip(21) = 273 sessions needed; 273 bars (i=272) is one short.
+    assert.equal(F.momentumAt(ramp(273, 100, 1), 272), null);
   });
   test('accepts a different window for the backtest sweep', () => {
     const closes = ramp(100, 100, 1);
@@ -112,8 +114,8 @@ describe('factorRowAt', () => {
     for (const k of ['momentumRaw', 'volumeRaw', 'fiftyTwoRaw', 'relStrengthRaw']) assert.equal(typeof row[k], 'number', k);
     assert.equal(row.aboveSma50, true);
     assert.equal(row.aboveSma200, true);
-    // momentumRaw = close[294]/close[274] - 1 (20-session return, 5-session skip, i=299)
-    assert.ok(Math.abs(row.momentumRaw - (closes[294] / closes[274] - 1)) < 1e-9);
+    // momentumRaw = close[278]/close[26] - 1 (252-session return, 21-session skip, i=299)
+    assert.ok(Math.abs(row.momentumRaw - (closes[278] / closes[26] - 1)) < 1e-9);
     // relStrengthRaw = (63-session stock return - 63-session SPY return) * 100, b = 299 - 63 = 236
     const relExpected = ((closes[299] / closes[236] - 1) - (spy[299] / spy[236] - 1)) * 100;
     assert.ok(Math.abs(row.relStrengthRaw - relExpected) < 1e-9);

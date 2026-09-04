@@ -55,9 +55,11 @@ describe('buildUniverseFrom', () => {
   });
 
   test('asOf evaluates at the last bar on or before that date, and only sees earlier bars', () => {
-    const full = buildUniverseFrom(inputs(), { asOf: day(250) });
-    assert.equal(full.period.snapshotDate, day(250));
-    const trimmed = buildUniverseFrom(inputs({ barsBySymbol: { UP: bars(251, 100, 0.5), DOWN: bars(251, 200, -0.3), THIN: bars(251, 1, 0.001, 100) }, spyBars: bars(251, 400, 0.1) }));
+    // Momentum needs window(252) + skip(21) = 273 bars warm, so asOf has to sit
+    // past that or UP drops out of the universe (momentumRaw null) entirely.
+    const full = buildUniverseFrom(inputs(), { asOf: day(280) });
+    assert.equal(full.period.snapshotDate, day(280));
+    const trimmed = buildUniverseFrom(inputs({ barsBySymbol: { UP: bars(281, 100, 0.5), DOWN: bars(281, 200, -0.3), THIN: bars(281, 1, 0.001, 100) }, spyBars: bars(281, 400, 0.1) }));
     assert.equal(full.stocks.find(s => s.symbol === 'UP').factors.momentumRaw, trimmed.stocks.find(s => s.symbol === 'UP').factors.momentumRaw);
   });
 

@@ -13,8 +13,18 @@
 // remaining terms are renormalised rather than a zero silently dragging every
 // stock's authenticity down.
 
-const MOM_WINDOW = 20;          // sessions in the momentum return
-const MOM_SKIP = 5;             // freshest sessions skipped (short-term reversal)
+// Twelve months of return, skipping the most recent one — not chosen by eye.
+// A sweep of {20/5, 60/5, 120/20, 252/21} over 484 evaluation dates (2017-2026,
+// 518 names) found 252/21 strongest on 10-day excess vs SPY (+0.51%, t=3.86)
+// and the ONLY setting in the grid with a positive composite information
+// coefficient — the others, including the 20/5 this shipped with, were flat or
+// negative. 20/5 existed for parity with the Indian page's momentum window,
+// which is not a reason to keep an unvalidated setting once a validated one is
+// known. 252/21 also happens to be the momentum definition the academic
+// literature (Jegadeesh & Titman, and everything downstream of it) settled on.
+// Sweep numbers: docs/superpowers/specs/2026-09-03-us-quant-picks-backtest.txt
+const MOM_WINDOW = 252;         // sessions in the momentum return
+const MOM_SKIP = 21;            // freshest sessions skipped (short-term reversal)
 const RS_WINDOW = 63;           // ~3 months, deliberately longer than momentum
 const FIFTY_TWO_WINDOW = 252;   // sessions in "52-week"
 const VOL_RECENT = 5;           // the week being judged

@@ -118,7 +118,12 @@ async function runUsPicksScorecard({ fetchRows = defaultFetch, context = buildUs
       generatedAt: new Date().toISOString(),
     };
   }
-  const firstDate = rows[0].date;
+  // fetchRows is not contractually ordered — defaultFetch happens to order by
+  // snap_date, but an injected or re-queried fetch could hand back rows in any
+  // order. Trusting rows[0]/rows[last] silently truncates the calendar passed
+  // to buildUsMarketContext if that assumption ever breaks, so scan instead.
+  const firstDate = rows.reduce((min, r) => (r.date < min ? r.date : min), rows[0].date);
+  const lastDate = rows.reduce((max, r) => (r.date > max ? r.date : max), rows[0].date);
   const symbols = [...new Set(rows.map(r => r.symbol))];
   const ctx = await context(symbols, firstDate);
   const opts = { horizons: HORIZONS, benchmark: ctx.benchmark };
@@ -128,7 +133,7 @@ async function runUsPicksScorecard({ fetchRows = defaultFetch, context = buildUs
   const dates = [...new Set(rows.map(r => r.date))];
   return {
     params: { horizons: HORIZONS, benchmark: BENCHMARK, minN: MIN_N, topSlice: 10 },
-    period: { first: firstDate, last: dates[dates.length - 1], snapshotDays: dates.length, emissions: rows.length },
+    period: { first: firstDate, last: lastDate, snapshotDays: dates.length, emissions: rows.length },
     calendarGaps: ctx.calendarGaps,
     overall, top10,
     factorIC: factorICFromRows(rows, ctx.seriesBySymbol, 10),
