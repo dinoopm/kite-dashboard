@@ -575,12 +575,65 @@ export default function Screener() {
         </button>
       </div>
 
-      {/* Preset screens. Same card layout as Saved screens below, and as the US
-          screener: the chip row this replaced hid every condition in a title
-          tooltip, so the only way to learn what a preset asked was to click it
-          and lose whatever was already built — and nothing showed which one was
-          loaded. */}
-      <h3 style={{ margin: '0.5rem 0 0.75rem' }}>Preset screens</h3>
+      {/* Results sit above the preset and saved lists, as they do on the US
+          screener. Below them, a scan of a 150-name universe delivered its
+          matches under six preset rows, so the answer to what you had just run
+          arrived off-screen. */}
+      {running && (
+        <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+            <span>
+              {progress?.total ? `Scanning ${progress.loaded}/${progress.total}` : 'Resolving constituents…'}
+              {progress?.symbol ? ` — ${progress.symbol}` : ''}
+            </span>
+            <span>{pct}%</span>
+          </div>
+          <div style={{ height: '8px', background: 'rgba(255,255,255,0.08)', borderRadius: '4px', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent)', borderRadius: '4px', transition: 'width 0.4s' }} />
+          </div>
+          <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: '0.5rem 0 0' }}>
+            Cold instruments need rate-limited history fetches — warm caches scan instantly.
+          </p>
+        </div>
+      )}
+
+      {running && partial.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+          <h2 style={{ margin: 0 }}>
+            {partial.length} match{partial.length === 1 ? '' : 'es'} so far
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 400, marginLeft: '0.75rem' }}>
+              still scanning… (sectors resolve when the scan finishes)
+            </span>
+          </h2>
+          <ResultsTable matches={partial} label={progress?.label || 'scan'} />
+        </div>
+      )}
+
+      {error && <p className="negative">{error}</p>}
+
+      {result && jobStatus === 'done' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
+          <h2 style={{ margin: 0 }}>
+            {result.matches.length} match{result.matches.length === 1 ? '' : 'es'}
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 400, marginLeft: '0.75rem' }}>
+              of {result.scanned} scanned in {result.label?.replace(/^NSE:/, '')}
+              {result.notReady?.length ? ` · ${result.notReady.length} unavailable (${result.notReady.join(', ')})` : ''}
+            </span>
+          </h2>
+          {result.matches.length > 0
+            ? <ResultsTable matches={result.matches} label={result.label} />
+            : <p style={{ color: 'var(--text-secondary)' }}>No stocks matched all conditions.</p>}
+        </div>
+      )}
+
+      {/* One list: the built-in presets first, then your saved screens. They
+          were two headed lists of identical cards, so reaching a screen you
+          wrote yourself meant scrolling past every preset; the chip on each row
+          says which kind it is. The card layout itself replaced a chip row that
+          hid every condition in a title tooltip, so the only way to learn what a
+          screen asked was to click it and lose whatever was already built — and
+          nothing showed which one was loaded. */}
+      <h3 style={{ margin: '0.5rem 0 0.75rem' }}>Screens</h3>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
         {PRESET_SCREENS.map(p => {
           const isActive = p.id === activeScreenId
@@ -632,63 +685,14 @@ export default function Screener() {
             </div>
           )
         })}
-      </div>
-
-      {running && (
-        <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
-            <span>
-              {progress?.total ? `Scanning ${progress.loaded}/${progress.total}` : 'Resolving constituents…'}
-              {progress?.symbol ? ` — ${progress.symbol}` : ''}
-            </span>
-            <span>{pct}%</span>
-          </div>
-          <div style={{ height: '8px', background: 'rgba(255,255,255,0.08)', borderRadius: '4px', overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent)', borderRadius: '4px', transition: 'width 0.4s' }} />
-          </div>
-          <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: '0.5rem 0 0' }}>
-            Cold instruments need rate-limited history fetches — warm caches scan instantly.
-          </p>
-        </div>
-      )}
-
-      {running && partial.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
-          <h2 style={{ margin: 0 }}>
-            {partial.length} match{partial.length === 1 ? '' : 'es'} so far
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 400, marginLeft: '0.75rem' }}>
-              still scanning… (sectors resolve when the scan finishes)
-            </span>
-          </h2>
-          <ResultsTable matches={partial} label={progress?.label || 'scan'} />
-        </div>
-      )}
-
-      {error && <p className="negative">{error}</p>}
-
-      {result && jobStatus === 'done' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.5rem' }}>
-          <h2 style={{ margin: 0 }}>
-            {result.matches.length} match{result.matches.length === 1 ? '' : 'es'}
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 400, marginLeft: '0.75rem' }}>
-              of {result.scanned} scanned in {result.label?.replace(/^NSE:/, '')}
-              {result.notReady?.length ? ` · ${result.notReady.length} unavailable (${result.notReady.join(', ')})` : ''}
-            </span>
-          </h2>
-          {result.matches.length > 0
-            ? <ResultsTable matches={result.matches} label={result.label} />
-            : <p style={{ color: 'var(--text-secondary)' }}>No stocks matched all conditions.</p>}
-        </div>
-      )}
-
-      <h3 style={{ margin: '0.5rem 0 0.75rem' }}>Saved screens</h3>
-      {!screens ? <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading…</p>
-        : screens.length === 0 ? <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No saved screens yet.</p>
-        : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {screens.map(s => {
-              const isActive = s.id === activeScreenId
-              return (
+        {/* Saved screens carry a scope of their own (holdings / a sector / a
+            theme), which the preset rows do not — loading one switches the
+            universe too, so the scope leads their description. */}
+        {!screens ? <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0.25rem 0' }}>Loading saved screens…</p>
+          : screens.length === 0 ? <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0.25rem 0' }}>No saved screens yet.</p>
+          : screens.map(s => {
+            const isActive = s.id === activeScreenId
+            return (
               <div
                 key={s.id}
                 className="glass-panel"
@@ -699,12 +703,12 @@ export default function Screener() {
                 }}
               >
                 {isActive && <span style={{ color: 'var(--accent)', fontSize: '0.9rem', lineHeight: 1 }} title="Currently loaded">●</span>}
-                <strong style={{ minWidth: '140px' }}>{s.name}</strong>
-                {isActive && (
-                  <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.05em', border: '1px solid var(--accent)', borderRadius: '4px', padding: '0.1rem 0.4rem' }}>
-                    Loaded
-                  </span>
-                )}
+                <strong style={{ minWidth: '180px' }}>{s.name}</strong>
+                {/* Stands where the preset rows carry their PRESET chip, so the
+                    two kinds stay tellable apart now they share a list. */}
+                <span style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', border: '1px solid var(--border)', borderRadius: '4px', padding: '0.1rem 0.4rem' }}>
+                  Saved
+                </span>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flex: 1 }}>
                   {(s.scope?.type === 'sector' ? (s.scope.sectorKey || '').replace(/^NSE:/, '') : s.scope?.type) || ''}
                   {' · '}
@@ -731,10 +735,10 @@ export default function Screener() {
                   Delete
                 </button>
               </div>
-              )
-            })}
-          </div>
-        )}
+            )
+          })}
+      </div>
+
     </div>
   )
 }
