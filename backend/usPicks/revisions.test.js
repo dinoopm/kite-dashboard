@@ -20,6 +20,21 @@ describe('revisionsRawFrom', () => {
   test('no revisions but a trend uses the trend alone', () => {
     assert.ok(Math.abs(revisionsRawFrom(et({ up: 0, down: 0, now: 1.1, ago: 1.0 })) - 0.5) < 1e-9);
   });
+  // A loss-making company has a NEGATIVE current-year estimate, and the ratio
+  // form now/ago-1 inverts the sign there. These two cases are the reason the
+  // formula is a signed change over |ago|.
+  //
+  // Note both existing positive-estimate tests above pass under the BROKEN and
+  // the fixed formula alike — which is exactly how the inversion survived to a
+  // final review. Do not replace these with positive-estimate equivalents.
+  test('a shrinking loss is good news and scores positive', () => {
+    assert.ok(Math.abs(revisionsRawFrom(et({ up: 0, down: 0, now: -0.50, ago: -1.00 })) - 1) < 1e-9);
+  });
+
+  test('a deepening loss is bad news and scores negative', () => {
+    assert.ok(Math.abs(revisionsRawFrom(et({ up: 0, down: 0, now: -1.50, ago: -1.00 })) - (-1)) < 1e-9);
+  });
+
   test('nothing usable is null, not zero', () => {
     assert.equal(revisionsRawFrom(null), null);
     assert.equal(revisionsRawFrom({ trend: [] }), null);

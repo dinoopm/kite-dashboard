@@ -30,7 +30,23 @@ function revisionsRawFrom(earningsTrend) {
   const down = row.epsRevisions?.downLast30days ?? 0;
   const net = up + down > 0 ? (up - down) / (up + down) : null;
   const now = row.epsTrend?.current, ago = row.epsTrend?.['30daysAgo'];
-  const trend = (now != null && ago != null && ago !== 0) ? clamp(now / ago - 1, -0.2, 0.2) / 0.2 : null;
+  // Signed change over |ago|, NOT the ratio now/ago - 1.
+  //
+  // epsTrend.current is NEGATIVE for a company expected to lose money, and the
+  // ratio form inverts there: an estimate improving from -1.00 to -0.50 — the
+  // loss halving, unambiguously good news — gives -0.5, clamps to -0.2 and
+  // scores -1, the worst value available. A loss DEEPENING to -1.50 scored +1.
+  // Both indices carry names with negative current-year estimates, so this was
+  // not hypothetical.
+  //
+  // It mattered urgently rather than eventually: revisions_pct is written into
+  // us_pick_snapshots per row, and a forward IC computed from those recorded
+  // rows is the only evidence this factor can ever get — Yahoo publishes no
+  // vintage estimates, so it cannot be backtested. An inverted value would have
+  // poisoned that measurement before it started, in rows nobody can re-derive.
+  const trend = (now != null && ago != null && ago !== 0)
+    ? clamp((now - ago) / Math.abs(ago), -0.2, 0.2) / 0.2
+    : null;
   if (net == null && trend == null) return null;
   if (net == null) return trend;
   if (trend == null) return net;
