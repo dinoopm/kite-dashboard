@@ -4,34 +4,36 @@ import { useEffect, useState } from 'react'
 // that file exports only a component (fast refresh) and so any other view can
 // read a signal's record without rendering the badge.
 //
-// One fetch per page load, shared by every caller on it. The endpoint is cached
-// server-side for an hour, so this is mostly about not firing twenty identical
-// requests when twenty signals are on screen.
-let cache = null
-let inflight = null
+// One fetch per market per page load. India's scorecard and the US one are
+// different endpoints measured on different prices; keeping them in one cache
+// would let a badge read the wrong market's numbers.
+const ENDPOINT = { IN: '/api/signals/scorecard', US: '/api/us/stock-picks/scorecard' }
+const cache = {}
+const inflight = {}
 
-export function loadScorecard() {
-  if (cache) return Promise.resolve(cache)
-  if (!inflight) {
-    inflight = fetch('/api/signals/scorecard')
+export function loadScorecard(market = 'IN') {
+  const url = ENDPOINT[market] || ENDPOINT.IN
+  if (cache[url]) return Promise.resolve(cache[url])
+  if (!inflight[url]) {
+    inflight[url] = fetch(url)
       .then(async r => {
         const j = await r.json()
         if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
-        cache = j
+        cache[url] = j
         return j
       })
-      .finally(() => { inflight = null })
+      .finally(() => { delete inflight[url] })
   }
-  return inflight
+  return inflight[url]
 }
 
 /** The scored entry for one registry signal, or null while loading / on error. */
-export function useSignalScore(signalName, { source } = {}) {
+export function useSignalScore(signalName, { source, market = 'IN' } = {}) {
   const [state, setState] = useState({ entry: null, error: null, loading: true })
 
   useEffect(() => {
     let on = true
-    loadScorecard()
+    loadScorecard(market)
       .then(j => {
         if (!on) return
         const matches = (j.signals || []).filter(s => s.signal === signalName)
@@ -45,7 +47,7 @@ export function useSignalScore(signalName, { source } = {}) {
       })
       .catch(e => { if (on) setState({ entry: null, error: e.message, loading: false }) })
     return () => { on = false }
-  }, [signalName, source])
+  }, [signalName, source, market])
 
   return state
 }

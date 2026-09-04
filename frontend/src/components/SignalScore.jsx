@@ -37,7 +37,7 @@ const TONE = {
 const NO_RECORD = {
   state: 'unscoreable',
   text: 'not measured here',
-  detail: 'The scorecard is built from nse_bhavcopy and scored against NIFTY 50, so every figure in it was measured on Indian prices. Nothing has been measured on US prices, and showing the Indian number here would attach it to a market it says nothing about.\n\nbackend/volumeThrustStudy.js (the volume-confirmed cross) and backend/deadCatStudy.js (the dead-cat bounce) ask the same questions of a decade of US history — run those for the US answer. Their results are not wired into this badge.',
+  detail: 'The India scorecard is built from nse_bhavcopy and scored against NIFTY 50; the US scorecard covers only the US quant picks. This signal is in neither, so there is nothing to show.\n\nbackend/volumeThrustStudy.js (the volume-confirmed cross) and backend/deadCatStudy.js (the dead-cat bounce) ask the same questions of a decade of US history — run those for the US answer. Their results are not wired into this badge.',
 }
 
 /**
@@ -47,16 +47,21 @@ const NO_RECORD = {
  *   one it was scored on. Anything other than 'IN' has no record to show.
  */
 export default function SignalScore({ signal, label, source, style, market = 'IN' }) {
-  const { entry, error, loading } = useSignalScore(signal, { source })
+  const { entry, error, loading } = useSignalScore(signal, { source, market })
 
-  // Hooks first, then branch — the lookup is thrown away off the Indian
-  // market, but it must still run on every render.
-  if (market !== 'IN') return <Badge tone={TONE.unscoreable} label={label} headline={NO_RECORD} style={style} />
-
-  if (loading) return null
-  // A failed scorecard fetch must not shout on top of the signal it annotates —
-  // the signal is still usable, we just cannot say whether it works.
-  if (error || !entry) return null
+  // Off the Indian market, only a signal the US scorecard actually carries has
+  // a record. Everything else keeps the explicitly empty badge — a US chart
+  // must never borrow a number measured on Indian prices.
+  if (market !== 'IN') {
+    if (loading) return null
+    if (!entry) return <Badge tone={TONE.unscoreable} label={label} headline={NO_RECORD} style={style} />
+  } else {
+    if (loading) return null
+    // A failed scorecard fetch must not shout on top of the signal it
+    // annotates — the signal is still usable, we just cannot say whether it
+    // works.
+    if (error || !entry) return null
+  }
 
   const h = entry.headline
   const detail = [
