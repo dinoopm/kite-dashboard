@@ -44,10 +44,16 @@ const { usSnapshotDue } = require('./dailyJobs');
 
 describe('usSnapshotDue', () => {
   test('due once the SPY session has closed and nothing is recorded for it', () => {
-    assert.equal(usSnapshotDue('2026-09-03', '2026-09-02', new Date('2026-09-03T21:30:00Z')), true);
+    assert.equal(usSnapshotDue('2026-09-03', '2026-09-02', new Date('2026-09-03T22:30:00Z')), true);
   });
   test('not due while the session is still open', () => {
     assert.equal(usSnapshotDue('2026-09-03', '2026-09-02', new Date('2026-09-03T18:00:00Z')), false);
+  });
+  // 16:00 EST is 21:00 UTC exactly, so a 21:00 cutoff would fire at the bell
+  // with no room for the closing auction to settle.
+  test('does not fire at the winter closing bell itself', () => {
+    assert.equal(usSnapshotDue('2026-01-14', '2026-01-13', new Date('2026-01-14T21:00:00Z')), false);
+    assert.equal(usSnapshotDue('2026-01-14', '2026-01-13', new Date('2026-01-14T22:00:00Z')), true);
   });
   test('a bar from a previous day is closed regardless of the clock', () => {
     assert.equal(usSnapshotDue('2026-09-02', '2026-09-01', new Date('2026-09-03T10:00:00Z')), true);

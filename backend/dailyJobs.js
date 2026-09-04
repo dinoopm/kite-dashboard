@@ -27,6 +27,9 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const TICK_MS = 30 * 60 * 1000;      // re-check every 30 minutes
 const FIRST_TICK_MS = 2 * 60 * 1000; // let the server finish booting first
 const EMISSION_LOOKBACK_DAYS = 30;   // re-scan a window, so a missed day heals
+// See usSnapshotDue: 16:00 ET is 20:00 UTC (EDT) / 21:00 UTC (EST), so this
+// clears the close by two hours in summer and one in winter.
+const US_CLOSE_SETTLED_UTC_HOUR = 22;
 
 const isoMinus = (days) => {
   const d = new Date();
@@ -84,17 +87,25 @@ async function picksSnapshotDue() {
  *
  * The SPY bar is the trigger, not a clock. It is due when the newest SPY daily
  * bar is newer than the newest snapshot AND that session has closed — the bar
- * is from a previous UTC day, or it is today and the clock is past 21:00 UTC
- * (16:00 ET plus settlement, in either DST regime). Before that Alpaca serves
- * a partial bar and a snapshot taken from it would record prices nobody could
- * have closed at.
+ * is from a previous UTC day, or it is today and the clock is past the cutoff
+ * below. Before that Alpaca serves a partial bar and a snapshot taken from it
+ * would record prices nobody could have closed at, which is exactly the kind of
+ * permanently wrong row this module exists to prevent.
+ *
+ * The cutoff is 22:00 UTC rather than 21:00 because 16:00 ET is 20:00 UTC in
+ * summer (EDT) but 21:00 UTC in winter (EST). A 21:00 cutoff therefore fires at
+ * the literal closing bell for half the year, leaving no room for the closing
+ * auction to settle — and the daily job ticks every 30 minutes at an offset set
+ * by server start time, so a tick CAN land in that first minute. 22:00 gives two
+ * hours in summer and one in winter. Waiting an extra hour costs nothing: the
+ * snapshot only has to happen sometime that evening.
  */
 function usSnapshotDue(spyLast, snapLast, now = new Date()) {
   if (!spyLast) return false;
   if (snapLast && snapLast >= spyLast) return false;
   const todayUtc = now.toISOString().slice(0, 10);
   if (spyLast < todayUtc) return true;
-  return now.getUTCHours() >= 21;
+  return now.getUTCHours() >= US_CLOSE_SETTLED_UTC_HOUR;
 }
 
 async function runUsPickSnapshot() {
