@@ -5174,7 +5174,7 @@ const PICKS_TTL = 10 * 60 * 1000; // 10 min
 // database instead of trusting an in-memory flag.
 //
 // Manual trigger for when you don't want to wait for the next tick.
-const { runOnce: runDailyJobsOnce, startDailyJobs, registerTradeSync, registerStopProposals } = require('./dailyJobs');
+const { runOnce: runDailyJobsOnce, startDailyJobs, registerTradeSync, registerStopProposals, registerMacroCachePrime } = require('./dailyJobs');
 app.post('/api/daily-jobs/run', async (req, res) => {
   try {
     res.json(await runDailyJobsOnce({ force: req.query.force === '1' }));
@@ -5287,13 +5287,22 @@ app.get('/api/data-health', async (req, res) => {
 // under /api/us, which is the Alpaca equity router — this is macro data, not a
 // symbol endpoint.
 //
-// Cached for 6h and coalesced: the underlying series update once a month
-// (daily for oil and breakevens), so re-deriving per page view is pure egress
-// against a public good.
+// Cached and coalesced: the underlying series update once a month (daily for
+// oil and breakevens), so re-deriving per page view is pure egress against a
+// public good.
+//
+// The TTL was 6h, which meant a release landing at 12:30 UTC could sit behind
+// a cache entry built at 09:00 and the panel would show the superseded print
+// until 15:00. The recorder now pushes each fresh read in here the moment it
+// records it (registerMacroCachePrime below), so the TTL is only the fallback
+// for a server whose daily jobs are not running — half an hour, because on a
+// release day being 30 minutes behind is a wait and being 6 hours behind is a
+// wrong answer.
 const { buildMonitor } = require('./macro/monitor');
 let macroMonitorCache = null; // { data, ts }
-const MACRO_MONITOR_TTL = 6 * 60 * 60 * 1000;
+const MACRO_MONITOR_TTL = 30 * 60 * 1000;
 let macroMonitorRunning = null;
+registerMacroCachePrime((monitor) => { macroMonitorCache = { data: monitor, ts: Date.now() }; });
 app.get('/api/macro/monitor', async (req, res) => {
   try {
     if (!req.query.force && macroMonitorCache && Date.now() - macroMonitorCache.ts < MACRO_MONITOR_TTL) {

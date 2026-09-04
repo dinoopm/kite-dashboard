@@ -65,3 +65,48 @@ describe('usSnapshotDue', () => {
     assert.equal(usSnapshotDue(null, null), false);
   });
 });
+
+const { macroRecordDue } = require('./dailyJobs');
+
+// The bug this guards: the macro block used to decide "already done today" from
+// the snapshot row and then skip the INGEST as well. The snapshot is written a
+// few minutes after 00:00 UTC; the jobs report lands at 12:30 UTC. So on
+// 2026-09-04 the panel showed July payrolls all day, and would have until the
+// next midnight, with FRED already serving August.
+describe('macroRecordDue', () => {
+  const scored = ['PAYEMS', 'CPILFESL'];
+  const nothing = [{ seriesId: 'PAYEMS', inserted: 0, revised: 0, skipped: 30 }];
+
+  test('due when nothing is recorded for today', () => {
+    assert.equal(macroRecordDue(false, nothing, scored).due, true);
+  });
+
+  test('not due when today is recorded and the ingest changed nothing', () => {
+    assert.equal(macroRecordDue(true, nothing, scored).due, false);
+  });
+
+  // The whole point: a release landing after the snapshot must re-record it.
+  test('due again when a scored series gains an observation', () => {
+    const r = macroRecordDue(true, [{ seriesId: 'PAYEMS', inserted: 1, revised: 0, skipped: 29 }], scored);
+    assert.equal(r.due, true);
+    assert.deepEqual(r.changed, ['PAYEMS']);
+  });
+
+  test('due again on a revision, since revisions move the score too', () => {
+    assert.equal(macroRecordDue(true, [{ seriesId: 'PAYEMS', inserted: 0, revised: 2 }], scored).due, true);
+  });
+
+  // MICH and the financial series are carried for context and are deliberately
+  // not inputs to the composite, so they must not trigger a re-record.
+  test('an unscored series changing does not re-record', () => {
+    const r = macroRecordDue(true, [{ seriesId: 'MICH', inserted: 1, revised: 0 }], scored);
+    assert.equal(r.due, false);
+    assert.deepEqual(r.changed, []);
+  });
+
+  test('survives an ingest that returned no results at all', () => {
+    assert.equal(macroRecordDue(true, [], scored).due, false);
+    assert.equal(macroRecordDue(false, [], scored).due, true);
+    assert.equal(macroRecordDue(true, null, scored).due, false);
+  });
+});

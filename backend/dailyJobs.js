@@ -141,6 +141,37 @@ function registerTradeSync(fn) { syncTradesFn = fn; }
 let stopProposalsFn = null;
 function registerStopProposals(fn) { stopProposalsFn = fn; }
 
+// Injected by server.js so a fresh regime read reaches the route's cache the
+// moment it is recorded, instead of waiting out the HTTP TTL.
+let primeMacroCacheFn = null;
+function registerMacroCachePrime(fn) { primeMacroCacheFn = fn; }
+
+/**
+ * Should the macro regime be (re-)recorded on this tick?
+ *
+ * Two reasons to write: nothing is recorded for today yet, or an ingest just
+ * changed a series the composite actually scores — a new print or a revision.
+ * The second is what makes a mid-day release visible on the day it lands.
+ *
+ * Re-recording OVERWRITES the day's row (recordSnapshot upserts on snap_date),
+ * which is correct rather than a loss of evidence: the row is still written the
+ * day the read was made and long before any forward return exists, and the
+ * honest record of a day is the data as it finally stood that day, not the
+ * hours-old version that happened to be there when the first tick ran.
+ *
+ * Only SCORED series count. MICH and the financial series are carried for
+ * context and are deliberately not composite inputs, so a change in them does
+ * not change the number being recorded and must not trigger a rewrite.
+ */
+function macroRecordDue(hasSnapshotToday, results, scoredIds) {
+  const changed = (results || [])
+    .filter(r => scoredIds.includes(r.seriesId) && ((r.inserted || 0) > 0 || (r.revised || 0) > 0))
+    .map(r => r.seriesId);
+  if (!hasSnapshotToday) return { due: true, changed, reason: 'not recorded yet' };
+  if (changed.length) return { due: true, changed, reason: `scored series updated: ${changed.join(', ')}` };
+  return { due: false, changed, reason: 'already recorded today, no scored series changed' };
+}
+
 /**
  * One pass of every daily recording job.
  *
@@ -243,11 +274,18 @@ async function runDailyJobs({ force = false } = {}) {
     }
   }
 
-  // Macro: ingest the official series, then record today's regime BEFORE the
-  // outcome exists — the same standard as the picks snapshot, and the only
-  // reason the panel will ever be more than a data display. Completion is
-  // decided by asking macro_signal_snapshots whether today has a row, so a
-  // restart neither redoes the work nor skips it.
+  // Macro: ingest the official series on EVERY tick, then record today's regime
+  // BEFORE the outcome exists — the same standard as the picks snapshot, and
+  // the only reason the panel will ever be more than a data display.
+  //
+  // The ingest is deliberately NOT behind the "already recorded today" check.
+  // It used to be, and that cost a whole day of freshness every time a release
+  // landed after midnight UTC: the snapshot is written on the first tick after
+  // 00:00 UTC, the jobs report lands at 12:30 UTC, and every later tick then
+  // said "already recorded today" and skipped the fetch. On 2026-09-04 the
+  // panel showed July payrolls (-23k) all day while FRED was already serving
+  // August (+162k) and a revision to July. Twelve series a tick is cheap; a
+  // day of showing superseded data on a decision panel is not.
   //
   // Failing softly on a missing table is deliberate: this runs on servers
   // where migrate_macro_monitor.js has not been applied, and the picks
@@ -257,20 +295,29 @@ async function runDailyJobs({ force = false } = {}) {
     const { count, error } = await supabase.from('macro_signal_snapshots')
       .select('snap_date', { count: 'exact', head: true }).eq('snap_date', today);
     if (error) throw new Error(`macro_signal_snapshots: ${error.message}`);
-    if (!force && count > 0) {
-      out.macro = { skipped: 'already recorded today', snapDate: today };
+
+    const { runIngest } = require('./macro/ingest');
+    const { SCORED_SERIES } = require('./macro/series');
+    const ingested = await runIngest({ mode: 'recent' });
+    const decision = macroRecordDue(count > 0, ingested.results, SCORED_SERIES.map(s => s.id));
+
+    if (!force && !decision.due) {
+      out.macro = { skipped: decision.reason, snapDate: today };
     } else {
-      const { runIngest } = require('./macro/ingest');
       const { buildMonitor, recordSnapshot } = require('./macro/monitor');
-      const ingested = await runIngest({ mode: 'recent' });
       const monitor = await buildMonitor();
       const snapDate = await recordSnapshot(monitor);
+      // Hand the fresh read to the route's cache, or the panel keeps serving
+      // the pre-release one until the TTL expires — which is the same staleness
+      // this block just fixed, moved one layer out.
+      if (primeMacroCacheFn) { try { primeMacroCacheFn(monitor); } catch { /* route not mounted */ } }
       out.macro = {
         snapDate, regime: monitor.composite.regime, bias: monitor.composite.bias,
         confidence: monitor.confidence.level, dataPath: monitor.dataPath,
         revisions: ingested.results.reduce((n, r) => n + r.revised, 0),
+        rerecorded: count > 0, changed: decision.changed,
       };
-      console.log(`[daily] macro regime ${snapDate}: ${monitor.composite.regime} (${monitor.composite.bias}), confidence ${monitor.confidence.level}`);
+      console.log(`[daily] macro regime ${snapDate}: ${monitor.composite.regime} (${monitor.composite.bias}), confidence ${monitor.confidence.level}${decision.changed.length ? ` — re-recorded after ${decision.changed.join(', ')}` : ''}`);
     }
   } catch (err) {
     out.macro = { error: err.message };
@@ -310,4 +357,4 @@ function startDailyJobs() {
   return () => { clearTimeout(first); clearInterval(timer); };
 }
 
-module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, registerStopProposals, picksSnapshotDue, snapshotIsDue, isoMinus, usSnapshotDue, runUsPickSnapshot };
+module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, registerStopProposals, registerMacroCachePrime, picksSnapshotDue, snapshotIsDue, isoMinus, usSnapshotDue, runUsPickSnapshot, macroRecordDue };
