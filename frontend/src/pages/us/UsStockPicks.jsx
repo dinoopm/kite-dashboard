@@ -47,6 +47,56 @@ function Bar({ pct, color }) {
   return <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><div style={{ width: 54, height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3 }}><div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3 }} /></div><span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', minWidth: 24 }}>{Math.round(pct)}</span></div>
 }
 
+// ─── Header filters ──────────────────────────────────────────────────────────
+//
+// These narrow WHAT YOU LOOK AT. They are not a screen and they are not part of
+// the model: the ranking, the percentiles and the recorded snapshot are all
+// computed before any of this runs, so no filter here can change a stock's
+// score or its rank. That is why the # column keeps the universe rank and shows
+// gaps when a filter is on — a filtered list renumbered 1..25 would read as a
+// different ranking, which it is not.
+//
+// Deliberately not persisted to PREFS_KEY. Weights and Top-N are a stance you
+// choose and want back; a filter you forgot you set, restored silently on the
+// next visit, is how you end up reading a partial table as the whole one.
+const EMPTY_FILTERS = { symbol: '', sector: '', minPrice: '', maxPrice: '', minScore: '', pct: {}, flag: '' }
+
+const FLAG_OPTIONS = [
+  { id: 'trap', label: 'Trap risk', test: (r) => !!r.factors.trapRisk },
+  { id: 'newHigh', label: '52w high', test: (r) => !!r.factors.newHigh5 },
+  { id: 'earnings', label: 'Earnings ahead', test: (r) => !!r.earningsDate },
+  { id: 'noRevisions', label: 'No revisions data', test: (r) => r.factors.revisionsRaw == null },
+  { id: 'clean', label: 'No flags at all', test: (r) => !r.factors.trapRisk && !r.flags.length && r.factors.revisionsRaw != null },
+]
+
+// A blank box is not a filter. Only fields with something in them are applied,
+// so a stray "0" in a minimum still means "at least 0" and is visible as such,
+// while an empty one is ignored rather than silently treated as zero.
+const hasValue = (v) => v !== '' && v != null && !Number.isNaN(Number(v))
+
+function filterRows(rows, f) {
+  const sym = f.symbol.trim().toUpperCase()
+  const flag = FLAG_OPTIONS.find(o => o.id === f.flag)
+  return rows.filter(r => {
+    // Symbol matches the ticker OR the company name, because "micro" should
+    // find Microsoft when you cannot recall whether it is MSFT.
+    if (sym && !(r.symbol.toUpperCase().includes(sym) || String(r.name || '').toUpperCase().includes(sym))) return false
+    if (f.sector && (r.sector || 'Unknown') !== f.sector) return false
+    if (hasValue(f.minPrice) && !(r.lastClose >= Number(f.minPrice))) return false
+    if (hasValue(f.maxPrice) && !(r.lastClose <= Number(f.maxPrice))) return false
+    if (hasValue(f.minScore) && !(r.composite >= Number(f.minScore))) return false
+    for (const [key, v] of Object.entries(f.pct)) {
+      if (hasValue(v) && !(r.pct[key] >= Number(v))) return false
+    }
+    if (flag && !flag.test(r)) return false
+    return true
+  })
+}
+
+const filtersActive = (f) => !!(f.symbol.trim() || f.sector || f.flag
+  || hasValue(f.minPrice) || hasValue(f.maxPrice) || hasValue(f.minScore)
+  || Object.values(f.pct).some(hasValue))
+
 export default function UsStockPicks() {
   const navigate = useNavigate()
   const prefs = useRef(loadPrefs()).current
@@ -56,6 +106,7 @@ export default function UsStockPicks() {
   const [weights, setWeights] = useState({ ...DEFAULT_WEIGHTS, ...(prefs.weights || {}) })
   const [topN, setTopN] = useState([10, 25, 50].includes(prefs.topN) ? prefs.topN : 25)
   const [excludeTraps, setExcludeTraps] = useState(prefs.excludeTraps !== false)
+  const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [summary, setSummary] = useState(null)
   const [summarizing, setSummarizing] = useState(false)
   const [history, setHistory] = useState(null)
@@ -81,30 +132,48 @@ export default function UsStockPicks() {
     const stocks = excludeTraps ? data.stocks.filter(s => !s.factors.trapRisk) : data.stocks
     return rankRows(stocks, FACTORS, weights)
   }, [data, weights, excludeTraps])
-  const top = ranked.slice(0, topN)
+  // Filtering happens BEFORE the Top-N cut, so "top 25 energy names" means the
+  // 25 best-ranked energy names, not however many energy names happened to fall
+  // inside the overall top 25.
+  const matching = useMemo(() => filterRows(ranked, filters), [ranked, filters])
+  const top = matching.slice(0, topN)
+  const isFiltered = filtersActive(filters)
+
+  // The diff against the recorded snapshot and the crowding warning are claims
+  // about the MODEL's picks, so both stay on the unfiltered top-N. Reading
+  // "+ NVDA − AMD vs recorded" off a list narrowed to semiconductors would
+  // describe a change the model never made.
+  const modelTop = useMemo(() => ranked.slice(0, topN), [ranked, topN])
+  const sectors = useMemo(
+    () => [...new Set(ranked.map(r => r.sector || 'Unknown'))].sort(),
+    [ranked])
+  const setPct = (key, v) => setFilters(f => ({ ...f, pct: { ...f.pct, [key]: v } }))
 
   // Diff against the newest recorded snapshot: who is new, who dropped.
   const diff = useMemo(() => {
     const latest = history?.dates?.[0]?.picks
     if (!latest) return null
     const prev = new Set(latest.map(p => p.symbol))
-    const now = new Set(top.map(r => r.symbol))
-    return { date: history.dates[0].date, entered: top.filter(r => !prev.has(r.symbol)).map(r => r.symbol), dropped: latest.filter(p => !now.has(p.symbol)).map(p => p.symbol) }
-  }, [history, top])
+    const now = new Set(modelTop.map(r => r.symbol))
+    return { date: history.dates[0].date, entered: modelTop.filter(r => !prev.has(r.symbol)).map(r => r.symbol), dropped: latest.filter(p => !now.has(p.symbol)).map(p => p.symbol) }
+  }, [history, modelTop])
 
   const sectorWarn = useMemo(() => {
-    if (top.length < 10) return null
+    if (modelTop.length < 10) return null
     const counts = {}
-    for (const r of top) counts[r.sector || 'Unknown'] = (counts[r.sector || 'Unknown'] || 0) + 1
+    for (const r of modelTop) counts[r.sector || 'Unknown'] = (counts[r.sector || 'Unknown'] || 0) + 1
     const [sector, n] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]
-    return n / top.length >= 0.4 ? { sector, n } : null
-  }, [top])
+    return n / modelTop.length >= 0.4 ? { sector, n } : null
+  }, [modelTop])
 
+  // The brief always narrates the unfiltered top-N. Handing it a filtered list
+  // would produce a confident paragraph about "the picks" that silently omits
+  // most of them; the note beside the button says so while a filter is on.
   const summarize = async () => {
-    if (!data || !top.length) return
+    if (!data || !modelTop.length) return
     setSummarizing(true)
     try {
-      const picks = top.map(r => ({
+      const picks = modelTop.map(r => ({
         rank: r.rank, symbol: r.symbol, name: r.name, sector: r.sector, composite: +r.composite.toFixed(1),
         momentum_pct: +r.pct.momentum.toFixed(0), volume_pct: +r.pct.volume.toFixed(0), fifty_two_pct: +r.pct.fiftyTwo.toFixed(0), rel_strength_pct: +r.pct.relStrength.toFixed(0), revisions_pct: +r.pct.revisions.toFixed(0),
         momentum_252_21_pct: r.factors.momentumRaw == null ? null : +(r.factors.momentumRaw * 100).toFixed(1), vol_surge_pct: r.factors.surgePct, authenticity: r.factors.authenticity,
@@ -127,6 +196,9 @@ export default function UsStockPicks() {
 
   const th = { textAlign: 'left', padding: '0.45rem 0.5rem', fontSize: '0.7rem', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }
   const td = { padding: '0.4rem 0.5rem', borderBottom: '1px solid rgba(255,255,255,0.04)', verticalAlign: 'middle' }
+  const fth = { padding: '0.25rem 0.5rem 0.45rem', borderBottom: '1px solid var(--border)', textAlign: 'left', fontWeight: 400 }
+  const fInput = { background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text-primary)', fontSize: '0.7rem', padding: '0.2rem 0.3rem', maxWidth: '100%' }
+  const clearBtn = { background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.7rem', padding: 0, textDecoration: 'underline' }
   const riskOff = data?.regime?.breadth?.label === 'risk-off'
 
   return (
@@ -209,11 +281,15 @@ export default function UsStockPicks() {
         </div>
       ) : error ? (
         <div className="glass-panel" style={{ padding: '1.5rem', color: '#ef4444' }}>Failed to load: {error}</div>
-      ) : !top.length ? (
+      ) : !ranked.length ? (
+        // Tested on the RANKING, not on what is displayed. Testing `top` meant
+        // a filter that matched nothing replaced the whole table — filter row
+        // included — with "Nothing to rank.", leaving no way to undo it short
+        // of a reload. Zero matches is handled inside the table instead.
         <div className="glass-panel" style={{ padding: '1.5rem', color: 'var(--text-secondary)' }}>Nothing to rank.</div>
       ) : (
         <>
-          {sectorWarn && <div className="glass-panel" style={{ padding: '0.6rem 1rem', marginBottom: '0.75rem', fontSize: '0.78rem', color: '#fbbf24' }}>⚠ {sectorWarn.n} of {top.length} picks are {sectorWarn.sector} — crowded.</div>}
+          {sectorWarn && <div className="glass-panel" style={{ padding: '0.6rem 1rem', marginBottom: '0.75rem', fontSize: '0.78rem', color: '#fbbf24' }}>⚠ {sectorWarn.n} of {modelTop.length} picks are {sectorWarn.sector} — crowded.</div>}
           {diff && (diff.entered.length || diff.dropped.length) ? (
             <div className="glass-panel" style={{ padding: '0.6rem 1rem', marginBottom: '0.75rem', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
               vs recorded {diff.date}: {diff.entered.length ? <span style={{ color: '#34d399' }}>+ {diff.entered.join(', ')}</span> : null} {diff.dropped.length ? <span style={{ color: '#fca5a5' }}>− {diff.dropped.join(', ')}</span> : null}
@@ -225,17 +301,65 @@ export default function UsStockPicks() {
             <span>Track record (recorded picks vs SPY):</span>
             <SignalScore signal="us_picks_top25" label="Top 25" market="US" />
             <SignalScore signal="us_picks_top10" label="Top 10" market="US" />
-            <button onClick={summarize} disabled={summarizing} style={{ marginLeft: 'auto', padding: '0.35rem 0.8rem', borderRadius: 4, border: '1px solid var(--accent)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.75rem' }}>{summarizing ? 'Writing…' : 'AI brief'}</button>
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+              {isFiltered && <span style={{ fontSize: '0.7rem', color: '#fbbf24' }} title="Filters change what the table shows, not what the model picked.">brief covers the unfiltered top {topN}</span>}
+              <button onClick={summarize} disabled={summarizing} style={{ padding: '0.35rem 0.8rem', borderRadius: 4, border: '1px solid var(--accent)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer', fontSize: '0.75rem' }}>{summarizing ? 'Writing…' : 'AI brief'}</button>
+            </span>
           </div>
           {summary && <div className="glass-panel" style={{ padding: '1.1rem 1.4rem', marginBottom: '1rem', lineHeight: 1.6, fontSize: '0.9rem' }}><ReactMarkdown>{summary}</ReactMarkdown></div>}
 
           <div className="glass-panel" style={{ padding: '0.4rem', overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
-              <thead><tr>
-                <th style={th}>#</th><th style={th}>Symbol</th><th style={th}>Sector</th><th style={th}>Price</th><th style={th} title="Weighted blend of the factor percentiles">Score</th>
-                {FACTORS.map(f => <th key={f.key} style={th} title={f.help}>{f.label}</th>)}
-                <th style={th}>Flags</th>
-              </tr></thead>
+              <thead>
+                <tr>
+                  <th style={th}>#</th><th style={th}>Symbol</th><th style={th}>Sector</th><th style={th}>Price</th><th style={th} title="Weighted blend of the factor percentiles">Score</th>
+                  {FACTORS.map(f => <th key={f.key} style={th} title={f.help}>{f.label}</th>)}
+                  <th style={th}>Flags</th>
+                </tr>
+                {/* One filter per column, typed to what the column holds: text
+                    for names, a list for the closed sets, and a minimum for the
+                    numbers. The factor columns are percentiles, so their box is
+                    a percentile — "≥ 80" is the top fifth of the universe on
+                    that factor, which is what the bar beside it already shows. */}
+                <tr>
+                  <th style={fth}>
+                    {isFiltered
+                      ? <button onClick={() => setFilters(EMPTY_FILTERS)} title="Clear every filter" style={clearBtn}>clear</button>
+                      : null}
+                  </th>
+                  <th style={fth}>
+                    <input value={filters.symbol} onChange={e => setFilters(f => ({ ...f, symbol: e.target.value }))}
+                      placeholder="ticker or name" style={{ ...fInput, minWidth: 96 }} />
+                  </th>
+                  <th style={fth}>
+                    <select value={filters.sector} onChange={e => setFilters(f => ({ ...f, sector: e.target.value }))} style={{ ...fInput, minWidth: 96 }}>
+                      <option value="">all</option>
+                      {sectors.map(x => <option key={x} value={x}>{x}</option>)}
+                    </select>
+                  </th>
+                  <th style={fth}>
+                    <span style={{ display: 'flex', gap: '0.2rem' }}>
+                      <input type="number" value={filters.minPrice} onChange={e => setFilters(f => ({ ...f, minPrice: e.target.value }))} placeholder="min" style={{ ...fInput, width: 52 }} />
+                      <input type="number" value={filters.maxPrice} onChange={e => setFilters(f => ({ ...f, maxPrice: e.target.value }))} placeholder="max" style={{ ...fInput, width: 52 }} />
+                    </span>
+                  </th>
+                  <th style={fth}>
+                    <input type="number" value={filters.minScore} onChange={e => setFilters(f => ({ ...f, minScore: e.target.value }))} placeholder="≥" style={{ ...fInput, width: 46 }} />
+                  </th>
+                  {FACTORS.map(f => (
+                    <th key={f.key} style={fth}>
+                      <input type="number" min="0" max="100" value={filters.pct[f.key] ?? ''} onChange={e => setPct(f.key, e.target.value)}
+                        placeholder="pct ≥" title={`Show only stocks in the ${f.label} percentile at or above this`} style={{ ...fInput, width: 58 }} />
+                    </th>
+                  ))}
+                  <th style={fth}>
+                    <select value={filters.flag} onChange={e => setFilters(f => ({ ...f, flag: e.target.value }))} style={{ ...fInput, minWidth: 96 }}>
+                      <option value="">any</option>
+                      {FLAG_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                    </select>
+                  </th>
+                </tr>
+              </thead>
               <tbody>
                 {top.map(r => (
                   <tr key={r.symbol} onClick={() => navigate(`/us/${encodeURIComponent(r.symbol)}`)} style={{ cursor: 'pointer' }}>
@@ -256,7 +380,19 @@ export default function UsStockPicks() {
                 ))}
               </tbody>
             </table>
+            {!top.length && (
+              <p style={{ padding: '1rem 0.5rem', margin: 0, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                No stock in the ranking matches these filters. <button onClick={() => setFilters(EMPTY_FILTERS)} style={{ ...clearBtn, marginLeft: '0.3rem' }}>clear filters</button>
+              </p>
+            )}
           </div>
+          {isFiltered && (
+            <p style={{ fontSize: '0.72rem', color: '#fbbf24', margin: '0.5rem 0 0' }}>
+              Filtered: showing {top.length} of {matching.length} matching, out of {ranked.length} ranked. The # column is the
+              rank in the full ranking, so gaps are real. Filters narrow the view only — they do not re-rank anything, and the
+              badges above score the recorded default-weight picks regardless of what is shown here.
+            </p>
+          )}
           <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: '0.5rem 0 0' }}>
             Factors percentile-ranked across {ranked.length} stocks as of {data.period.snapshotDate}. Momentum {fmtPct(top[0]?.factors.momentumRaw == null ? null : top[0].factors.momentumRaw * 100)} means the #1 name's 252-session return, skipping the latest 21. Not investment advice.
           </p>
