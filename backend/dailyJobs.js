@@ -79,6 +79,37 @@ async function picksSnapshotDue() {
   return { due: snapshotIsDue(bhavLast, snapLast), bhavLast, snapLast };
 }
 
+/**
+ * Is a US picks snapshot due?
+ *
+ * The SPY bar is the trigger, not a clock. It is due when the newest SPY daily
+ * bar is newer than the newest snapshot AND that session has closed — the bar
+ * is from a previous UTC day, or it is today and the clock is past 21:00 UTC
+ * (16:00 ET plus settlement, in either DST regime). Before that Alpaca serves
+ * a partial bar and a snapshot taken from it would record prices nobody could
+ * have closed at.
+ */
+function usSnapshotDue(spyLast, snapLast, now = new Date()) {
+  if (!spyLast) return false;
+  if (snapLast && snapLast >= spyLast) return false;
+  const todayUtc = now.toISOString().slice(0, 10);
+  if (spyLast < todayUtc) return true;
+  return now.getUTCHours() >= 21;
+}
+
+async function runUsPickSnapshot() {
+  const { fetchBarsMulti } = require('./alpacaData');
+  const start = new Date(); start.setDate(start.getDate() - 10);
+  const spy = (await fetchBarsMulti(['SPY'], start)).SPY || [];
+  const spyLast = spy.length ? String(spy[spy.length - 1].date).slice(0, 10) : null;
+  const snapLast = await latestDate('us_pick_snapshots', 'snap_date');
+  if (!usSnapshotDue(spyLast, snapLast)) return { skipped: 'not due', spyLast, snapLast };
+  const { buildUsFactorUniverse, saveDailySnapshot } = require('./usPicks/engine');
+  const universe = await buildUsFactorUniverse();
+  const r = await saveDailySnapshot(universe);
+  return { ...r, spyLast, was: snapLast };
+}
+
 // Injected by server.js, because pulling trades needs the live Kite MCP client
 // which lives there. Absent (no server, or MCP down) simply skips the job.
 let syncTradesFn = null;
@@ -99,7 +130,7 @@ function registerStopProposals(fn) { stopProposalsFn = fn; }
  * to also stop recording price signals.
  */
 async function runDailyJobs({ force = false } = {}) {
-  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null, stops: null, macro: null };
+  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null, stops: null, macro: null, usPicks: null };
 
   // Trades first, and on EVERY tick rather than once a day. Kite exposes only
   // the CURRENT day's fills, so a day this does not run is a day whose trades
@@ -227,6 +258,18 @@ async function runDailyJobs({ force = false } = {}) {
     console.warn('[daily] macro monitor failed (will retry next tick):', err.message);
   }
 
+  // US picks. Same standard as the Indian snapshot — written before the
+  // outcome exists, completion decided by the table. Fails softly when the
+  // table has not been migrated or Alpaca is not configured.
+  try {
+    const r = await runUsPickSnapshot();
+    out.usPicks = r;
+    if (r?.saved) console.log(`[daily] US picks snapshot ${r.snapDate}: ${r.saved} rows`);
+  } catch (err) {
+    out.usPicks = { error: err.message };
+    console.warn('[daily] US picks snapshot failed (will retry next tick):', err.message);
+  }
+
   return out;
 }
 
@@ -248,4 +291,4 @@ function startDailyJobs() {
   return () => { clearTimeout(first); clearInterval(timer); };
 }
 
-module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, registerStopProposals, picksSnapshotDue, snapshotIsDue, isoMinus };
+module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, registerStopProposals, picksSnapshotDue, snapshotIsDue, isoMinus, usSnapshotDue, runUsPickSnapshot };

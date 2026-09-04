@@ -5948,6 +5948,10 @@ app.post('/api/stock-picks/summary', async (req, res) => {
   }
 });
 
+// US quant picks. Mounted before /api/us so its prefix wins the match.
+const { usPicksRouter } = require('./usPicks/routes');
+app.use('/api/us/stock-picks', usPicksRouter);
+
 // ─── US market data (Alpaca) ───────────────────────────────────
 app.use('/api/us', alpacaRouter);
 // Crypto is a different Alpaca API (v1beta3, pair symbols, no feed param), so

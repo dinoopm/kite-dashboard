@@ -15,6 +15,7 @@ const inputs = (over = {}) => ({
   earningsBySymbol: new Map(),
   revisionsBySymbol: new Map([['UP', 0.8]]),
   revisionsMissing: 2,
+  revisionsFailed: 3,
   macroLabel: 'neutral',
   ...over,
 });
@@ -68,6 +69,23 @@ describe('buildUniverseFrom', () => {
     assert.equal(u.regime.macro, 'neutral');
     assert.ok(['risk-on', 'risk-off', 'mixed'].includes(u.regime.breadth.label));
     assert.match(u.regime.label, /Breadth/);
+  });
+
+  // revisions.fetchRevisions distinguishes symbols Yahoo genuinely has no
+  // estimates for (`missing`) from symbols whose fetch THREW (`failed`) — a
+  // network blip vs real information. Both counts have to survive the trip
+  // from loadInputs through buildUniverseFrom to the API response, or a day
+  // when hundreds of fetches failed looks identical to a day of genuine
+  // non-coverage.
+  test('revisionsFailed survives the trip from inputs to the universe', () => {
+    const u = buildUniverseFrom(inputs());
+    assert.equal(u.revisionsFailed, 3);
+  });
+
+  test('revisionsFailed defaults to 0 when absent from inputs', () => {
+    const { revisionsFailed, ...rest } = inputs();
+    const u = buildUniverseFrom(rest);
+    assert.equal(u.revisionsFailed, 0);
   });
 });
 

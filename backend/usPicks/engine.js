@@ -84,14 +84,15 @@ async function loadInputs({ from = null, includeRevisions = true, includeEarning
   const [raw, earningsBySymbol, revisions, macroLabel] = await Promise.all([
     fetchBarsMulti([...symbols, BENCHMARK], start),
     includeEarnings ? loadEarnings() : new Map(),
-    includeRevisions ? fetchRevisions(symbols) : { bySymbol: new Map(), missing: 0 },
+    includeRevisions ? fetchRevisions(symbols) : { bySymbol: new Map(), missing: 0, failed: 0 },
     loadMacroLabel(),
   ]);
   const barsBySymbol = {};
   for (const s of symbols) if (raw[s]?.length) barsBySymbol[s] = normaliseBars(raw[s]);
   return {
     members, barsBySymbol, spyBars: normaliseBars(raw[BENCHMARK]),
-    earningsBySymbol, revisionsBySymbol: revisions.bySymbol, revisionsMissing: revisions.missing, macroLabel,
+    earningsBySymbol, revisionsBySymbol: revisions.bySymbol, revisionsMissing: revisions.missing,
+    revisionsFailed: revisions.failed, macroLabel,
   };
 }
 
@@ -125,7 +126,7 @@ function sessionsUntil(fromDate, toDate) {
 }
 
 function buildUniverseFrom(inputs, { asOf = null, momentum = {} } = {}) {
-  const { members, barsBySymbol, spyBars, earningsBySymbol, revisionsBySymbol, revisionsMissing, macroLabel } = inputs;
+  const { members, barsBySymbol, spyBars, earningsBySymbol, revisionsBySymbol, revisionsMissing, revisionsFailed, macroLabel } = inputs;
   const spyIdx = indexAsOf(spyBars, asOf);
   if (spyIdx < 0) throw new Error('No SPY bars on or before asOf');
   const snapshotDate = spyBars[spyIdx].date;
@@ -188,6 +189,7 @@ function buildUniverseFrom(inputs, { asOf = null, momentum = {} } = {}) {
     regime,
     excludedCount, excludedSample,
     revisionsMissing: revisionsMissing ?? 0,
+    revisionsFailed: revisionsFailed ?? 0,
     universeSize: stocks.length,
     generatedAt: new Date().toISOString(),
     stocks,
