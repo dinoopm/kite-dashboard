@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import { fmtDate } from '../../lib/formatDate'
 import SignalScore from '../../components/SignalScore'
 import DataHealthBanner from '../../components/DataHealthBanner'
+import { percentileRanks } from '../../lib/picksRank'
 
 // ─── Quant Stock Picks ───────────────────────────────────────────────────────
 // Deterministic factor ranking over the six market-data feeds for a chosen
@@ -36,22 +37,6 @@ const PRESETS = [
 // Sliders/toggles survive reloads; the daily snapshot always uses DEFAULT_WEIGHTS.
 const PREFS_KEY = 'stockPicks.prefs.v1'
 const loadPrefs = () => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {} } catch { return {} } }
-
-// Mid-rank percentile (0–100) of each value within the array. Ties share the
-// MIDDLE of their block — most stocks sit at 0 on any given factor (e.g. no
-// large deals), and max-rank ties would reward having no data at all.
-function percentileRanks(values) {
-  const sorted = [...values].sort((a, b) => a - b)
-  const n = sorted.length
-  return values.map(v => {
-    let lo = 0, hi = n
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < v) lo = mid + 1; else hi = mid }
-    const first = lo // count of values < v
-    hi = n
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] <= v) lo = mid + 1; else hi = mid }
-    return n ? ((first + lo) / 2 / n) * 100 : 0 // lo = count of values <= v
-  })
-}
 
 // 'NSE:NIFTY ENERGY' -> 'Energy'; 'NSE:NIFTY FIN SERVICE' -> 'Fin Service'.
 const fmtSector = (s) => (!s ? '—' : s.replace(/^NSE:NIFTY\s*/i, '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) || '—')
