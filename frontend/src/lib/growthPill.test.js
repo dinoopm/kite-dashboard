@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { growthPill, expensePill, marginPill, cashflowPill, signChangePill } from './growthPill.js'
+import { growthPill, expensePill, marginPill, cashflowPill, signChangePill, profitYoYSummary } from './growthPill.js'
 
 describe('growthPill', () => {
   test('reports ordinary growth as a signed percentage', () => {
@@ -129,5 +129,66 @@ describe('signChangePill', () => {
 
   test('accepts custom vocabulary', () => {
     assert.equal(signChangePill(10, -10, { neg: 'deficit', pos: 'surplus' }).label, 'deficit → surplus')
+  })
+})
+
+describe('profitYoYSummary', () => {
+  const pairs = (...xs) => xs.map(([curr, prev]) => ({ curr, prev }))
+
+  test('reports an ordinary percentage when every side is positive', () => {
+    const s = profitYoYSummary(pairs([120, 100], [141, 293]))
+    assert.equal(s.pill, null)
+    assert.equal(s.latest.toFixed(1), '-51.9')
+    assert.equal(s.considered, 2)
+    assert.equal(s.signChanges, 0)
+  })
+
+  // The defect this exists to prevent: Q1 FY27 lost ₹27 Cr against a ₹64 Cr
+  // loss a year earlier and the card said "NET PROFIT YOY ↑ +57.8%" in green.
+  test('shows the transition, not a percentage, when the latest period lost money', () => {
+    const s = profitYoYSummary(pairs([180, 293], [-27, -64]))
+    assert.equal(s.latest, null, 'no number may be shown off a negative base')
+    assert.equal(s.pill.label, 'loss narrower')
+    assert.equal(s.signChanges, 1)
+  })
+
+  test('a slide from profit into loss is not counted as an improvement', () => {
+    const s = profitYoYSummary(pairs([-30, 50]))
+    assert.equal(s.wins, 0)
+    assert.equal(s.pill.label, 'profit → loss')
+    assert.equal(s.latest, null)
+  })
+
+  test('a return to profit counts, and still shows no percentage', () => {
+    const s = profitYoYSummary(pairs([334, -160]))
+    assert.equal(s.wins, 1)
+    assert.equal(s.pill.label, 'loss → profit')
+    assert.equal(s.latest, null)
+  })
+
+  // Counting `pct > 0` off the |prev| ratio scored this quarter as one that
+  // "grew", so the caption read "Grew in 1 of last 4 quarters" for a company
+  // whose profit never once grew.
+  test('a narrowing loss improved but did not grow', () => {
+    const s = profitYoYSummary(pairs([-27, -64]))
+    assert.equal(s.wins, 1, 'losing less is an improvement')
+    assert.ok(s.signChanges > 0, 'and the caller must not call it growth')
+  })
+
+  test('a widening loss is neither', () => {
+    const s = profitYoYSummary(pairs([-64, -27]))
+    assert.equal(s.wins, 0)
+    assert.equal(s.pill.label, 'loss wider')
+  })
+
+  test('skips periods with no comparable base without shrinking the rest', () => {
+    const s = profitYoYSummary(pairs([100, null], [150, 0], [120, 100]))
+    assert.equal(s.considered, 1)
+    assert.equal(s.latest.toFixed(1), '20.0')
+  })
+
+  test('carries the caller vocabulary through to the transition label', () => {
+    const s = profitYoYSummary(pairs([-5, -9]), { neg: 'outflow', pos: 'inflow' })
+    assert.equal(s.pill.label, 'outflow narrower')
   })
 })

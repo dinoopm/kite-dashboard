@@ -8,7 +8,7 @@ import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 import AlertRow from '../components/alerts/AlertRow'
 import SignalChart from '../components/SignalChart'
 import { generateSignals } from '../lib/signalEngine'
-import { growthPill, expensePill, marginPill, cashflowPill } from '../lib/growthPill'
+import { growthPill, expensePill, marginPill, cashflowPill, profitYoYSummary } from '../lib/growthPill'
 import { quoteCandidates, pickQuote } from '../lib/pickQuote'
 import ConvictionModal from '../components/alerts/ConvictionModal'
 import TradePlanModal from '../components/alerts/TradePlanModal'
@@ -2466,17 +2466,20 @@ function Instrument() {
           const opmSeqDelta = (latestOpm != null && prevPeriodOpm != null) ? latestOpm - prevPeriodOpm : null;
           const opmSeqLabel = prevPeriodRow?.label || null;
 
-          // Net Profit YoY hit-rate + latest YoY
-          let npYoYWins = 0, npYoYConsidered = 0, latestNpYoY = null;
-          last4.forEach((q, i) => {
+          // Net Profit YoY hit-rate + latest YoY.
+          //
+          // Net profit is the one headline on this card that goes negative, so
+          // it obeys the same rule as the rows below it: a percentage is only
+          // meaningful from a POSITIVE base. Dividing by |prev| stops the sign
+          // inverting but does not make the ratio mean anything — a ₹64 Cr loss
+          // narrowing to ₹27 Cr came out as "NET PROFIT YOY ↑ +57.8%" in green,
+          // directly above a row correctly reading "YoY loss → narrower", for a
+          // quarter the company lost money. profitYoYSummary (lib/growthPill.js,
+          // tested there) returns a transition instead of a number in that case.
+          const npYoY = profitYoYSummary(last4.map(q => {
             const py = yoyBaseOf(q);
-            if (py && py.netProfit != null && q.netProfit != null && py.netProfit !== 0) {
-              npYoYConsidered += 1;
-              const pct = ((q.netProfit - py.netProfit) / Math.abs(py.netProfit)) * 100;
-              if (pct > 0) npYoYWins += 1;
-              if (i === last4.length - 1) latestNpYoY = pct;
-            }
-          });
+            return { curr: q?.netProfit ?? null, prev: py?.netProfit ?? null };
+          }));
 
           // Cautionary flags
           const flags = [];
@@ -2529,7 +2532,7 @@ function Instrument() {
           return {
             salesYoY: { wins: salesYoYWins, considered: salesYoYConsidered, latest: latestSalesYoY },
             opm: { latest: latestOpm, avg4q: opm4qAvg, prevAvg4q: opmPrev4qAvg, cardDelta: opmCardDelta, ttmDelta: opmTtmDelta, seqDelta: opmSeqDelta, seqLabel: opmSeqLabel },
-            np: { wins: npYoYWins, considered: npYoYConsidered, latest: latestNpYoY },
+            np: npYoY,
             flags,
             latestLabel: latest?.label,
           };
@@ -2657,12 +2660,21 @@ function Instrument() {
                   {/* Net Profit trend */}
                   <div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Net Profit YoY</div>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snapshot.np.latest), marginTop: '0.2rem' }}>
-                      {arrow(snapshot.np.latest)} {snapshot.np.latest == null ? '—' : `${snapshot.np.latest >= 0 ? '+' : ''}${snapshot.np.latest.toFixed(1)}%`}
-                    </div>
+                    {snapshot.np.pill ? (
+                      <div style={{ fontSize: '1.05rem', fontWeight: snapshot.np.pill.weight, color: snapshot.np.pill.color, marginTop: '0.2rem', textTransform: 'capitalize' }}>
+                        {snapshot.np.pill.label}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snapshot.np.latest), marginTop: '0.2rem' }}>
+                        {arrow(snapshot.np.latest)} {snapshot.np.latest == null ? '—' : `${snapshot.np.latest >= 0 ? '+' : ''}${snapshot.np.latest.toFixed(1)}%`}
+                      </div>
+                    )}
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
                       {snapshot.np.considered > 0
-                        ? `Grew in ${snapshot.np.wins} of last ${snapshot.np.considered} ${periodNoun}`
+                        // "Grew" is wrong for a window containing a loss — a
+                        // narrowing loss improved without growing. The verb
+                        // follows the data rather than the other way round.
+                        ? `${snapshot.np.signChanges > 0 ? 'Improved' : 'Grew'} in ${snapshot.np.wins} of last ${snapshot.np.considered} ${periodNoun}`
                         : 'Insufficient YoY history'}
                     </div>
                   </div>

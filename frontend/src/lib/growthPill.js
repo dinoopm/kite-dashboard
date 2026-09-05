@@ -95,3 +95,40 @@ export function marginPill(curr, prev) {
 /** Cash-flow wording: investing and financing lines are negative by nature. */
 export const cashflowPill = (curr, prev) =>
   growthPill(curr, prev, { neg: 'outflow', pos: 'inflow' });
+
+/**
+ * The Net Profit YoY card on the P&L snapshot: latest change, plus how often
+ * profit improved across the visible window.
+ *
+ * Extracted for the same reason as the pills, and it obeys the same rule. The
+ * card used to divide by |prev| and print the result whatever the signs were,
+ * so a ₹64 Cr loss narrowing to a ₹27 Cr loss showed as "↑ +57.8%" in green
+ * directly above a row that correctly read "loss → narrower" — for a quarter
+ * the company lost money. `pill` is set instead of `latest` whenever either
+ * side is negative, and the caller renders the transition with no number.
+ *
+ * `wins` counts periods where net profit ROSE, which is one test that works
+ * across a sign change and reduces to "pct > 0" when both sides are positive:
+ * a narrowing loss improved, a slide into loss did not. Counting `pct > 0` off
+ * the |prev| ratio scored a loss-making period as one that grew.
+ *
+ * `signChanges` lets the caller pick its verb: "grew" is wrong for a window
+ * containing a loss, where "improved" is the honest word.
+ *
+ * @param pairs [{ curr, prev }] oldest → newest; the last entry is "latest".
+ */
+export function profitYoYSummary(pairs, words) {
+  let wins = 0, considered = 0, latest = null, pill = null, signChanges = 0
+  pairs.forEach(({ curr, prev }, i) => {
+    if (curr == null || prev == null || prev === 0) return
+    considered += 1
+    const signChange = signChangePill(curr, prev, words)
+    if (signChange) signChanges += 1
+    if (curr > prev) wins += 1
+    if (i === pairs.length - 1) {
+      pill = signChange
+      latest = signChange ? null : ((curr - prev) / prev) * 100
+    }
+  })
+  return { wins, considered, latest, pill, signChanges }
+}
