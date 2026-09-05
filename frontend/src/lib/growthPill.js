@@ -119,7 +119,7 @@ export const cashflowPill = (curr, prev) =>
  */
 export function profitYoYSummary(pairs, words) {
   let wins = 0, considered = 0, latest = null, pill = null, signChanges = 0
-  let latestCurr = null, latestPrev = null
+  let latestCurr = null, latestPrev = null, magnitudePct = null
   pairs.forEach(({ curr, prev }, i) => {
     if (curr == null || prev == null || prev === 0) return
     considered += 1
@@ -129,6 +129,18 @@ export function profitYoYSummary(pairs, words) {
     if (i === pairs.length - 1) {
       pill = signChange
       latest = signChange ? null : ((curr - prev) / prev) * 100
+      // When BOTH sides are negative there is a percentage worth showing — but
+      // it measures the SIZE OF THE LOSS, not profit. A ₹64 Cr loss becoming
+      // ₹27 Cr is the loss down 57.8%; calling that "net profit +57.8%" was the
+      // original defect. Same arithmetic, honest subject, so the caller labels
+      // it "loss down/up" and never as growth.
+      //
+      // Left null across a sign flip on purpose: from −64 to +141 the base
+      // changes sign, so no percentage describes the move at all — only the two
+      // amounts do.
+      if (curr < 0 && prev < 0) {
+        magnitudePct = ((Math.abs(prev) - Math.abs(curr)) / Math.abs(prev)) * 100
+      }
       // The two amounts, always. Refusing the ratio is not a reason to withhold
       // the magnitude: "loss narrower" alone says less than the card did before,
       // and −27 against −64 is the fact the percentage was a bad summary OF.
@@ -138,5 +150,5 @@ export function profitYoYSummary(pairs, words) {
       latestPrev = prev
     }
   })
-  return { wins, considered, latest, pill, signChanges, latestCurr, latestPrev }
+  return { wins, considered, latest, pill, signChanges, latestCurr, latestPrev, magnitudePct }
 }

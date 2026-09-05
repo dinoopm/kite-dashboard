@@ -218,3 +218,35 @@ describe('profitYoYSummary figures', () => {
     assert.equal(s.considered, 0)
   })
 })
+
+describe('profitYoYSummary magnitudePct', () => {
+  const pairs = (...xs) => xs.map(([curr, prev]) => ({ curr, prev }))
+
+  // The number the card originally printed as "+57.8% net profit growth". It is
+  // a real measurement — of the loss, which shrank by that much — so it is shown
+  // under a label that says so rather than suppressed.
+  test('measures how much a loss shrank', () => {
+    const s = profitYoYSummary(pairs([-27, -64]))
+    assert.equal(s.magnitudePct.toFixed(1), '57.8')
+    assert.equal(s.pill.label, 'loss narrower')
+    assert.equal(s.latest, null, 'still no profit-growth percentage')
+  })
+
+  test('is negative when the loss widened', () => {
+    const s = profitYoYSummary(pairs([-64, -27]))
+    assert.ok(s.magnitudePct < 0)
+    assert.equal(s.magnitudePct.toFixed(1), '-137.0')
+  })
+
+  // Across zero the base changes sign, so no percentage describes the move.
+  test('stays null across a sign flip in either direction', () => {
+    assert.equal(profitYoYSummary(pairs([334, -160])).magnitudePct, null)
+    assert.equal(profitYoYSummary(pairs([-30, 50])).magnitudePct, null)
+  })
+
+  test('stays null when both sides are positive, where `latest` already applies', () => {
+    const s = profitYoYSummary(pairs([141, 293]))
+    assert.equal(s.magnitudePct, null)
+    assert.equal(s.latest.toFixed(1), '-51.9')
+  })
+})

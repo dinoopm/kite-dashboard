@@ -2672,6 +2672,15 @@ function Instrument() {
                         </div>
                         <div style={{ fontSize: '0.78rem', color: 'var(--text-primary)', marginTop: '0.1rem', fontVariantNumeric: 'tabular-nums' }}>
                           {fmtCr(snapshot.np.latestCurr)} <span style={{ color: 'var(--text-secondary)' }}>vs {fmtCr(snapshot.np.latestPrev)} YoY</span>
+                          {snapshot.np.magnitudePct != null && (
+                            // Labelled by what it measures. This is the same
+                            // 57.8% the card used to print as profit growth —
+                            // it is the LOSS that moved by it, and saying so is
+                            // the difference between a figure and a false claim.
+                            <span style={{ color: snapshot.np.magnitudePct >= 0 ? '#10b981' : '#ef4444' }}>
+                              {' · loss '}{snapshot.np.magnitudePct >= 0 ? 'down' : 'up'} {Math.abs(snapshot.np.magnitudePct).toFixed(1)}%
+                            </span>
+                          )}
                         </div>
                       </div>
                     ) : (
