@@ -2661,12 +2661,29 @@ function Instrument() {
                   <div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Net Profit YoY</div>
                     {snapshot.np.pill ? (
-                      <div style={{ fontSize: '1.05rem', fontWeight: snapshot.np.pill.weight, color: snapshot.np.pill.color, marginTop: '0.2rem', textTransform: 'capitalize' }}>
-                        {snapshot.np.pill.label}
+                      // The transition, then the two amounts. Withholding the
+                      // percentage is a refusal to divide by a negative base,
+                      // not a refusal to say what happened: −₹27 Cr against
+                      // −₹64 Cr is the fact the ratio was a bad summary of, and
+                      // it reads without any sign trap.
+                      <div style={{ marginTop: '0.2rem' }}>
+                        <div style={{ fontSize: '1.05rem', fontWeight: snapshot.np.pill.weight, color: snapshot.np.pill.color, textTransform: 'capitalize' }}>
+                          {snapshot.np.pill.label}
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-primary)', marginTop: '0.1rem', fontVariantNumeric: 'tabular-nums' }}>
+                          {fmtCr(snapshot.np.latestCurr)} <span style={{ color: 'var(--text-secondary)' }}>vs {fmtCr(snapshot.np.latestPrev)} YoY</span>
+                        </div>
                       </div>
                     ) : (
-                      <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snapshot.np.latest), marginTop: '0.2rem' }}>
-                        {arrow(snapshot.np.latest)} {snapshot.np.latest == null ? '—' : `${snapshot.np.latest >= 0 ? '+' : ''}${snapshot.np.latest.toFixed(1)}%`}
+                      <div style={{ marginTop: '0.2rem' }}>
+                        <div style={{ fontSize: '1.05rem', fontWeight: 700, color: trendColor(snapshot.np.latest) }}>
+                          {arrow(snapshot.np.latest)} {snapshot.np.latest == null ? '—' : `${snapshot.np.latest >= 0 ? '+' : ''}${snapshot.np.latest.toFixed(1)}%`}
+                        </div>
+                        {snapshot.np.latestCurr != null && (
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-primary)', marginTop: '0.1rem', fontVariantNumeric: 'tabular-nums' }}>
+                            {fmtCr(snapshot.np.latestCurr)} <span style={{ color: 'var(--text-secondary)' }}>vs {fmtCr(snapshot.np.latestPrev)} YoY</span>
+                          </div>
+                        )}
                       </div>
                     )}
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>

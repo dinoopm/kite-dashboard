@@ -119,6 +119,7 @@ export const cashflowPill = (curr, prev) =>
  */
 export function profitYoYSummary(pairs, words) {
   let wins = 0, considered = 0, latest = null, pill = null, signChanges = 0
+  let latestCurr = null, latestPrev = null
   pairs.forEach(({ curr, prev }, i) => {
     if (curr == null || prev == null || prev === 0) return
     considered += 1
@@ -128,7 +129,14 @@ export function profitYoYSummary(pairs, words) {
     if (i === pairs.length - 1) {
       pill = signChange
       latest = signChange ? null : ((curr - prev) / prev) * 100
+      // The two amounts, always. Refusing the ratio is not a reason to withhold
+      // the magnitude: "loss narrower" alone says less than the card did before,
+      // and −27 against −64 is the fact the percentage was a bad summary OF.
+      // Absolute figures carry no sign trap, so they are safe where the ratio
+      // is not, and the caller renders them under the qualitative label.
+      latestCurr = curr
+      latestPrev = prev
     }
   })
-  return { wins, considered, latest, pill, signChanges }
+  return { wins, considered, latest, pill, signChanges, latestCurr, latestPrev }
 }

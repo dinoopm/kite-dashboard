@@ -192,3 +192,29 @@ describe('profitYoYSummary', () => {
     assert.equal(s.pill.label, 'outflow narrower')
   })
 })
+
+describe('profitYoYSummary figures', () => {
+  const pairs = (...xs) => xs.map(([curr, prev]) => ({ curr, prev }))
+
+  // Refusing the ratio must not also withhold the amounts — "loss narrower" on
+  // its own tells the reader less than the wrong percentage did.
+  test('carries both latest amounts through a sign change', () => {
+    const s = profitYoYSummary(pairs([180, 293], [-27, -64]))
+    assert.equal(s.latestCurr, -27)
+    assert.equal(s.latestPrev, -64)
+    assert.equal(s.latest, null)
+  })
+
+  test('carries them for an ordinary percentage too', () => {
+    const s = profitYoYSummary(pairs([141, 293]))
+    assert.equal(s.latestCurr, 141)
+    assert.equal(s.latestPrev, 293)
+  })
+
+  test('leaves them null when no period had a comparable base', () => {
+    const s = profitYoYSummary(pairs([100, null], [150, 0]))
+    assert.equal(s.latestCurr, null)
+    assert.equal(s.latestPrev, null)
+    assert.equal(s.considered, 0)
+  })
+})
