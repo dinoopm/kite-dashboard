@@ -26,47 +26,68 @@ jobs:
           cache: 'npm'
           
       - name: Install Dependencies
+        id: install
         run: |
           npm ci || npm install
           cd backend && (npm ci || npm install)
 
+      # Every scraper below is gated on the install step, not on the step
+      # before it. They fetch independent feeds and share nothing but the
+      # Supabase client, so a scraper that dies has no bearing on the next one
+      # — but by default the first non-zero exit skips the whole rest of the
+      # job. On 2026-09-08 the volume-gainers scraper hit a navigation timeout
+      # and took the 52-week and bhavcopy steps with it, losing a session of
+      # nse_bhavcopy: the universe-wide price history every forward-return
+      # score is measured against, for the sake of a movers table.
+      #
+      # This is `if:`, deliberately, and not `continue-on-error: true`. The
+      # later steps run; the failed step still fails the job and the run still
+      # goes red. A green run over missing data is the one outcome worse than
+      # a red one.
       - name: Run FII/DII Scraper
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: node backend/scraper/sync.js
 
       - name: Run Participant OI Scraper
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: node backend/scraper/participant_oi.js
 
       - name: Run Large Deals Scraper
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: node backend/scraper/large_deals.js
 
       - name: Run Top Gainers/Losers Scraper
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: node backend/scraper/top_gainers_losers.js
 
       - name: Run Volume Gainers Scraper
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: node backend/scraper/volume_gainers.js
 
       - name: Run 52-Week High/Low Scraper
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: node backend/scraper/fifty_two_week_high_low.js
 
       - name: Run Bhavcopy Scraper
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

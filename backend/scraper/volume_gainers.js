@@ -40,17 +40,39 @@ async function run() {
             }
         });
 
-        // Establish session cookies via homepage first
+        // Warm the session cookies on the homepage, but never die on it. This
+        // step used waitUntil: 'networkidle2' and it is what failed the whole
+        // Market Data Sync run on 2026-09-08 ("Navigation timeout of 60000 ms
+        // exceeded"): the NSE homepage carries ads and analytics that keep
+        // long-polling, so it may never have <=2 in-flight requests for 500ms
+        // and networkidle2 there is a coin flip on a slow runner. The two
+        // sibling puppeteer scrapers (large_deals, top_gainers_losers) skip
+        // the homepage entirely and have never failed this way, so the warm-up
+        // is at best a nicety — the page navigation below sets the same
+        // cookies. Kept, because it costs a second and may still help under
+        // rate limiting, but on domcontentloaded and non-fatal.
         console.log("[VolGain] Establishing NSE session...");
-        await page.goto('https://www.nseindia.com', { waitUntil: 'networkidle2', timeout: 60000 });
-        await new Promise(r => setTimeout(r, 2000));
+        try {
+            await page.goto('https://www.nseindia.com', { waitUntil: 'domcontentloaded', timeout: 20000 });
+            await new Promise(r => setTimeout(r, 2000));
+        } catch (e) {
+            console.warn(`[VolGain] Session warm-up skipped: ${e.message}`);
+        }
 
         console.log("[VolGain] Loading volume gainers page...");
         await page.goto('https://www.nseindia.com/market-data/volume-gainers-spurts', {
-            waitUntil: 'networkidle2',
+            waitUntil: 'domcontentloaded',
             timeout: 60000
         });
-        await new Promise(r => setTimeout(r, 5000));
+
+        // Wait for the XHR we actually want rather than for the network to
+        // fall quiet, then stop the moment it lands. The old fixed 5s sleep
+        // after networkidle2 was both slower on a good day and too short on a
+        // bad one; the response handler above is the only thing that matters.
+        const deadline = Date.now() + 45000;
+        while (!volumeJson && Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 500));
+        }
 
         await browser.close();
         browser = null;
