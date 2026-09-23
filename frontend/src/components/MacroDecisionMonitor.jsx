@@ -149,6 +149,46 @@ function ContributionBar({ contribution }) {
 }
 
 /**
+ * The panel's record against the Fed, shown where the claim is made.
+ *
+ * Same rule as SignalScore: a track record belongs next to the thing it judges,
+ * not on a validation page nobody opens. This one refuses to quote a hit rate
+ * below the sample floor — eight meetings a year means twenty decisions is
+ * years away, and "1 of 1" rendered as 100% would be worse than saying nothing.
+ *
+ * A meeting that has been announced but whose target range FRED has not
+ * published yet is reported as awaiting data, never folded into either column.
+ */
+function FomcRecord() {
+  const [rec, setRec] = useState(null)
+
+  useEffect(() => {
+    let on = true
+    fetch('/api/macro/fomc-scorecard')
+      .then(r => r.json())
+      .then(j => { if (on && !j.error) setRec(j) })
+      .catch(() => { /* the record is a footnote; its absence must not break the panel */ })
+    return () => { on = false }
+  }, [])
+
+  if (!rec) return null
+  const pending = rec.pending?.length || 0
+  const title = [
+    `Every FOMC decision since ${rec.since}, checked against the bias this panel had recorded BEFORE the announcement.`,
+    rec.note,
+    `Below ${rec.minResolved} resolved decisions no rate is quoted at all.`,
+    pending ? 'A pending meeting has been announced but its new target range has not appeared in DFEDTARU yet, so it counts as neither a hit nor a miss.' : '',
+  ].filter(Boolean).join('\n\n')
+
+  return (
+    <div style={{ fontSize: '0.68rem', color: rec.tooFew ? GREY : 'var(--text-primary)', marginTop: '0.15rem' }} title={title}>
+      Record vs FOMC: {rec.verdict}
+      {pending > 0 && <span style={{ color: AMBER }}> · {pending} awaiting the rate print</span>}
+    </div>
+  )
+}
+
+/**
  * The halves behind a blended component, printed as arithmetic.
  *
  * A single blended number can be zero because nothing is happening or because
@@ -262,6 +302,7 @@ export default function MacroDecisionMonitor() {
           <div style={{ fontSize: '0.68rem', color: GREY }}>
             Macro score: {signed(d.composite.score, 3)} · not a Fed forecast
           </div>
+          <FomcRecord />
         </div>
 
         <div>

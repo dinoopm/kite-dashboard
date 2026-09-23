@@ -5320,6 +5320,27 @@ app.get('/api/macro/monitor', async (req, res) => {
   }
 });
 
+// ─── GET /api/macro/fomc-scorecard — the panel's record against the Fed ─────
+// The policy interpretation printed by the monitor, checked against what the
+// FOMC actually did. Cached for six hours: the inputs are a daily snapshot, a
+// daily rate series and a calendar that changes twice a year.
+const { buildFomcScorecard } = require('./macro/fomcScorecard');
+let fomcScorecardCache = null; // { data, ts }
+const FOMC_SCORECARD_TTL = 6 * 60 * 60 * 1000;
+app.get('/api/macro/fomc-scorecard', async (req, res) => {
+  try {
+    if (!req.query.force && fomcScorecardCache && Date.now() - fomcScorecardCache.ts < FOMC_SCORECARD_TTL) {
+      return res.json({ ...fomcScorecardCache.data, cached: true });
+    }
+    const data = await buildFomcScorecard();
+    fomcScorecardCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[macro/fomc-scorecard]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Written read of the SAME computed regime — POST so it is never fetched by a
 // stray page load. The model narrates already-computed output and is handed
 // only the metrics, signals, thresholds, freshness and caveats; it never sees
