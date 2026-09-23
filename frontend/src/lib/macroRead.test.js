@@ -7,7 +7,7 @@ import {
   whatWouldChangeByDirection, distributeRounding, displayContributions,
   fresherCoreMeasure, nextPublishDate, approxWhen,
   PROVENANCE, inflationTargetLabel, payrollsDiverging, payrollHeadline,
-  payrollLevel, scoreAudit,
+  payrollLevel, scoreAudit, componentFactors,
 } from './macroRead.js'
 
 // The live payload from 2026-08-09, trimmed. Real numbers on purpose: the
@@ -36,7 +36,7 @@ const MONITOR = {
   thresholds: {
     inflation: { cool6m: 2.0, hot6m: 3.5 },
     labour: { payrollsCool: 50, payrollsHot: 200 },
-    wages: { yoyCool: 3.5, yoyHot: 4.5 },
+    wages: { yoyTarget: 3.5, yoyCool: 2.5, yoyHot: 4.5 },
     expectations: { levelCool: 2.15, levelHot: 2.60 },
     oil: { rocCool: -15, rocHot: 25 },
   },
@@ -48,6 +48,22 @@ describe('directionWord', () => {
     assert.equal(directionWord(0.04), 'Slightly re-accelerating')
   })
 
+  // The 2026-09-10 reading: +0.147 inflation against -0.150 wages summed to
+  // +0.0000653, which the old rule read the SIGN of and called "Slightly
+  // re-accelerating" — beside a regime badge saying Neutral and a number
+  // printed as +0.000. That sign is cancellation noise: a hundredth of a point
+  // on any component flips it.
+  test('a score that is only cancellation reads as balanced, not as a direction', () => {
+    assert.equal(directionWord(0.0000653), 'Balanced')
+    assert.equal(directionWord(-0.004), 'Balanced')
+    assert.equal(directionWord(0), 'Balanced')
+  })
+
+  test('still speaks as soon as the score is bigger than noise', () => {
+    assert.equal(directionWord(0.02), 'Slightly re-accelerating')
+    assert.equal(directionWord(-0.02), 'Slightly cooling')
+  })
+
   test('escalates with distance from the middle', () => {
     assert.equal(directionWord(-0.18), 'Cooling')
     assert.equal(directionWord(0.4), 'Firmly re-accelerating')
@@ -56,6 +72,22 @@ describe('directionWord', () => {
 
   test('says so when there is no score', () => {
     assert.equal(directionWord(null), 'No reading')
+  })
+})
+
+describe('interpretIndicator for wages', () => {
+  const at = (yoyPct) => interpretIndicator({ key: 'wages', yoyPct }, MONITOR_FOMC.thresholds, MONITOR_FOMC)
+
+  test('grades the reading against the target-consistent pace', () => {
+    assert.match(at(3.5), /At the target-consistent pace/)
+    assert.match(at(3.09), /Below target-consistent pace/)
+    assert.match(at(2.2), /Well below target-consistent pace/)
+    assert.match(at(4.0), /Somewhat above target-consistent pace/)
+    assert.match(at(4.8), /Above target-consistent pace/)
+  })
+
+  test('never calls a below-target reading consistent with target', () => {
+    assert.doesNotMatch(at(3.09), /Consistent with target/)
   })
 })
 
@@ -319,6 +351,89 @@ describe('explainShort', () => {
   })
 })
 
+// The live payload from 2026-09-16 — the day the FOMC raised to 3.75-4.00%
+// while this panel read Neutral / hold-compatible. Real numbers, because the
+// point of these sub-scores is exactly what that day exposed: three components
+// whose halves pointed in opposite directions and cancelled to a composite of
+// +0.036.
+const MONITOR_FOMC = {
+  composite: { score: 0.0359, regime: 'neutral', bias: 'hold-compatible', coverage: 1 },
+  signals: {
+    inflation: { score: 0.327, detail: { annualized6m: 3.46, annualized3m: 3.05, levelScore: 0.946, momentumScore: -0.823 } },
+    labour: { score: -0.029, detail: { payrollsScore: -0.7156, unemploymentScore: 1, avg3mChangeThousands: 71.3, unemploymentChangePp: -0.3 } },
+    wages: { score: -1, detail: { yoyPct: 3.086 } },
+    expectations: { score: 0.222, detail: { latest: 2.35, changePp: 0.21, levelScore: -0.1111, changeScore: 1 } },
+    oil: { score: 0.48, detail: { roc6mPct: 14.59 } },
+  },
+  thresholds: {
+    inflation: { cool6m: 2.0, hot6m: 3.5, momentumWeight: 0.35 },
+    labour: { payrollsCool: 50, payrollsHot: 200, unemploymentWeight: 0.4 },
+    wages: { yoyTarget: 3.5, yoyCool: 2.5, yoyHot: 4.5 },
+    expectations: { levelCool: 2.15, levelHot: 2.60, changeWeight: 0.30 },
+    oil: { rocCool: -15, rocHot: 25 },
+  },
+}
+
+describe('componentFactors', () => {
+  // A blended score hides its own disagreement. Inflation read 0.33 on FOMC day
+  // while its LEVEL half read 0.95 — near maximum pressure — and the Fed acted
+  // on the level. The panel had the number; it just never showed it.
+  test('splits a blended component into the halves that made it', () => {
+    const f = componentFactors('inflation', MONITOR_FOMC)
+    assert.equal(f.parts.length, 2)
+    assert.deepEqual(f.parts.map(p => p.label), ['Level', 'Momentum'])
+    assert.equal(f.parts[0].score, 0.946)
+    assert.equal(f.parts[0].weight, 0.65)
+    assert.equal(f.parts[1].score, -0.823)
+    assert.equal(f.parts[1].weight, 0.35)
+  })
+
+  test('the blend is recomputed from the parts, never restated from the signal', () => {
+    const f = componentFactors('inflation', MONITOR_FOMC)
+    assert.ok(Math.abs(f.blended - (0.946 * 0.65 + -0.823 * 0.35)) < 1e-9)
+    assert.ok(Math.abs(f.blended - MONITOR_FOMC.signals.inflation.score) < 0.005, 'and it agrees with the score it explains')
+  })
+
+  test('flags halves that point in opposite directions', () => {
+    assert.equal(componentFactors('inflation', MONITOR_FOMC).offsetting, true)
+    assert.equal(componentFactors('labour', MONITOR_FOMC).offsetting, true, 'payrolls -0.72 against unemployment +1.00')
+    assert.equal(componentFactors('expectations', MONITOR_FOMC).offsetting, true)
+  })
+
+  test('splits labour and expectations on their own weights', () => {
+    const l = componentFactors('labour', MONITOR_FOMC)
+    assert.deepEqual(l.parts.map(p => p.label), ['Payrolls', 'Unemployment'])
+    assert.equal(l.parts[1].weight, 0.4)
+    const e = componentFactors('expectations', MONITOR_FOMC)
+    assert.deepEqual(e.parts.map(p => p.label), ['Level', 'Change'])
+    assert.equal(e.parts[1].weight, 0.3)
+  })
+
+  // Wages have sat at exactly -1 for months: 3.5% YoY IS the floor of the
+  // scale, so 3.09% and 2.00% are indistinguishable and the component cannot
+  // move further down whatever wages do.
+  test('reports a single-input component that is pinned at the end of its scale', () => {
+    const f = componentFactors('wages', MONITOR_FOMC)
+    assert.equal(f.clamp, 'floor')
+    assert.deepEqual(f.parts, [])
+  })
+
+  test('says nothing about a single-input component inside its range', () => {
+    assert.equal(componentFactors('oil', MONITOR_FOMC), null)
+  })
+
+  test('says nothing when the blend could not be computed', () => {
+    const noMomentum = { ...MONITOR_FOMC, signals: { ...MONITOR_FOMC.signals, inflation: { score: 0.9, detail: { levelScore: 0.9, momentumScore: null } } } }
+    assert.equal(componentFactors('inflation', noMomentum), null)
+    assert.equal(componentFactors('inflation', MONITOR), null, 'an older payload without sub-scores degrades to silence')
+  })
+
+  test('says nothing about an unscored component', () => {
+    const dead = { ...MONITOR_FOMC, signals: { ...MONITOR_FOMC.signals, inflation: { score: null, reason: 'too stale' } } }
+    assert.equal(componentFactors('inflation', dead), null)
+  })
+})
+
 describe('componentInterpretation', () => {
   // A bar and a number alone leave the reader to invent the reason. Each line
   // is built from the same values that produced the contribution, so the two
@@ -330,6 +445,33 @@ describe('componentInterpretation', () => {
     assert.match(componentInterpretation('wages', MONITOR), /3\.15% year-over-year/)
     assert.match(componentInterpretation('expectations', MONITOR), /2\.28%/)
     assert.match(componentInterpretation('oil', MONITOR), /30\.88%/)
+  })
+
+  // 3.46% annualized was described as "close to target" while the same reading
+  // scored 0.94 of maximum inflation pressure, because the sentence treated
+  // everything from 2.0 to 3.5 as one flat band. Words and number must not
+  // disagree about the same figure.
+  test('does not call a reading close to target when it is scoring near maximum pressure', () => {
+    const hot = { ...MONITOR, signals: { ...MONITOR.signals, inflation: { score: 0.945, detail: { annualized6m: 3.46, annualized3m: 3.0 } } } }
+    const text = componentInterpretation('inflation', hot)
+    assert.match(text, /3\.46% annualized/)
+    assert.doesNotMatch(text, /close to target/)
+    assert.match(text, /above target/)
+  })
+
+  test('close to target is reserved for readings actually near it', () => {
+    const near = { ...MONITOR, signals: { ...MONITOR.signals, inflation: { score: 0.1, detail: { annualized6m: 2.2, annualized3m: 2.2 } } } }
+    assert.match(componentInterpretation('inflation', near), /is close to target/)
+  })
+
+  // The wage scale is anchored on the target-consistent pace now, so the words
+  // have to move with it: 3.09% is BELOW that pace, and the old wording — which
+  // read the -1 anchor as "the pace consistent with target" — would call the
+  // same reading consistent with target while the score called it cooling.
+  test('describes wages against the target-consistent pace, not the end of the scale', () => {
+    const text = componentInterpretation('wages', MONITOR_FOMC)
+    assert.match(text, /3\.09% year-over-year/)
+    assert.match(text, /below the 3\.50% pace/)
   })
 
   test('reports momentum separately from level for inflation', () => {

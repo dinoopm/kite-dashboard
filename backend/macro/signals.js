@@ -48,9 +48,20 @@ const THRESHOLDS = {
   },
   wages: {
     // ~3.5% wage growth is the pace consistent with 2% inflation plus ~1.5%
-    // productivity. Above ~4.5% it is hard to square with target unless
-    // productivity has genuinely stepped up.
-    yoyCool: 3.5,
+    // productivity, which makes it the NEUTRAL point of this scale — yoyTarget
+    // — with the anchors sitting either side of it. Above ~4.5% is hard to
+    // square with target unless productivity has genuinely stepped up; below
+    // ~2.5% wage growth is disinflationary on its own.
+    //
+    // yoyCool used to BE 3.5, putting the -1 anchor exactly on the
+    // target-consistent pace. Every reading at or below that pace therefore
+    // scored identical maximum cooling — 3.09% and 2.00% were the same number
+    // to the composite — and wages handed it a flat -0.150 every day for
+    // months whatever wages did. On 2026-09-16 that constant offset cancelled
+    // the entire inflation contribution (+0.147) while the FOMC raised citing
+    // inflation that "remains elevated".
+    yoyTarget: 3.5,
+    yoyCool: 2.5,
     yoyHot: 4.5,
   },
   expectations: {
@@ -76,7 +87,9 @@ const THRESHOLDS = {
     oil: 0.05,
   },
   regime: { coolingMax: -0.25, reaccelMin: 0.25 },
-  confidence: { highMin: 0.75, mediumMin: 0.50 },
+  // `highMin`/`mediumMin` grade the weighted score; the two agreement bounds
+  // are CAPS, applied after it (see confidence()).
+  confidence: { highMin: 0.75, mediumMin: 0.50, agreementCap: 0.67, agreementLow: 0.34 },
   // Measured in releases MISSED (see calc.releasesBehind), not calendar days —
   // a release lag is not staleness. Two missed releases is a real outage: for
   // a monthly series that is a whole quarter with no update.
@@ -396,6 +409,17 @@ function confidence(signals = {}, composite = {}, metrics = {}) {
   // failure this panel is supposed to make visible.
   if (freshness < 0.34) level = 'low';
   else if (freshness < 0.67 && level === 'high') level = 'medium';
+
+  // Agreement caps for the same reason, and this file already says why it is
+  // the dimension that matters most: sub-signals pointing in opposite
+  // directions average to a confident-looking middle. Weighted at 0.4 it could
+  // not stop that on its own — a fresh, complete, internally CONTRADICTORY
+  // reading scored 0.80 and printed "High" next to its own subtitle saying it
+  // was limited by mixed signals. A composite that is zero because its parts
+  // cancel is not the same evidence as one that is zero because the economy is
+  // calm, and only this number can tell them apart.
+  if (agreement < T.confidence.agreementLow) level = 'low';
+  else if (agreement < T.confidence.agreementCap && level === 'high') level = 'medium';
 
   return {
     score: +score.toFixed(3),

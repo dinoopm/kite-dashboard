@@ -95,8 +95,26 @@ describe('labourSignal', () => {
 });
 
 describe('wageSignal and oilSignal', () => {
-  test('wage growth below the productivity-consistent pace is cooling', () => {
-    assert.ok(wageSignal({ wages: { yoyPct: 3.2 } }).score < -0.8);
+  // 3.5% YoY is the pace consistent with 2% inflation plus ~1.5% productivity,
+  // which makes it the NEUTRAL point of this scale rather than the bottom of
+  // it. It used to be `yoyCool`, the -1 anchor, so every reading at or below
+  // the target-consistent pace scored identical maximum cooling: 3.09% and
+  // 2.00% were the same number to the composite, and wages handed it a flat
+  // -0.150 every day for months whatever wages actually did.
+  test('the target-consistent pace scores neutral, not maximum cooling', () => {
+    assert.ok(Math.abs(wageSignal({ wages: { yoyPct: 3.5 } }).score) < 1e-9);
+  });
+
+  test('readings below it are graded rather than pinned', () => {
+    const a = wageSignal({ wages: { yoyPct: 3.09 } }).score;
+    const b = wageSignal({ wages: { yoyPct: 2.75 } }).score;
+    assert.ok(a < 0 && a > -0.6, `3.09% scored ${a}`);
+    assert.ok(b < a, 'lower wage growth scores cooler still');
+    assert.ok(b > -1, 'and neither sits on the floor');
+  });
+
+  test('genuinely disinflationary wage growth still reaches the floor', () => {
+    assert.equal(wageSignal({ wages: { yoyPct: 2.0 } }).score, -1);
   });
 
   test('wage growth well above it is re-accelerating', () => {
@@ -204,6 +222,25 @@ describe('confidence', () => {
     const c = confidence(conflicting, compositeScore(conflicting), fresh);
     assert.ok(c.agreement < 0.5, `agreement was ${c.agreement}`);
     assert.notEqual(c.level, 'high');
+  });
+
+  // The 2026-09-10 reading: freshness 0.96 and coverage 1.0 carried a weighted
+  // 0.80 to "high" while wages sat pinned at the clamp floor against a positive
+  // inflation reading. Agreement is the dimension that distinguishes a calm
+  // composite from a cancelling one, so it caps the level the way freshness
+  // does rather than only averaging in.
+  test('middling agreement caps the level however fresh and complete the data is', () => {
+    const cancelling = { inflation: { score: 0.327 }, labour: { score: -0.029 }, wages: { score: -1 }, expectations: { score: 0.16 }, oil: { score: -0.112 } };
+    const c = confidence(cancelling, compositeScore(cancelling), fresh);
+    assert.ok(c.score > 0.75, `score was ${c.score}`);
+    assert.ok(c.agreement < 0.67, `agreement was ${c.agreement}`);
+    assert.equal(c.level, 'medium');
+  });
+
+  test('near-maximal disagreement is low, not medium', () => {
+    const c = confidence(conflicting, compositeScore(conflicting), fresh);
+    assert.ok(c.agreement < 0.34, `agreement was ${c.agreement}`);
+    assert.equal(c.level, 'low');
   });
 
   test('stale data cuts confidence', () => {

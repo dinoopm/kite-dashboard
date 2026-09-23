@@ -49,11 +49,23 @@ const COMPONENT_PHRASE = {
 
 const n2 = (v) => (v == null || !Number.isFinite(v) ? null : v.toFixed(2));
 
-/** Where the score sits, in words, so the number never has to be interpreted alone. */
+/**
+ * Where the score sits, in words, so the number never has to be interpreted alone.
+ *
+ * The dead zone is the point of the first branch. The composite is a weighted
+ * sum of opposing forces, so it lands on a number like +0.0000653 whenever they
+ * cancel — and reading the SIGN of that says "re-accelerating" beside a regime
+ * badge saying Neutral and a figure printed as +0.000. A hundredth of a point
+ * on any one component flips it. Below the noise floor the honest word is that
+ * the forces cancel, which is a different statement from "mildly rising".
+ */
+const NOISE_FLOOR = 0.02;
+
 function directionWord(score) {
   if (score == null || !Number.isFinite(score)) return 'No reading';
   const a = Math.abs(score);
   const dir = score < 0 ? 'cooling' : 're-accelerating';
+  if (a < NOISE_FLOOR) return 'Balanced';
   if (a < 0.10) return `Slightly ${dir}`;
   if (a < 0.25) return dir.charAt(0).toUpperCase() + dir.slice(1);
   if (a < 0.60) return `Firmly ${dir}`;
@@ -395,8 +407,19 @@ function componentInterpretation(key, monitor) {
     case 'inflation': {
       const a6 = dt.annualized6m, a3 = dt.annualized3m;
       if (!Number.isFinite(a6)) return 'No current reading.';
-      const level = a6 > (T?.inflation?.hot6m ?? 3.5) ? 'remains above the preferred range'
-        : a6 < (T?.inflation?.cool6m ?? 2.0) ? 'is running below target' : 'is close to target';
+      // Inside the scored range the words follow the SAME target-relative bands
+      // the rest of this module uses (INFLATION_BANDS), not one flat "close to
+      // target" verdict spanning 2.0 to 3.5. That flat band put the sentence in
+      // contradiction with the number beside it: 3.46% annualized scores 0.94
+      // of maximum inflation pressure — since cool6m is the -1 point of the
+      // scale and hot6m the +1 — and was still described as close to target.
+      const hot6m = T?.inflation?.hot6m ?? 3.5;
+      const cool6m = T?.inflation?.cool6m ?? 2.0;
+      const level = a6 > hot6m ? 'remains above the preferred range'
+        : a6 < cool6m ? 'is running below target'
+        : a6 <= INFLATION_BANDS.near ? 'is close to target'
+        : a6 <= INFLATION_BANDS.moderate ? 'is moderately above target'
+        : 'is well above target';
       const mom = Number.isFinite(a3)
         ? (a3 < a6 ? ', though the three-month pace is slower' : a3 > a6 ? ', and the three-month pace is faster' : '')
         : '';
@@ -444,10 +467,14 @@ function componentInterpretation(key, monitor) {
     case 'wages': {
       const v = dt.yoyPct;
       if (!Number.isFinite(v)) return 'No current reading.';
-      const cool = T?.wages?.yoyCool ?? 3.5;
-      return v < cool
-        ? `Wage growth at ${n2(v)}% year-over-year is below the ${n2(cool)}% pace considered consistent with target.`
-        : `Wage growth at ${n2(v)}% year-over-year is at or above the ${n2(cool)}% pace considered consistent with target.`;
+      // Anchored on the target-consistent pace, NOT on the end of the scale.
+      // yoyCool is now the -1 anchor (2.5%), and calling that "the pace
+      // consistent with target" would describe 3.09% as consistent with target
+      // while the score reads it as cooling.
+      const target = T?.wages?.yoyTarget ?? 3.5;
+      return v < target
+        ? `Wage growth at ${n2(v)}% year-over-year is below the ${n2(target)}% pace considered consistent with target.`
+        : `Wage growth at ${n2(v)}% year-over-year is at or above the ${n2(target)}% pace considered consistent with target.`;
     }
     case 'expectations': {
       const v = dt.latest, ch = dt.changePp;
@@ -622,7 +649,10 @@ function whatWouldChange(monitor) {
 
   const wag = monitor.signals?.wages?.detail;
   if (Number.isFinite(wag?.yoyPct)) {
-    out.push(`Wage growth at ${n2(wag.yoyPct)}% year-over-year is below the ${n2(T.wages.yoyCool)}% pace considered consistent with target. Back above ${n2(T.wages.yoyHot)}% would turn the current largest offset into a source of pressure.`);
+    const wTarget = T.wages?.yoyTarget ?? 3.5;
+    out.push(wag.yoyPct < wTarget
+      ? `Wage growth at ${n2(wag.yoyPct)}% year-over-year is below the ${n2(wTarget)}% pace considered consistent with target, and scores cooling in proportion to that gap rather than pinning at the floor. Back above ${n2(T.wages.yoyHot)}% would make it a source of pressure.`
+      : `Wage growth at ${n2(wag.yoyPct)}% year-over-year is at or above the ${n2(wTarget)}% pace considered consistent with target. Above ${n2(T.wages.yoyHot)}% it scores full pressure.`);
   }
 
   const exp = monitor.signals?.expectations?.detail;
@@ -773,6 +803,65 @@ function payrollLevel(v) {
 const INFLATION_BANDS = { below: 1.7, near: 2.3, moderate: 2.8 };
 
 /**
+ * The halves behind a blended component score.
+ *
+ * Three of the five components are blends, and a blend can hide the fact that
+ * its own halves point in opposite directions. On 2026-09-16 the FOMC raised
+ * by 25bp citing inflation that "remains elevated"; this panel read
+ * hold-compatible with inflation at 0.33 — while the LEVEL half of that same
+ * component stood at 0.95, near the top of its scale, pulled down by a
+ * momentum half at -0.82. The number the Fed acted on was already computed
+ * here and simply never displayed.
+ *
+ * Returned as data, not a sentence, so the row can print the arithmetic and a
+ * reader can check that the halves make the whole. `blended` is recomputed
+ * from the parts rather than copied from the signal, so a drift between the
+ * two would show up as a visible mismatch instead of being papered over.
+ *
+ * Single-input components have no halves, but one fact about them is still
+ * worth saying: a score sitting exactly on ±1 is CLAMPED, and cannot move
+ * further however the underlying series moves. Wages have been at that floor
+ * for months — 3.5% YoY is the floor of the scale, so 3.09% and 2.00% score
+ * identically.
+ */
+const FACTOR_SPECS = {
+  inflation:    { fields: ['levelScore', 'momentumScore'],      labels: ['Level', 'Momentum'],     weightKey: 'momentumWeight',      fallbackWeight: 0.35 },
+  labour:       { fields: ['payrollsScore', 'unemploymentScore'], labels: ['Payrolls', 'Unemployment'], weightKey: 'unemploymentWeight', fallbackWeight: 0.40 },
+  expectations: { fields: ['levelScore', 'changeScore'],         labels: ['Level', 'Change'],       weightKey: 'changeWeight',        fallbackWeight: 0.30 },
+};
+
+function componentFactors(key, monitor) {
+  const sig = monitor?.signals?.[key];
+  if (!sig || !Number.isFinite(sig.score)) return null;
+  const clamp = Math.abs(sig.score) === 1 ? (sig.score < 0 ? 'floor' : 'ceiling') : null;
+
+  const spec = FACTOR_SPECS[key];
+  if (!spec) return clamp ? { parts: [], blended: sig.score, offsetting: false, clamp } : null;
+
+  const d = sig.detail || {};
+  const first = d[spec.fields[0]], second = d[spec.fields[1]];
+  // An older payload, or a component scored on a level alone because its
+  // momentum could not be computed, has no blend to explain. Say nothing
+  // rather than invent a second half.
+  if (!Number.isFinite(first) || !Number.isFinite(second)) return null;
+
+  const wSecond = Number.isFinite(monitor?.thresholds?.[key]?.[spec.weightKey])
+    ? monitor.thresholds[key][spec.weightKey]
+    : spec.fallbackWeight;
+  const wFirst = 1 - wSecond;
+  return {
+    parts: [
+      { label: spec.labels[0], score: first, weight: wFirst },
+      { label: spec.labels[1], score: second, weight: wSecond },
+    ],
+    blended: first * wFirst + second * wSecond,
+    // Zero is neither side, so it never counts as disagreement.
+    offsetting: first !== 0 && second !== 0 && Math.sign(first) !== Math.sign(second),
+    clamp,
+  };
+}
+
+/**
  * Target-relative band for a year-over-year core inflation rate.
  *
  * Exported so the boundary behaviour is testable directly rather than only
@@ -867,9 +956,16 @@ function interpretIndicator(ind, thresholds, monitor) {
       const v = ind.yoyPct;
       if (!Number.isFinite(v)) return 'No current reading';
       const basis = ` (${v.toFixed(2)}% YoY, the scored basis)`;
+      // Five bands around the target-consistent pace, because the scale now
+      // grades either side of it: a flat "consistent with target" for
+      // everything under the -1 anchor is the wording bug that matched the
+      // old clamp.
+      const target = T.wages?.yoyTarget ?? 3.5;
       if (v > (T.wages?.yoyHot ?? 4.5)) return `Above target-consistent pace${basis}`;
-      if (v < (T.wages?.yoyCool ?? 3.5)) return `Consistent with target${basis}`;
-      return `Slightly above target-consistent pace${basis}`;
+      if (v > target + 0.25) return `Somewhat above target-consistent pace${basis}`;
+      if (v >= target - 0.25) return `At the target-consistent pace${basis}`;
+      if (v > (T.wages?.yoyCool ?? 2.5)) return `Below target-consistent pace${basis}`;
+      return `Well below target-consistent pace${basis}`;
     }
     case 'oil': {
       const v = ind.rocPct;
@@ -907,7 +1003,7 @@ export {
   REGIME_WORD, POLICY_WORD, COMPONENT_LABEL, COMPONENT_PHRASE, SCORE_TOOLTIP,
   directionWord, confidenceConstraint, signalTriad, countdown,
   distributeRounding, displayContributions,
-  explain, explainShort, componentInterpretation, whatWouldChange,
+  explain, explainShort, componentInterpretation, componentFactors, whatWouldChange,
   fresherCoreMeasure, nextPublishDate,
   whatWouldChangeByDirection, levers,
   freshnessStatus, sixMonthRead, interpretIndicator, contextReason,

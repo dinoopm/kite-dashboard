@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   REGIME_WORD, POLICY_WORD, COMPONENT_LABEL, SCORE_TOOLTIP,
-  directionWord, confidenceConstraint, signalTriad, countdown,
+  directionWord, confidenceConstraint, signalTriad, countdown, componentFactors,
   explain, explainShort, componentInterpretation, whatWouldChangeByDirection,
   displayContributions,
   freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
@@ -144,6 +144,45 @@ function ContributionBar({ contribution }) {
       <div style={{ width: '50%', display: 'flex', justifyContent: 'flex-start' }}>
         {positive && <div style={fill(RED)} />}
       </div>
+    </div>
+  )
+}
+
+/**
+ * The halves behind a blended component, printed as arithmetic.
+ *
+ * A single blended number can be zero because nothing is happening or because
+ * two forces are cancelling, and those are different situations. The FOMC
+ * raised on 2026-09-16 citing elevated inflation while this panel showed
+ * inflation at +0.33 — the level half was at +0.95 the whole time, offset by
+ * momentum at -0.82. Showing the halves does not change the score; it stops
+ * the score from being read as agreement it never had.
+ */
+function ComponentFactors({ factors }) {
+  if (!factors) return null
+  const { parts, blended, offsetting, clamp } = factors
+  return (
+    <div style={{ fontSize: '0.66rem', color: GREY, marginTop: '0.15rem', fontVariantNumeric: 'tabular-nums', display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '0.5rem' }}>
+      {parts.map((p, i) => (
+        <span key={p.label}>
+          {i > 0 && <span style={{ marginRight: '0.5rem' }}>·</span>}
+          {p.label} <span style={{ color: toneFor(p.score), fontWeight: 600 }}>{signed(p.score, 2)}</span>
+          <span> × {Math.round(p.weight * 100)}%</span>
+        </span>
+      ))}
+      {parts.length > 0 && (
+        <span>→ <span style={{ color: toneFor(blended), fontWeight: 600 }}>{signed(blended, 2)}</span></span>
+      )}
+      {offsetting && (
+        <span style={{ color: AMBER }} title="The two halves point in opposite directions, so this component is near zero by cancellation rather than because nothing is happening.">
+          halves offset
+        </span>
+      )}
+      {clamp && (
+        <span style={{ color: AMBER }} title="The score sits exactly on the end of its scale, so the component cannot move further in that direction however the underlying series moves.">
+          at {clamp} of scale
+        </span>
+      )}
     </div>
   )
 }
@@ -368,6 +407,7 @@ export default function MacroDecisionMonitor() {
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginTop: '0.1rem', maxWidth: '72ch' }}>
                     {componentInterpretation(c.key, d)}
                   </div>
+                  <ComponentFactors factors={componentFactors(c.key, d)} />
                 </div>
               </div>
             )
