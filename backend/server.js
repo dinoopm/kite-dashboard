@@ -5991,9 +5991,23 @@ app.use('/api/crypto', cryptoRouter);
 // Serve frontend in production (Railway)
 app.use(express.static(path.join(__dirname, '../frontend/dist')));
 
-// Catch-all route to serve React's index.html for client-side routing
+// Catch-all route to serve React's index.html for client-side routing.
+//
+// `{ root }` rather than an absolute path: on express 5 / send 1.x,
+// res.sendFile(absolutePath) answers 404 Not Found for a file that plainly
+// exists, so every deep link into the built app — /us/macro, /portfolio, any
+// refresh away from "/" — returned an error page carrying a stack trace and
+// the server's filesystem paths. Verified both forms against this same file:
+// the absolute-path call 404s, the root-relative call serves it.
+const SPA_ROOT = path.join(__dirname, '../frontend/dist');
 app.get(/^.*$/, (req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
+  res.sendFile('index.html', { root: SPA_ROOT }, (err) => {
+    if (!err) return;
+    // A missing build is an operator problem, not something to leak: say so
+    // plainly rather than piping send's stack into the browser.
+    console.error('[spa] cannot serve index.html:', err.message);
+    if (!res.headersSent) res.status(404).type('text').send('Frontend build not found — run `npm --prefix frontend run build`.');
+  });
 });
 
 app.listen(PORT, async () => {
