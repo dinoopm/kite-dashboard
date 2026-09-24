@@ -7,7 +7,7 @@ import {
   freshnessStatus, sixMonthRead, interpretIndicator, contextReason,
   shortTitle, reportMonth, signed,
   PROVENANCE, PROVENANCE_TITLE, ANNUALIZATION_TOOLTIP,
-  payrollHeadline, payrollLevel, scoreAudit,
+  payrollHeadline, payrollLevel, scoreAudit, fmtK,
 } from '../lib/macroRead.js'
 
 // ─── Macro Decision Monitor ──────────────────────────────────────────────────
@@ -81,6 +81,12 @@ const longDate = (iso) => {
   return `${MONTH[+m - 1]} ${+d}, ${y}`
 }
 
+const monthLabel = (iso) => {
+  if (!iso) return '—'
+  const [y, m] = String(iso).split('-')
+  return `${MONTH[+m - 1]} ${y}`
+}
+
 function Section({ title, count, children, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
@@ -144,6 +150,127 @@ function ContributionBar({ contribution }) {
       <div style={{ width: '50%', display: 'flex', justifyContent: 'flex-start' }}>
         {positive && <div style={fill(RED)} />}
       </div>
+    </div>
+  )
+}
+
+/**
+ * What the payroll number is made of, on demand.
+ *
+ * The labour component scores a three-month average, and August 2026 is the
+ * case for showing the split: +162k on the month, with leisure and government
+ * supplying +97k of it while BOTH ran negative three-month averages. Same
+ * headline, different labour market — and the panel already had the second
+ * reading without being able to show it.
+ *
+ * Fetched only when opened, because it is an extra FRED round-trip that most
+ * readings do not need. Display only: nothing here feeds the composite, and
+ * the table makes no claim about what any industry implies next.
+ *
+ * Colours follow the rest of the panel rather than intuition: hiring is
+ * INFLATION pressure here, so job gains read red and losses read green. Said
+ * on the panel too, because it is the opposite of how a jobs table usually
+ * reads.
+ */
+function PayrollMix() {
+  const [open, setOpen] = useState(false)
+  const [mix, setMix] = useState(null)
+  const [err, setErr] = useState(null)
+
+  useEffect(() => {
+    if (!open || mix || err) return
+    let on = true
+    fetch('/api/macro/payroll-mix')
+      // A route the running server does not have yet answers with the SPA's
+      // HTML, and .json() on that reports a parser error — which reads as a
+      // bug in the breakdown rather than as a backend that needs restarting.
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status} from /api/macro/payroll-mix`); return r.json() })
+      .then(j => { if (!on) return; j.error ? setErr(j.error) : setMix(j) })
+      .catch(e => on && setErr(e.message))
+    return () => { on = false }
+  }, [open, mix, err])
+
+  const cell = { padding: '0.15rem 0.5rem', fontSize: '0.68rem', fontVariantNumeric: 'tabular-nums', textAlign: 'right' }
+  // Levels read in millions, the way the headline above them already does
+  // (159.1M). Published in thousands, they rendered as "2,745k" for
+  // information — 2.7 million jobs written in a unit nobody thinks in, and the
+  // one number in this table a reader had to convert in their head. Sectors
+  // under a million keep thousands, where that IS the natural unit; the exact
+  // published figure stays on the cell's tooltip so it can still be checked
+  // against the series.
+  const lvl = (v) => {
+    if (v == null) return '—'
+    return v >= 1000 ? `${(v / 1000).toFixed(1)}M` : `${Math.round(v)}k`
+  }
+  const lvlExact = (v) => (v == null ? undefined : `${Math.round(v).toLocaleString('en-US')} thousand persons, as published`)
+  const rec = mix?.reconciliation
+
+  return (
+    <div style={{ marginTop: '0.3rem' }}>
+      {/* Bordered, so it reads as a control. The first version was bare grey
+          text at 0.66rem tucked under an already dense row, and it simply was
+          not findable — an accordion nobody opens is the same as no accordion. */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        style={{
+          background: open ? 'rgba(125,211,252,0.10)' : 'transparent',
+          border: '1px solid var(--border)', borderRadius: 999,
+          padding: '0.12rem 0.5rem', cursor: 'pointer', color: 'var(--text-primary)',
+          fontSize: '0.68rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+        }}
+      >
+        <span aria-hidden="true">{open ? '▾' : '▸'}</span>
+        Which jobs? 11 sectors behind this number
+      </button>
+
+      {open && err && <div style={{ fontSize: '0.66rem', color: AMBER, marginTop: '0.3rem' }}>Breakdown unavailable: {err}</div>}
+      {open && !mix && !err && <div style={{ fontSize: '0.66rem', color: GREY, marginTop: '0.3rem' }}>Loading…</div>}
+
+      {open && mix && (
+        <div style={{ marginTop: '0.35rem', maxWidth: '62ch' }}>
+          <div style={{ fontSize: '0.62rem', color: GREY, marginBottom: '0.25rem' }}>
+            {monthLabel(mix.month)} · CES supersectors · levels in millions, changes in thousands · hiring reads as pressure here, so gains are red
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+              <thead>
+                <tr style={{ color: GREY }}>
+                  <th style={{ ...cell, textAlign: 'left' }}>Sector</th>
+                  <th style={cell}>Level</th>
+                  <th style={cell}>1m</th>
+                  <th style={cell}>3m avg</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mix.rows.map(r => (
+                  <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ ...cell, textAlign: 'left' }}>
+                      {r.label}
+                      {r.stale && <span style={{ color: AMBER }} title={`This sector has not published ${mix.month} yet; the row shows ${r.month}.`}> · {monthLabel(r.month)}</span>}
+                      {r.missing && <span style={{ color: AMBER }}> · missing</span>}
+                    </td>
+                    <td style={{ ...cell, color: GREY }} title={lvlExact(r.level)}>{lvl(r.level)}</td>
+                    <td style={{ ...cell, color: toneFor(r.change1m), fontWeight: 600 }}>{fmtK(r.change1m)}</td>
+                    <td style={{ ...cell, color: toneFor(r.avg3m) }}>{r.avg3m == null ? '—' : `${r.avg3m > 0 ? '+' : ''}${r.avg3m.toFixed(1)}k`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* The check that makes the table trustworthy: eleven mutually
+              exclusive sectors must add to total nonfarm. Shown pass or fail,
+              because a breakdown that silently covers only part of the headline
+              would under-report an entire industry and still look tidy. */}
+          <div style={{ fontSize: '0.62rem', marginTop: '0.3rem', color: rec?.ok ? GREY : AMBER, lineHeight: 1.5 }}>
+            {rec?.ok
+              ? `Parts reconcile to the headline: ${lvl(rec.sumLevel)} = PAYEMS ${lvl(rec.totalLevel)} (${Math.round(rec.sumLevel).toLocaleString('en-US')} thousand persons either side), and the monthly changes sum to ${fmtK(rec.sumChange1m)} against ${fmtK(rec.totalChange1m)}.`
+              : `Parts do not reconcile — ${rec?.reason || 'reason unavailable'}. Read the rows as incomplete.`}
+            <div>{mix.revisionNote}</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -449,6 +576,7 @@ export default function MacroDecisionMonitor() {
                     {componentInterpretation(c.key, d)}
                   </div>
                   <ComponentFactors factors={componentFactors(c.key, d)} />
+                  {c.key === 'labour' && <PayrollMix />}
                 </div>
               </div>
             )
@@ -650,6 +778,12 @@ export default function MacroDecisionMonitor() {
                           )}
                           {reason && <div style={{ marginTop: '0.25rem' }}>{reason}</div>}
                           {ind.note && <div style={{ marginTop: '0.25rem' }}>{ind.note}</div>}
+                          {/* Also offered here, not only on the labour
+                              component above: "Monthly: Jun +31k · Jul +21k ·
+                              Aug +162k" is exactly where a reader asks which
+                              jobs those were, and the answer should be under
+                              the number that prompted the question. */}
+                          {ind.seriesId === 'PAYEMS' && <PayrollMix />}
                         </div>
                       )}
                     </td>

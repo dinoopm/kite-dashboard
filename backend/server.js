@@ -5320,6 +5320,27 @@ app.get('/api/macro/monitor', async (req, res) => {
   }
 });
 
+// ─── GET /api/macro/payroll-mix — what the payroll number is made of ────────
+// The eleven CES supersectors behind PAYEMS, with the reconciliation that says
+// the parts add to the headline. Display only: nothing here feeds the composite.
+// Cached for six hours — the underlying data is monthly.
+const { buildPayrollMix } = require('./macro/payrollMixFetch');
+let payrollMixCache = null; // { data, ts }
+const PAYROLL_MIX_TTL = 6 * 60 * 60 * 1000;
+app.get('/api/macro/payroll-mix', async (req, res) => {
+  try {
+    if (!req.query.force && payrollMixCache && Date.now() - payrollMixCache.ts < PAYROLL_MIX_TTL) {
+      return res.json({ ...payrollMixCache.data, cached: true });
+    }
+    const data = await buildPayrollMix();
+    payrollMixCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[macro/payroll-mix]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── GET /api/macro/fomc-scorecard — the panel's record against the Fed ─────
 // The policy interpretation printed by the monitor, checked against what the
 // FOMC actually did. Cached for six hours: the inputs are a daily snapshot, a
