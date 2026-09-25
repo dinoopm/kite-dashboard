@@ -1551,6 +1551,8 @@ router.post('/holdings-fundamentals', async (req, res) => {
 // 86% margin the quarter before. Those zeros are dropped and the row is flagged
 // `partial` so the UI can mark the column instead of quietly implying the
 // company earned nothing.
+const { fiscalYearEndMonth, quarterLabel, belowTheLine } = require('./fiscalPeriod');
+
 const pnlCache = {}; // sym -> { data, ts }
 const PNL_TTL = 6 * 60 * 60 * 1000; // 6h — statements rarely change intraday
 
@@ -1809,7 +1811,27 @@ router.get('/pnl/:symbol', async (req, res) => {
     // (a Q4 the filings can't supply as a three-month figure).
     const annual = mergeStatementRows(mergeStatementRows(annualTS, sec.annual), legacy.annual);
     const quarterly = mergeStatementRows(mergeStatementRows(quarterlyTS, sec.quarterly), legacy.quarterly);
-    const data = { symbol: sym, currency: 'USD', annual, quarterly };
+
+    // Relabelled AFTER the merge, because the company's fiscal calendar is read
+    // from its own annual statement dates and those arrive with the data. A
+    // December year-end keeps the calendar label — for AMD "Q2 '26" IS what the
+    // company calls it — while Apple's September quarter becomes Q4 FY25
+    // instead of the Q3 '25 it was rendered as, which is the right figure under
+    // a name its filings never use.
+    const fyEndMonth = fiscalYearEndMonth(annual.map(r => r.endDate).filter(Boolean).map(x => new Date(x)));
+    for (const r of quarterly) {
+      if (!r.endDate) continue;
+      const { label, fiscal } = quarterLabel(new Date(r.endDate), fyEndMonth);
+      r.label = label;
+      r.fiscalLabel = fiscal;
+    }
+    // Pretax - tax rarely equals net income exactly: equity-method income,
+    // discontinued operations and minority interests sit between them. The
+    // table shows three of those lines and cannot be made to add up, so the
+    // residual is stated rather than left looking like an error.
+    for (const r of [...annual, ...quarterly]) r.belowTheLine = belowTheLine(r);
+
+    const data = { symbol: sym, currency: 'USD', annual, quarterly, fiscalYearEndMonth: fyEndMonth };
     pnlCache[sym] = { data, ts: Date.now() };
     res.json(data);
   } catch (err) {

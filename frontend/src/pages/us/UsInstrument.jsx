@@ -497,6 +497,7 @@ function PnL({ sym }) {
   if (loading) return <div className="loader" />;
   if (err) return <div className="glass-panel" style={{ padding: '1.5rem', color: RED }}>Failed to load P&amp;L: {err}</div>;
   if (!d) return null;
+  const MONTH_NAME = { 1: 'January', 2: 'February', 3: 'March', 4: 'April', 5: 'May', 6: 'June', 7: 'July', 8: 'August', 9: 'September', 10: 'October', 11: 'November', 12: 'December' };
   const rows = period === 'annual' ? d.annual : d.quarterly;
   if (!rows || rows.length === 0) return <div className="glass-panel" style={{ padding: '1.5rem', color: GREY }}>No income-statement data available (ETFs report none).</div>;
 
@@ -515,6 +516,15 @@ function PnL({ sym }) {
     { key: 'netMargin', label: 'Net Margin', pct: true },
   ];
   const fmtCell = (m, v) => v == null ? '—' : m.pct ? pctF(v) : m.eps ? `$${v.toFixed(2)}` : fmtBig(v);
+
+  // Pretax minus tax is not net income for most companies: equity-method
+  // income, discontinued operations and minority interests sit between them.
+  // The gap is named rather than hidden — a table that visibly does not add up
+  // reads as broken, and "fixing" it would mean overwriting a filed figure.
+  const residualTitle = (r) => `${r.label}: pretax ${fmtBig(r.pretaxIncome)} minus tax ${fmtBig(r.tax)} is `
+    + `${fmtBig(r.pretaxIncome - r.tax)}, against net income of ${fmtBig(r.netIncome)}. The `
+    + `${fmtBig(Math.abs(r.belowTheLine))} difference is items below the tax line that this table does not show `
+    + '(equity-method income, discontinued operations, minority interests). Both figures are as filed.';
 
   // A per-revenue ratio only describes something when revenue is a material
   // part of what the company actually ran that period. UEC's FY2024 is the
@@ -570,7 +580,7 @@ function PnL({ sym }) {
                   so a row of dashes reads as "not published yet" rather than as
                   a broken page. See the footnote and /api/us/pnl. */}
               {rows.map(r => (
-                <th key={r.label} style={th}>
+                <th key={r.label} style={th} title={r.endDate ? `Period ended ${r.endDate}` : undefined}>
                   {r.label}
                   {r.partial && <span style={{ color: AMBER }} title="Detailed statement not published yet"> *</span>}
                 </th>
@@ -591,6 +601,9 @@ function PnL({ sym }) {
                       {ratioDead
                         ? <span style={{ color: GREY, cursor: 'help' }}>n/m</span>
                         : fmtCell(m, r[m.key])}
+                      {m.key === 'netIncome' && r.belowTheLine != null && (
+                        <span style={{ color: GREY }} title={residualTitle(r)}> †</span>
+                      )}
                       {growthDead && <div style={{ fontSize: '0.68rem', fontWeight: 600, color: GREY, cursor: 'help' }}>n/m</div>}
                       {g != null && <div style={{ fontSize: '0.68rem', fontWeight: 600, color: g >= 0 ? GREEN : RED }}>{g >= 0 ? '+' : ''}{g.toFixed(1)}%</div>}
                     </td>
@@ -601,6 +614,21 @@ function PnL({ sym }) {
           </tbody>
         </table>
       </div>
+      {rows.some(r => r.belowTheLine != null) && (
+        <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.75rem' }}>
+          † Net income does not equal pretax income minus tax in {rows.filter(r => r.belowTheLine != null).map(r => r.label).join(', ')}.
+          Both figures are as filed: equity-method income, discontinued operations and minority interests sit
+          between those lines and are not shown here, so the three rows cannot be made to add up.
+          Difference: {rows.filter(r => r.belowTheLine != null).map(r => `${r.label} ${r.belowTheLine >= 0 ? '+' : ''}${fmtBig(r.belowTheLine)}`).join(', ')}.
+        </p>
+      )}
+      {period === 'quarterly' && rows.some(r => r.fiscalLabel) && (
+        <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.5rem' }}>
+          Quarters are the company's own FISCAL quarters, not calendar ones — this company closes its year in{' '}
+          {MONTH_NAME[d.fiscalYearEndMonth] || 'a month other than December'}, so Q1 FY is the quarter that follows it.
+          Hover a column for the period end date.
+        </p>
+      )}
       {rows.some(r => r.partial) && (
         <p style={{ fontSize: '0.7rem', color: AMBER, marginTop: '0.75rem' }}>
           * Yahoo has not published the detailed statement for this period yet — only revenue and net income are available. Blank cells are unpublished, not zero.
