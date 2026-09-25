@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { fmtDate as fmtDisplayDate } from '../lib/formatDate';
 
 // Market-regime strip: S&P 500 internals (from /api/us/breadth) + sector-ETF
@@ -90,7 +91,17 @@ function BreadthStrip({ breadth, ndxBreadth, rows }) {
         ? <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>none</div>
         : list.map(r => (
           <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', fontSize: '0.75rem', padding: '0.12rem 0' }}>
-            <span style={{ color: 'var(--text-primary)' }}>{r.name} <span style={{ color: 'var(--text-secondary)' }}>{r.id}</span></span>
+            {/* A real <Link>, not an onClick handler: the row already names a
+                page, and an anchor is what lets it be middle-clicked, opened in
+                a new tab, or reached by keyboard — the table below navigates
+                the same way, to the same route. */}
+            <Link
+              to={`/us/sector/${encodeURIComponent(r.id)}`}
+              style={{ color: 'var(--text-primary)', textDecoration: 'none' }}
+              onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline'; }}
+              onMouseLeave={e => { e.currentTarget.style.textDecoration = 'none'; }}
+              title={`Open ${r.name} (${r.id})`}
+            >{r.name} <span style={{ color: 'var(--text-secondary)' }}>{r.id}</span></Link>
             {/* Flat is neither side: painting a 0.00% red would invent a down day. */}
             <span style={{ fontWeight: 600, color: r['1D'] == null || r['1D'] === 0 ? 'var(--text-secondary)' : r['1D'] > 0 ? '#22c55e' : '#ef4444' }}>
               {r['1D'] == null ? '\u2014' : `${r['1D'] > 0 ? '+' : ''}${r['1D'].toFixed(2)}%`}
