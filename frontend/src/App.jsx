@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import Dashboard from './pages/Dashboard'
 import Portfolio from './pages/Portfolio'
+import PortfolioRisk from './pages/PortfolioRisk'
 import Instrument from './pages/Instrument'
 import Alerts from './pages/Alerts'
 import SectorIndices from './pages/SectorIndices'
@@ -76,7 +77,7 @@ function App() {
       } else {
         setAuthState('authenticated')
       }
-    } catch (err) {
+    } catch {
       setAuthState('unauthenticated')
     }
   }, [])
@@ -103,7 +104,7 @@ function App() {
       } else if (data?.error) {
         setLoginMsg("❌ **Connection issue:** " + data.error + "\n\nThe system attempted to auto-reconnect. Please click **Login to Kite** again.")
       }
-    } catch (err) {
+    } catch {
       // ignore
     } finally {
       setIsLoggingIn(false)
@@ -215,7 +216,7 @@ function App() {
               </button>
             ) : (
               <div style={{ textAlign: 'left', background: 'var(--bg-dark)', padding: '1rem', borderRadius: '8px', marginTop: '1.5rem', lineHeight: '1.5' }}>
-                <ReactMarkdown components={{ a: ({node, ...props}) => <a {...props} target="_blank" rel="noopener noreferrer" /> }}>{loginMsg}</ReactMarkdown>
+                <ReactMarkdown components={{ a: (props) => <a href={props.href} target="_blank" rel="noopener noreferrer">{props.children}</a> }}>{loginMsg}</ReactMarkdown>
                 <br />
                 <button
                   onClick={handleLoginComplete}
@@ -238,6 +239,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/portfolio" element={<Portfolio />} />
+          <Route path="/portfolio/risk" element={<PortfolioRisk />} />
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/journal" element={<Journal />} />
           <Route path="/briefing" element={<Briefing />} />

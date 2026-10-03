@@ -31,7 +31,6 @@ function XrayBadges({ badges }) {
 }
 
 function Portfolio() {
-  const [profile, setProfile] = useState(null)
   const [holdings, setHoldings] = useState(null)
   const [xray, setXray] = useState(null) // /api/portfolio/xray — attention scores + badges per holding
   const [mfHoldings, setMfHoldings] = useState(null)
@@ -62,31 +61,25 @@ function Portfolio() {
       setLoading(true)
       setError(null)
 
-      const [profileRes, holdingsRes, mfRes] = await Promise.all([
-        fetch('/api/profile', { signal }),
+      const [holdingsRes, mfRes] = await Promise.all([
         fetch('/api/holdings', { signal }),
         fetch('/api/mf-holdings', { signal }),
       ]);
-      const profileData = await profileRes.json()
       const holdingsData = await holdingsRes.json()
       const mfData = await mfRes.json()
-
-      if (profileData?.content?.[0]?.text) {
-        try { setProfile(JSON.parse(profileData.content[0].text)) } catch(e) {}
-      }
 
       if (holdingsData?.content?.[0]?.text) {
         try { 
           const parsed = JSON.parse(holdingsData.content[0].text) 
           setHoldings(parsed.data ? parsed.data : parsed)
-        } catch(e) {}
+        } catch { setHoldings([]) }
       }
 
       if (mfData?.content?.[0]?.text) {
         try { 
           const parsed = JSON.parse(mfData.content[0].text) 
           setMfHoldings(parsed.data ? parsed.data : parsed)
-        } catch(e) {}
+        } catch { setMfHoldings([]) }
       }
     } catch (err) {
       if (err.name === 'AbortError') return;
@@ -338,8 +331,8 @@ function Portfolio() {
 
   return (
     <div className="dashboard-layout">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <div style={{ display: 'flex', gap: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
           <button 
             onClick={() => setActiveTab('equity')}
             className={activeTab === 'equity' ? 'active-tab' : 'inactive-tab'}
@@ -389,6 +382,17 @@ function Portfolio() {
           >
             Protective Stops
           </button>
+          <Link
+            to="/portfolio/risk"
+            className="inactive-tab"
+            style={{
+              padding: '0.8rem 1.5rem', borderRadius: '12px', border: 'none', cursor: 'pointer',
+              fontWeight: '600', background: 'var(--bg-card)', color: '#fff',
+              transition: 'all 0.3s ease', textDecoration: 'none',
+            }}
+          >
+            Risk
+          </Link>
         </div>
 
         {activeTab !== 'stops' && (
@@ -405,6 +409,7 @@ function Portfolio() {
               background: 'var(--bg-dark)',
               color: 'var(--text-primary)',
               width: '300px',
+              maxWidth: '100%',
               outline: 'none'
             }}
           />
@@ -542,7 +547,7 @@ function Portfolio() {
           {(() => {
             const todaysReturn = (holdings || []).reduce((sum, h) => {
               const dayChange = h.day_change !== undefined ? h.day_change : (h.last_price - (h.close_price || h.last_price));
-              return sum + (dayChange * (h.quantity || 0));
+              return sum + (dayChange * ((Number(h.quantity) || 0) + (Number(h.t1_quantity) || 0)));
             }, 0);
             const todaysReturnPct = currentVal ? ((todaysReturn / (currentVal - todaysReturn)) * 100) : 0;
 

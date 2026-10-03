@@ -10,6 +10,7 @@ import { biasClass } from './biasClass'
 //   onOpenTradePlan  — () => void, called when the trade-plan tag is clicked
 //   showHoldingsFields — when true (default), renders the qty / avg / P&L sub-block
 function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields = true }) {
+  const formatPnl = value => value == null ? 'unavailable' : `${value >= 0 ? '+' : '−'}₹${Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
   const bias = biasClass(stock)
   const dotColor = bias === 'bullish' ? '#10b981' : bias === 'bearish' ? '#ef4444' : '#f59e0b'
   const dotGlyph = bias === 'bullish' ? '▲' : bias === 'bearish' ? '▼' : '■'
@@ -129,9 +130,9 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
             <div
               className="mono"
               style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: '0.2rem', marginLeft: '1.2rem', letterSpacing: '0.3px', display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}
-              title={`Today's rupee impact ${stock.dayChangeRupee >= 0 ? '+' : '−'}₹${Math.abs(stock.dayChangeRupee || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}; lifetime ₹${(stock.pnl || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
+              title={`Quantity includes T1 shares. Today's rupee impact ${formatPnl(stock.dayChangeRupee)}; lifetime ${formatPnl(stock.pnl)}`}
             >
-              <span>Qty {stock.quantity} @ ₹{stock.avgPrice?.toFixed(1)}</span>
+              <span>Qty {stock.quantity} @ {stock.avgPrice > 0 ? `₹${stock.avgPrice.toFixed(1)}` : 'unavailable'}</span>
               {stock.pnlPct !== null && stock.pnlPct !== undefined && (
                 <span style={{
                   fontWeight: 700,

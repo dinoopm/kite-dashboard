@@ -7,6 +7,13 @@ import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 
 const REFRESH_INTERVAL_MS = 60000
 
+function formatCandleDate(value) {
+  if (!value) return 'UNAVAILABLE'
+  const [year, month, day] = String(value).slice(0, 10).split('-')
+  if (!year || !month || !day) return String(value)
+  return `${day}/${month}/${year}`
+}
+
 function Alerts() {
   const [alerts, setAlerts] = useState(null)
   const [summary, setSummary] = useState(null)
@@ -19,7 +26,7 @@ function Alerts() {
   const [cacheProgress, setCacheProgress] = useState(null)
   const [sortConfig, setSortConfig] = useState({ key: 'confidence', direction: 'desc' })
   const [showLegend, setShowLegend] = useState(false)
-  const [lastUpdated, setLastUpdated] = useState(null)
+  const [freshness, setFreshness] = useState(null)
   const [modalStock, setModalStock] = useState(null)
   const [tradePlanModalStock, setTradePlanModalStock] = useState(null)
   const searchInputRef = useRef(null)
@@ -47,16 +54,17 @@ function Alerts() {
         const res = await fetchWithAbort('/api/alerts', { signal: controller.signal })
         if (!res.ok) throw new Error('Failed to fetch alerts')
         const data = await res.json()
-        // Backend now returns { alerts, summary }; tolerate the legacy array shape
+        // Backend now returns { alerts, summary, freshness }; tolerate the legacy array shape
         // so the FE doesn't break if a stale build is deployed.
         if (Array.isArray(data)) {
           setAlerts(data)
           setSummary(null)
+          setFreshness(null)
         } else {
           setAlerts(data.alerts || [])
           setSummary(data.summary || null)
+          setFreshness(data.freshness || null)
         }
-        setLastUpdated(new Date())
         setLoading(false)
       } catch (err) {
         if (err.name === 'AbortError') return
@@ -142,6 +150,11 @@ function Alerts() {
     return false
   }
   const earlyCount = (alerts || []).filter(isEarlyMover).length
+  const freshnessWarning = freshness?.status === 'partial'
+  const freshnessSymbols = freshness?.issues?.map(issue => issue.symbol).filter(Boolean) || []
+  const financialCoverage = summary?.financialCoverage
+  const dailyPnlPartial = financialCoverage && financialCoverage.dailyPnlPositions < financialCoverage.totalPositions
+  const lifetimePnlPartial = financialCoverage && financialCoverage.pnlPositions < financialCoverage.totalPositions
 
   let filteredStocks = (alerts || [])
     .filter(s => s.symbol.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -270,6 +283,19 @@ function Alerts() {
         .conviction-click:hover { transform: scale(1.08); filter: brightness(1.2); }
       `}</style>
 
+      {freshnessWarning && (
+        <div role="status" style={{
+          marginBottom: '1rem', padding: '0.7rem 0.85rem', borderRadius: '6px',
+          border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.09)',
+          color: '#fde68a', fontFamily: "'JetBrains Mono', monospace", fontSize: '0.72rem', lineHeight: 1.55,
+        }}>
+          <strong>CANDLE DATA PARTIAL.</strong>{' '}
+          {freshness.failedRefreshCount > 0 && `${freshness.failedRefreshCount} refresh${freshness.failedRefreshCount === 1 ? '' : 'es'} failed. `}
+          Coverage is {Number(freshness.coveragePct || 0).toFixed(0)}%; signals use cached candles through {formatCandleDate(freshness.candleAsOf)}.
+          {freshnessSymbols.length > 0 && ` Affected: ${freshnessSymbols.slice(0, 8).join(', ')}${freshnessSymbols.length > 8 ? ` +${freshnessSymbols.length - 8} more` : ''}.`}
+        </div>
+      )}
+
       {/* Holdings Summary Banner */}
       {summary && (
         <div style={{
@@ -283,8 +309,8 @@ function Alerts() {
             padding: '0.25rem 0.55rem', borderRadius: '4px',
             background: summary.todayPnlRupee >= 0 ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
             border: `1px solid ${summary.todayPnlRupee >= 0 ? '#10b981' : '#ef4444'}`,
-          }} title="Sum of today's rupee impact across every holding">
-            <span style={{ fontSize: '0.55rem', color: '#94a3b8', letterSpacing: '0.5px' }}>TODAY</span>
+          }} title="Today's rupee impact across holdings with daily-change data; quantities include T1 shares">
+            <span style={{ fontSize: '0.55rem', color: '#94a3b8', letterSpacing: '0.5px' }}>TODAY{dailyPnlPartial ? ' (COVERED)' : ''}</span>
             <span style={{ fontWeight: 800, color: summary.todayPnlRupee >= 0 ? '#10b981' : '#ef4444' }}>
               {summary.todayPnlRupee >= 0 ? '+' : '−'}₹{Math.abs(summary.todayPnlRupee).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
             </span>
@@ -293,6 +319,11 @@ function Alerts() {
             <span style={{ color: '#94a3b8' }}>HOLDINGS</span>{' '}
             <span style={{ fontWeight: 800, color: '#f8fafc' }}>{summary.totalHoldings}</span>
           </span>
+          {(dailyPnlPartial || lifetimePnlPartial) && (
+            <span style={{ color: '#f59e0b' }} role="status">
+              P&amp;L coverage: today {financialCoverage.dailyPnlPositions}/{financialCoverage.totalPositions}; lifetime {financialCoverage.pnlPositions}/{financialCoverage.totalPositions}
+            </span>
+          )}
           {summary.flagCounts?.add > 0 && (
             <button
               onClick={() => setFilter('all')}
@@ -343,7 +374,13 @@ function Alerts() {
             <span>ACTIVE: <span style={{ color: '#fff' }}>{allAlertsList.length}</span></span>
             <span>▲ BULL: <span style={{ color: '#00E5FF' }}>{bullishCount}</span></span>
             <span>▼ BEAR: <span style={{ color: '#FF3D00' }}>{bearishCount}</span></span>
-            <span title={lastUpdated ? lastUpdated.toLocaleString() : ''}>UPDATED: <span style={{ color: '#10b981' }}>{formatClock(lastUpdated)}</span></span>
+            <span title="Oldest latest candle across covered holdings">
+              CANDLES THROUGH:{' '}
+              <span style={{ color: freshnessWarning ? '#f59e0b' : '#10b981' }}>{formatCandleDate(freshness?.candleAsOf)}</span>
+            </span>
+            <span title={freshness?.checkedAt ? new Date(freshness.checkedAt).toLocaleString() : ''}>
+              CHECKED: <span style={{ color: '#cbd5e1' }}>{freshness?.checkedAt ? formatClock(new Date(freshness.checkedAt)) : '—'}</span>
+            </span>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>

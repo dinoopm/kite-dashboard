@@ -8,6 +8,10 @@ const YahooFinance = require('yahoo-finance2').default;
 const yahooFinance = new YahooFinance();
 const cheerio = require('cheerio');
 const axios = require('axios');
+const { createPortfolioRiskService } = require('./portfolioRisk');
+const { buildAlertsFreshness } = require('./alertsFreshness');
+const { prepareAlertCandles } = require('./alertCandles');
+const { holdingMetrics, buildHoldingSummary } = require('./holdingMetrics');
 
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const { createClient } = require('@supabase/supabase-js');
@@ -33,6 +37,7 @@ const historyCache = {};   // { instrument_token: [ {date, open, high, low, clos
 const historicalFullCache = {};  // { token: { data: [...], timestamp: Date.now() } } — 1hr TTL for sector indices
 const HISTORICAL_FULL_TTL = 60 * 60 * 1000; // 1 hour
 const todayRefreshAt = {}; // { token: timestamp } — last time we pulled today's partial bar
+const candleRefreshState = {}; // { token: { status, lastAttemptAt, lastSuccessAt, error } }
 const TODAY_REFRESH_COOLDOWN_MS = 60 * 1000; // don't hammer Kite for intraday refresh more than 1×/min/token
 let holdingsCache = [];    // raw holdings array
 let cacheReady = false;
@@ -102,38 +107,67 @@ async function fetchHistorical(token, fromDate, toDate, interval = 'day') {
 // Refresh today's partial daily candle for a single token if the cached tail
 // is stale (older than today) or if we haven't polled within the cooldown.
 // Replaces cached[last] if its date matches today, else appends.
+function recordCandleRefresh(token, status, attemptedAt, error = null) {
+  const previous = candleRefreshState[token] || {};
+  const next = {
+    status,
+    lastAttemptAt: attemptedAt,
+    lastSuccessAt: status === 'success' ? attemptedAt : (previous.lastSuccessAt || null),
+    error: error || null,
+  };
+  candleRefreshState[token] = next;
+  return { attempted: true, ...next };
+}
+
 async function refreshTodayCandle(token) {
   const now = Date.now();
   const last = todayRefreshAt[token] || 0;
-  if (now - last < TODAY_REFRESH_COOLDOWN_MS) return;
+  const previous = candleRefreshState[token] || {};
+  if (now - last < TODAY_REFRESH_COOLDOWN_MS) {
+    const failedPreviously = ['failed', 'no-data', 'invalid', 'no-cache'].includes(previous.status);
+    return {
+      attempted: false,
+      status: failedPreviously ? previous.status : 'cooldown',
+      lastAttemptAt: previous.lastAttemptAt || null,
+      lastSuccessAt: previous.lastSuccessAt || null,
+      error: previous.error || null,
+    };
+  }
   todayRefreshAt[token] = now;
+  const attemptedAt = new Date(now).toISOString();
 
   try {
     const cached = historyCache[token];
-    if (!cached || cached.length === 0) return;
+    if (!cached || cached.length === 0) {
+      return recordCandleRefresh(token, 'no-cache', attemptedAt, 'No cached candle history');
+    }
 
-    const today = new Date();
-    const todayKey = today.toISOString().slice(0, 10);
+    const today = new Date(now);
     const tailKey = (cached[cached.length - 1]?.date || '').slice(0, 10);
 
-    // Pull a 2-day window so we always get today's bar (if market is open/closed today).
+    // Pull a 2-day window so we always get today's bar when the market traded.
     const from = new Date(today);
     from.setDate(today.getDate() - 1);
     const data = await fetchHistorical(token, from, today, 'day');
-    if (!Array.isArray(data) || data.length === 0) return;
+    if (!Array.isArray(data) || data.length === 0) {
+      return recordCandleRefresh(token, 'no-data', attemptedAt, 'Historical refresh returned no candles');
+    }
 
     const latest = data[data.length - 1];
     const latestKey = (latest?.date || '').slice(0, 10);
-    if (!latestKey) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(latestKey)) {
+      return recordCandleRefresh(token, 'invalid', attemptedAt, 'Historical refresh returned an invalid candle date');
+    }
 
     if (latestKey === tailKey) {
       cached[cached.length - 1] = latest;
-    } else if (latestKey > tailKey) {
+    } else if (!tailKey || latestKey > tailKey) {
       cached.push(latest);
     }
+    return recordCandleRefresh(token, 'success', attemptedAt);
   } catch (err) {
-    // Non-fatal: fall through with stale cache.
     console.log(`  ⚠️  refreshTodayCandle(${token}) failed: ${err.message}`);
+    return recordCandleRefresh(token, 'failed', attemptedAt, err.message);
   }
 }
 
@@ -757,6 +791,8 @@ app.post('/api/disconnect', async (req, res) => {
   // 1. Clear caches
   Object.keys(historyCache).forEach(k => delete historyCache[k]);
   Object.keys(historicalFullCache).forEach(k => delete historicalFullCache[k]);
+  Object.keys(todayRefreshAt).forEach(k => delete todayRefreshAt[k]);
+  Object.keys(candleRefreshState).forEach(k => delete candleRefreshState[k]);
   holdingsCache.length = 0;
   cacheReady = false;
 
@@ -960,6 +996,78 @@ async function fetchWithCache(toolName, cacheKey, args = {}) {
 
   return apiPromises[cacheKey];
 }
+
+// Portfolio-risk classifications are independent of technical-alert history.
+// Successful company metadata is stable enough for a day; failed lookups are
+// retried after one minute so a transient Yahoo problem does not linger.
+const portfolioRiskSectorCache = new Map();
+const portfolioRiskSectorPromises = new Map();
+const PORTFOLIO_SECTOR_TTL = 24 * 60 * 60 * 1000;
+const PORTFOLIO_SECTOR_FAILURE_TTL = 60 * 1000;
+
+function portfolioYahooSymbol({ symbol, exchange }) {
+  if (!symbol) return '';
+  const clean = symbol.replace(/-(BE|SM|EQ)$/i, '');
+  if (clean.includes('.')) return clean;
+  return `${clean}.${exchange === 'BSE' ? 'BO' : 'NS'}`;
+}
+
+async function resolvePortfolioRiskSector(position) {
+  const cacheKey = `${position.exchange}:${position.symbol}`;
+  const cached = portfolioRiskSectorCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < cached.ttl) return cached.sector;
+  if (portfolioRiskSectorPromises.has(cacheKey)) return portfolioRiskSectorPromises.get(cacheKey);
+
+  const lookup = yahooFinance
+    .quoteSummary(portfolioYahooSymbol(position), { modules: ['assetProfile'] })
+    .then(result => {
+      const sector = result?.assetProfile?.sector?.trim() || null;
+      portfolioRiskSectorCache.set(cacheKey, {
+        sector,
+        timestamp: Date.now(),
+        ttl: sector ? PORTFOLIO_SECTOR_TTL : PORTFOLIO_SECTOR_FAILURE_TTL,
+      });
+      return sector;
+    })
+    .catch(() => {
+      portfolioRiskSectorCache.set(cacheKey, {
+        sector: null,
+        timestamp: Date.now(),
+        ttl: PORTFOLIO_SECTOR_FAILURE_TTL,
+      });
+      return null;
+    })
+    .finally(() => portfolioRiskSectorPromises.delete(cacheKey));
+
+  portfolioRiskSectorPromises.set(cacheKey, lookup);
+  return lookup;
+}
+
+const getPortfolioRisk = createPortfolioRiskService({
+  fetchHoldings: async () => {
+    const result = await fetchWithCache('get_holdings', 'holdings', {});
+    if (result?.isError) {
+      const message = result?.content?.map(block => block?.text).filter(Boolean).join(' ') || 'Broker holdings request failed';
+      const error = new Error(message);
+      const rateLimit = detectRateLimit(error);
+      if (rateLimit) {
+        error.statusCode = 429;
+        error.retryAfter = rateLimit.retryAfter;
+      } else {
+        error.statusCode = 502;
+      }
+      throw error;
+    }
+    const parsed = parseMcpText(result);
+    return {
+      rows: Array.isArray(parsed) ? parsed : parsed?.data,
+      fetchedAt: apiCache.holdings.timestamp || Date.now(),
+    };
+  },
+  resolveSector: resolvePortfolioRiskSector,
+  timeoutMs: 8000,
+  concurrency: 3,
+});
 
 app.get('/api/profile', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
@@ -1216,6 +1324,27 @@ app.get('/api/holdings', async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/portfolio-risk', async (req, res) => {
+  if (!mcpClient) return res.status(503).json({ error: 'MCP not connected' });
+  try {
+    if (req.query.refresh === '1') {
+      apiCache.holdings.data = null;
+      apiCache.holdings.timestamp = 0;
+    }
+    res.json(await getPortfolioRisk());
+  } catch (err) {
+    if (err.statusCode === 429) {
+      return res
+        .status(429)
+        .set('Retry-After', String(err.retryAfter || 5))
+        .json({ error: 'rate_limited', retryAfter: err.retryAfter || 5 });
+    }
+    res.status(err.statusCode === 502 ? 502 : 500).json({
+      error: err.message || 'Failed to build portfolio risk view',
+    });
   }
 });
 
@@ -1570,29 +1699,8 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   if (!candles || candles.length < 15) return null;
 
   const currentPrice = lastPrice || candles[candles.length - 1].close;
-  const workingCandles = [...candles];
-
-  if (lastPrice) {
-    const lastCandle = workingCandles[workingCandles.length - 1];
-    const lastDate = new Date(lastCandle.date).toISOString().slice(0, 10);
-    const todayStr = new Date().toISOString().slice(0, 10);
-    
-    if (lastDate === todayStr) {
-      const updatedCandle = { ...lastCandle, close: currentPrice };
-      if (currentPrice > updatedCandle.high) updatedCandle.high = currentPrice;
-      if (currentPrice < updatedCandle.low) updatedCandle.low = currentPrice;
-      workingCandles[workingCandles.length - 1] = updatedCandle;
-    } else {
-      workingCandles.push({
-        date: todayStr + 'T00:00:00+0530',
-        open: lastPrice,
-        high: lastPrice,
-        low: lastPrice,
-        close: lastPrice,
-        volume: 0
-      });
-    }
-  }
+  const workingCandles = prepareAlertCandles(candles, lastPrice);
+  const position = holding ? holdingMetrics(holding) : null;
 
   const closes = workingCandles.map(c => c.close);
   const highs = workingCandles.map(c => c.high);
@@ -1975,13 +2083,11 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
 
   // Holdings-aware overrides — only when called from /api/alerts (holding present).
   if (holding) {
-    const isOwned = (holding.quantity ?? 0) > 0;
-    const positionPnlPct = (holding.average_price > 0 && holding.last_price)
-      ? ((holding.last_price - holding.average_price) / holding.average_price) * 100
-      : 0;
+    const isOwned = position.quantity > 0;
+    const positionPnlPct = position.pnlPct ?? 0;
     if (isOwned && tradePlan.action === 'BUY SEEN') {
       tradePlan.action = 'ADD';
-      tradePlan.reason = `You own ${holding.quantity} @ ₹${holding.average_price.toFixed(1)}. ${tradePlan.reason}`;
+      tradePlan.reason = `You own ${position.quantity} @ ₹${position.avgPrice.toFixed(1)}. ${tradePlan.reason}`;
     }
     if (isOwned && tradePlan.action === 'HOLD (OVERBOUGHT)' && positionPnlPct >= 25) {
       tradePlan.action = 'TRIM';
@@ -2102,13 +2208,12 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   };
 
   if (holding) {
-    out.quantity = holding.quantity ?? 0;
-    out.avgPrice = holding.average_price ?? 0;
-    out.pnl = holding.pnl ?? 0;
-    out.pnlPct = (holding.average_price > 0 && (holding.quantity ?? 0) > 0)
-      ? +(((holding.last_price - holding.average_price) / holding.average_price) * 100).toFixed(2)
-      : null;
-    out.dayChangeRupee = +(((holding.day_change ?? 0) * (holding.quantity ?? 0))).toFixed(2);
+    const round = value => value !== null ? +value.toFixed(2) : null;
+    out.quantity = position.quantity;
+    out.avgPrice = position.avgPrice;
+    out.pnl = round(position.pnl);
+    out.pnlPct = round(position.pnlPct);
+    out.dayChangeRupee = round(position.dayChangeRupee);
   }
 
   return out;
@@ -2134,10 +2239,15 @@ app.get('/api/alerts', async (req, res) => {
     }
 
     if (!Array.isArray(holdings) || holdings.length === 0) {
-      return res.json([]);
+      return res.json({
+        alerts: [],
+        summary: null,
+        freshness: buildAlertsFreshness({ holdings: [], refreshResults: [] }),
+      });
     }
 
     const alerts = [];
+    const refreshResults = [];
 
     for (const h of holdings) {
       const token = h.instrument_token;
@@ -2146,25 +2256,19 @@ app.get('/api/alerts', async (req, res) => {
 
       // Best-effort refresh of today's daily candle so volSurge / dayChange
       // reflect live intraday state rather than yesterday's EOD bar.
-      await refreshTodayCandle(token);
+      const refreshResult = await refreshTodayCandle(token);
 
       const candles = historyCache[token];
+      const candleAsOf = Array.isArray(candles) && candles.length > 0
+        ? candles[candles.length - 1]?.date || null
+        : null;
+      refreshResults.push({ symbol, token, candleAsOf, ...refreshResult });
       const alert = await computeStockAlert({ symbol, token, lastPrice, previousClose: h.close_price, candles, holding: h });
-      if (alert) alerts.push(alert);
+      if (alert) alerts.push({ ...alert, candleAsOf });
     }
 
-    const totalInvested = alerts.reduce((s, a) => s + ((a.avgPrice || 0) * (a.quantity || 0)), 0);
-    const totalPnl      = alerts.reduce((s, a) => s + (a.pnl || 0), 0);
-    // todayPnlRupee and totalHoldings must cover ALL holdings, not just alerted ones.
-    // computeStockAlert returns null for stocks with no signals, so using alerts.length
-    // or summing over alerts silently drops those holdings.
-    const todayPnlRupee = +holdings.reduce((s, h) => s + ((h.day_change ?? 0) * (h.quantity ?? 0)), 0).toFixed(2);
     const summary = {
-      todayPnlRupee,
-      totalPnlRupee: +totalPnl.toFixed(2),
-      totalPnlPct:   totalInvested > 0 ? +((totalPnl / totalInvested) * 100).toFixed(2) : null,
-      totalInvested: +totalInvested.toFixed(2),
-      totalHoldings: holdings.length,
+      ...buildHoldingSummary(holdings),
       flagCounts: {
         avoid: alerts.filter(a => a.tradePlan?.action === 'AVOID').length,
         trim:  alerts.filter(a => a.tradePlan?.action === 'TRIM').length,
@@ -2172,7 +2276,8 @@ app.get('/api/alerts', async (req, res) => {
       },
       sectorConcentration: computeSectorConcentration(alerts),
     };
-    res.json({ alerts, summary });
+    const freshness = buildAlertsFreshness({ holdings, refreshResults });
+    res.json({ alerts, summary, freshness });
   } catch (err) {
     console.error("Alerts computation error:", err);
     res.status(500).json({ error: "Failed to compute alerts: " + err.message });
