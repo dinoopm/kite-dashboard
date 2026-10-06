@@ -12,7 +12,33 @@ const ENUM_OPS = [{ v: 'is', label: 'is' }, { v: 'isnot', label: 'is not' }]
 
 // Built-in preset screens. Scope is left alone — the India screener defaults to
 // holdings, and a preset should change WHAT is asked, not WHERE.
+const RANGE_PRESET = {
+  id: 'p-range-relative', name: 'Range breakout + relative strength',
+  note: '30-session range; volume ≥1.5×; holds 3 sessions; stock/index ratio makes a 20-session high. Rule not separately validated.',
+  conditions: [
+    { field: 'rangeBreakoutStatus', op: 'is', value: 'CONFIRMED' },
+    { field: 'rangeBreakoutAge', op: 'lte', value: 10 },
+    { field: 'rangeBreakoutBasePct', op: 'lte', value: 25 },
+    { field: 'rangeBreakoutVol', op: 'gte', value: 1.5 },
+    { field: 'rangeBreakoutDistance', op: 'gte', value: 0 },
+    { field: 'rangeBreakoutDistance', op: 'lte', value: 10 },
+    { field: 'rangeBreakoutRs', op: 'is', value: 'YES' },
+  ],
+}
+const RANGE_COLUMNS = [
+  { key: 'price', label: 'Price ₹' },
+  { key: 'rangeBreakoutDate', label: 'Breakout date' },
+  { key: 'rangeBreakoutStatus', label: 'Status' },
+  { key: 'rangeBreakoutAge', label: 'Age (sessions)' },
+  { key: 'rangeBreakoutLevel', label: 'Broken level ₹' },
+  { key: 'rangeBreakoutBasePct', label: 'Prior range %', pct: true },
+  { key: 'rangeBreakoutVol', label: 'Vol× at breakout' },
+  { key: 'rangeBreakoutDistance', label: 'Above level %', pct: true },
+  { key: 'rangeBreakoutRs', label: 'RS high at breakout' },
+  { key: 'relativeReturn20d', label: '20-session excess (pp)' },
+]
 const PRESET_SCREENS = [
+  RANGE_PRESET,
   // Thresholds are measured, not chosen. backend/baseBreakoutStudy.js swept
   // them over 498 S&P 500 names, 2014-2026: the 22-day median excess over the
   // index runs +0.48% at range<=30 (t=4.1, n=2358), +0.15% at 45 (t=2.4),
@@ -133,11 +159,11 @@ const csvEscape = (val) => {
 
 // Export the (already sorted) result rows to a CSV file download. Numeric values
 // are written raw — no +/% decoration — so they stay usable in spreadsheets.
-function exportMatchesCsv(rows, label) {
-  const headers = ['Symbol', 'Name', 'Sector', 'Industry', ...RESULT_COLUMNS.map(c => c.label)]
+function exportMatchesCsv(rows, label, columns = RESULT_COLUMNS) {
+  const headers = ['Symbol', 'Name', 'Sector', 'Industry', ...columns.map(c => c.label)]
   const lines = [headers.map(csvEscape).join(',')]
   for (const m of rows) {
-    const cells = [m.symbol, m.name || '', m.sector || '', m.industry || '', ...RESULT_COLUMNS.map(c => m.values[c.key])]
+    const cells = [m.symbol, m.name || '', m.sector || '', m.industry || '', ...columns.map(c => m.values[c.key])]
     lines.push(cells.map(csvEscape).join(','))
   }
   const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
@@ -160,6 +186,8 @@ function ConditionRow({ cond, fields, onChange, onRemove }) {
     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
       <select
         value={cond.field}
+        aria-label="Indicator field"
+        title={field?.label}
         onChange={e => {
           const f = fields.find(x => x.key === e.target.value)
           onChange({
@@ -168,7 +196,7 @@ function ConditionRow({ cond, fields, onChange, onRemove }) {
             value: f.type === 'enum' ? f.enumValues[0] : 0,
           })
         }}
-        style={{ ...inputStyle, cursor: 'pointer', minWidth: '200px' }}
+        style={{ ...inputStyle, cursor: 'pointer', minWidth: 0, width: 'min(440px, 100%)', maxWidth: '100%' }}
       >
         {Object.entries(fields.reduce((g, f) => { (g[f.group] = g[f.group] || []).push(f); return g }, {})).map(([group, fs]) => (
           <optgroup key={group} label={group}>
@@ -178,6 +206,7 @@ function ConditionRow({ cond, fields, onChange, onRemove }) {
       </select>
       <select
         value={cond.op}
+        aria-label={`${field?.label || cond.field} comparison`}
         onChange={e => onChange({ ...cond, op: e.target.value })}
         style={{ ...inputStyle, cursor: 'pointer', width: '80px' }}
       >
@@ -186,14 +215,16 @@ function ConditionRow({ cond, fields, onChange, onRemove }) {
       {field?.type === 'enum' ? (
         <select
           value={cond.value}
+          aria-label={`${field?.label || cond.field} value`}
           onChange={e => onChange({ ...cond, value: e.target.value })}
-          style={{ ...inputStyle, cursor: 'pointer', width: '110px' }}
+          style={{ ...inputStyle, cursor: 'pointer', width: field?.enumValues.some(value => value.length > 8) ? '145px' : '110px' }}
         >
           {field.enumValues.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
       ) : (
         <input
           type="number" step="any" value={cond.value}
+          aria-label={`${field?.label || cond.field} value`}
           onChange={e => onChange({ ...cond, value: e.target.value === '' ? '' : +e.target.value })}
           style={{ ...inputStyle, width: '110px' }}
         />
@@ -209,7 +240,8 @@ function ConditionRow({ cond, fields, onChange, onRemove }) {
   )
 }
 
-function ResultsTable({ matches, label }) {
+function ResultsTable({ matches, label, rangeSetup = false }) {
+  const columns = rangeSetup ? RANGE_COLUMNS : RESULT_COLUMNS
   const [sort, setSort] = useState({ key: 'change1D', dir: 'desc' })
   const sorted = useMemo(() => {
     const arr = [...(matches || [])]
@@ -240,7 +272,7 @@ function ResultsTable({ matches, label }) {
     <div className="glass-panel" style={{ padding: '0.5rem 1rem 1rem', overflowX: 'auto' }}>
       <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0.4rem 0 0.2rem' }}>
         <button
-          onClick={() => exportMatchesCsv(sorted, label)}
+          onClick={() => exportMatchesCsv(sorted, label, columns)}
           disabled={sorted.length === 0}
           title="Download matches as CSV"
           style={{
@@ -257,7 +289,7 @@ function ResultsTable({ matches, label }) {
           <tr>
             {header('symbol', 'Symbol', 'left')}
             {header('sector', 'Sector', 'left')}
-            {RESULT_COLUMNS.map(c => header(c.key, c.label))}
+            {columns.map(c => header(c.key, c.label))}
           </tr>
         </thead>
         <tbody>
@@ -268,6 +300,7 @@ function ResultsTable({ matches, label }) {
                   {m.symbol}
                 </Link>
                 {m.name && m.name !== m.symbol && <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div>}
+                {rangeSetup && <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{m.capGroups?.join(' / ')} · Candles through {m.candleAsOf || 'unavailable'}</div>}
               </td>
               <td style={{ ...td, textAlign: 'left' }} title={m.industry || ''}>
                 {m.sector
@@ -275,11 +308,11 @@ function ResultsTable({ matches, label }) {
                   : <span style={{ color: 'var(--text-secondary)' }}>—</span>}
                 {m.industry && <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.industry}</div>}
               </td>
-              {RESULT_COLUMNS.map(c => {
+              {columns.map(c => {
                 const v = m.values[c.key]
                 if (v == null) return <td key={c.key} style={td}>—</td>
-                if (c.key === 'supertrend' || c.key === 'signal1050') {
-                  const color = (v === 'BULL' || v === 'BUY') ? '#22c55e' : (v === 'BEAR' || v === 'SELL') ? '#ef4444' : 'var(--text-secondary)'
+                if (c.key === 'supertrend' || c.key === 'signal1050' || c.key === 'rangeBreakoutStatus') {
+                  const color = (v === 'BULL' || v === 'BUY' || v === 'CONFIRMED') ? '#22c55e' : (v === 'BEAR' || v === 'SELL' || v === 'FAILED') ? '#ef4444' : 'var(--text-secondary)'
                   return <td key={c.key} style={{ ...td, color, fontWeight: 600 }}>{v}</td>
                 }
                 if (c.key === 'vcpScore' && m.values.vcpSetup === 'YES') {
@@ -293,7 +326,7 @@ function ResultsTable({ matches, label }) {
                 }
                 return (
                   <td key={c.key} style={td} className={c.pct ? pnlClass(v) : ''}>
-                    {typeof v === 'number' ? `${c.pct && v > 0 ? '+' : ''}${v}${c.pct ? '%' : ''}` : v}
+                    {typeof v === 'number' ? `${c.pct && v > 0 ? '+' : ''}${Number.isInteger(v) ? v : Number(v.toFixed(2))}${c.pct ? '%' : ''}` : v}
                   </td>
                 )
               })}
@@ -315,6 +348,11 @@ export default function Screener() {
   ])
 
   const [scopeType, setScopeType] = useState('holdings')
+  const [capGroups, setCapGroups] = useState([])
+  const [selectedCaps, setSelectedCaps] = useState(['small'])
+  const [benchmarks, setBenchmarks] = useState([])
+  const [benchmark, setBenchmark] = useState('NSE:NIFTY SMLCAP 250')
+  const [scanConditions, setScanConditions] = useState([])
   const [sectors, setSectors] = useState([])
   const [themes, setThemes] = useState([])
   const [sectorKey, setSectorKey] = useState('')
@@ -349,10 +387,14 @@ export default function Screener() {
       try {
         const res = await fetchWithAbort(url, { signal: controller.signal })
         const data = await res.json()
-        if (data?.[key]) set(data[key])
+        if (key == null) { if (res.ok) set(data) } else if (data?.[key]) set(data[key])
       } catch (e) { if (e.name !== 'AbortError') console.error(url, e.message) }
     }
-    get('/api/screener/fields', setFields, 'fields')
+    get('/api/screener/fields', data => {
+      setFields(data.fields)
+      setCapGroups(data.capGroups || [])
+      setBenchmarks(data.benchmarks || [])
+    }, null)
     get('/api/sectors', (s) => { setSectors(s); setSectorKey(k => k || s[0] || '') }, 'sectors')
     get('/api/themes', (t) => { setThemes(t); setThemeId(id => id || t[0]?.id || '') }, 'themes')
     get('/api/screener/screens', setScreens, 'screens')
@@ -378,24 +420,27 @@ export default function Screener() {
   }, [])
 
   const buildScope = useCallback(() => (
-    scopeType === 'sector' ? { type: 'sector', sectorKey }
+    scopeType === 'caps' ? { type: 'caps', caps: selectedCaps }
+      : scopeType === 'sector' ? { type: 'sector', sectorKey }
       : scopeType === 'theme' ? { type: 'theme', themeId }
       : { type: 'holdings' }
-  ), [scopeType, sectorKey, themeId])
+  ), [scopeType, sectorKey, themeId, selectedCaps])
 
   const run = useCallback(async () => {
+    if (scopeType === 'caps' && !selectedCaps.length) { setError('Select at least one cap group'); return }
     if (scopeType === 'sector' && !sectorKey) { setError('Pick a sector'); return }
     if (scopeType === 'theme' && !themeId) { setError('Pick a theme'); return }
     setError(null)
     setResult(null)
     setPartial([])
+    setScanConditions(conditions.map(condition => ({ ...condition })))
     setJobStatus('running')
     setProgress({ loaded: 0, total: 0, symbol: null })
     try {
       const res = await fetchWithAbort('/api/screener/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: buildScope(), conditions }),
+        body: JSON.stringify({ scope: buildScope(), conditions, benchmark }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `Failed to start (${res.status})`)
@@ -404,7 +449,7 @@ export default function Screener() {
       setError(e.message)
       setJobStatus('error')
     }
-  }, [scopeType, sectorKey, themeId, conditions, buildScope, poll])
+  }, [scopeType, sectorKey, themeId, selectedCaps, conditions, benchmark, buildScope, poll])
 
   const saveScreen = useCallback(async () => {
     const name = screenName.trim()
@@ -415,7 +460,7 @@ export default function Screener() {
       const res = await fetchWithAbort('/api/screener/screens', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, scope: buildScope(), conditions }),
+        body: JSON.stringify({ name, scope: buildScope(), conditions, benchmark }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `Save failed (${res.status})`)
@@ -426,7 +471,7 @@ export default function Screener() {
       setError(e.message)
       setSaveStatus('error')
     }
-  }, [screenName, conditions, buildScope])
+  }, [screenName, conditions, benchmark, buildScope])
 
   const loadScreen = useCallback((screen) => {
     setConditions(screen.conditions)
@@ -434,6 +479,8 @@ export default function Screener() {
     setScopeType(sc.type || 'holdings')
     if (sc.sectorKey) setSectorKey(sc.sectorKey)
     if (sc.themeId) setThemeId(sc.themeId)
+    if (sc.caps) setSelectedCaps(sc.caps)
+    setBenchmark(screen.benchmark || 'NSE:NIFTY SMLCAP 250')
     setResult(null)
     setJobStatus(null)
     setError(null)
@@ -454,6 +501,7 @@ export default function Screener() {
     setJobStatus(null)
     setError(null)
     setActiveScreenId(preset.id)
+    if (preset.id === RANGE_PRESET.id) setScopeType('caps')
   }, [])
 
   const deleteScreen = useCallback(async (id) => {
@@ -494,15 +542,23 @@ export default function Screener() {
     <div>
       <h1 style={{ marginBottom: '0.25rem' }}>Custom Screener</h1>
       <p style={{ color: 'var(--text-secondary)', marginTop: 0, marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-        Scan your holdings, a sector, or a theme against indicator conditions — all conditions must match.
+        Scan large-, mid-, or small-cap index constituents, your holdings, a sector, or a theme against indicator conditions — all conditions must match.
         Same math as the alert engine (RSI, ADX, SuperTrend, SMA/EMA, volume).
       </p>
 
       <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Universe</span>
+        {scopeBtn('caps', 'Cap groups')}
         {scopeBtn('holdings', 'My Holdings')}
         {scopeBtn('sector', 'Sector')}
         {scopeBtn('theme', 'Theme')}
+        {scopeType === 'caps' && <fieldset style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', border: 0, padding: 0, margin: 0 }}>
+          <legend style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Choose one or more groups</legend>
+          {capGroups.map(group => <label key={group.id} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.8rem', cursor: 'pointer' }}>
+            <input type="checkbox" checked={selectedCaps.includes(group.id)} onChange={() => setSelectedCaps(caps => caps.includes(group.id) ? caps.filter(id => id !== group.id) : [...caps, group.id])} />
+            {group.label}
+          </label>)}
+        </fieldset>}
         {scopeType === 'sector' && (
           <select value={sectorKey} onChange={e => setSectorKey(e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }}>
             {sectors.map(s => <option key={s} value={s}>{s.replace(/^NSE:/, '')}</option>)}
@@ -516,6 +572,20 @@ export default function Screener() {
           ) : <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>No themes yet — create one on the Basket page.</span>
         )}
       </div>
+
+      <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        <strong>Find the start of a range breakout</strong>
+        <button type="button" onClick={() => loadPreset(RANGE_PRESET)} disabled={running || !fields} style={{ ...inputStyle, cursor: 'pointer', color: 'var(--accent)' }}>Use this setup</button>
+        <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Volume ≥1.5×, hold 3 sessions, range ≤25%, age ≤10 sessions, within 10% of resistance. Relative strength uses the stock/index ratio, independent of the chart's starting date.</span>
+      </div>
+      {conditions.some(condition => ['rangeBreakoutRs', 'relativeReturn20d'].includes(condition.field)) && <div style={{ marginBottom: '1rem' }}>
+        <label style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>Compare strength against
+          <select value={benchmark} onChange={event => setBenchmark(event.target.value)} style={inputStyle}>
+            {benchmarks.map(index => <option key={index.key} value={index.key}>{index.label}</option>)}
+          </select>
+        </label>
+        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Uses matching daily sessions and current constituent lists. Daily candles may include an incomplete latest session. This setup has no measured success rate.</p>
+      </div>}
 
       <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -605,7 +675,7 @@ export default function Screener() {
               still scanning… (sectors resolve when the scan finishes)
             </span>
           </h2>
-          <ResultsTable matches={partial} label={progress?.label || 'scan'} />
+          <ResultsTable matches={partial} label={progress?.label || 'scan'} rangeSetup={scanConditions.some(condition => condition.field.startsWith('rangeBreakout'))} />
         </div>
       )}
 
@@ -620,8 +690,10 @@ export default function Screener() {
               {result.notReady?.length ? ` · ${result.notReady.length} unavailable (${result.notReady.join(', ')})` : ''}
             </span>
           </h2>
+          {result.benchmark && <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: 0 }}>Comparison: {result.benchmark.label} · Index candles through {result.benchmark.candleAsOf} · Rule {result.rangeBreakoutRule}</p>}
+          {result.sources?.length > 0 && <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>Current constituents: {result.sources.map(source => <span key={source.url}><a href={source.url} target="_blank" rel="noreferrer">{source.label}</a> ({source.count} equities, fetched {source.fetchedAt.slice(0, 10)}{source.excluded?.length ? `; ${source.excluded.length} non-equity/placeholder rows excluded` : ''}){' '}</span>)}</p>}
           {result.matches.length > 0
-            ? <ResultsTable matches={result.matches} label={result.label} />
+            ? <ResultsTable matches={result.matches} label={result.label} rangeSetup={result.conditions.some(condition => condition.field.startsWith('rangeBreakout'))} />
             : <p style={{ color: 'var(--text-secondary)' }}>No stocks matched all conditions.</p>}
         </div>
       )}
@@ -710,7 +782,7 @@ export default function Screener() {
                   Saved
                 </span>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flex: 1 }}>
-                  {(s.scope?.type === 'sector' ? (s.scope.sectorKey || '').replace(/^NSE:/, '') : s.scope?.type) || ''}
+                  {(s.scope?.type === 'sector' ? (s.scope.sectorKey || '').replace(/^NSE:/, '') : s.scope?.type === 'caps' ? s.scope.caps?.join(' + ') : s.scope?.type) || ''}
                   {' · '}
                   {(s.conditions || []).map(describeCondition).join('  AND  ')}
                 </span>

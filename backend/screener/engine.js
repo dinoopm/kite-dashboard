@@ -4,6 +4,7 @@
 // user-defined conditions against that row. All conditions are ANDed.
 const { buildSeries, rollingMax, rollingMin } = require('../backtest/indicators');
 const { computeVcpScore } = require('./vcp');
+const { rangeBreakoutFields } = require('./rangeBreakout');
 const { squeezeState, MIN_BARS: SQUEEZE_MIN_BARS } = require('./squeeze');
 // The BUY half of signal1050 is the registry's detector, not a second copy of
 // the rule. See the note above lastCrossoverSignal for why that matters.
@@ -14,6 +15,13 @@ const {
 // Field catalog — drives both the UI's condition builder (dropdowns, operator
 // choices, value inputs) and server-side validation. `group` is only a UI hint.
 const SCREENER_FIELDS = [
+  { key: 'rangeBreakoutStatus', label: '30-session breakout status', type: 'enum', enumValues: ['CONFIRMED', 'PENDING', 'FAILED'], group: 'Range breakout' },
+  { key: 'rangeBreakoutAge', label: 'Sessions since range breakout', type: 'number', group: 'Range breakout' },
+  { key: 'rangeBreakoutBasePct', label: 'Range width before breakout %', type: 'number', group: 'Range breakout' },
+  { key: 'rangeBreakoutVol', label: 'Volume × at range breakout', type: 'number', group: 'Range breakout' },
+  { key: 'rangeBreakoutDistance', label: 'Current price above broken level %', type: 'number', group: 'Range breakout' },
+  { key: 'rangeBreakoutRs', label: 'Stock/index ratio: new 20-session high at breakout', type: 'enum', enumValues: ['YES', 'NO'], group: 'Relative strength' },
+  { key: 'relativeReturn20d', label: 'Stock minus index return (20 sessions, pp)', type: 'number', group: 'Relative strength' },
   { key: 'price',       label: 'Price (₹)',                type: 'number', group: 'Price' },
   { key: 'change1D',    label: '1-day change %',           type: 'number', group: 'Price' },
   { key: 'change1W',    label: '1-week change %',          type: 'number', group: 'Price' },
@@ -148,7 +156,7 @@ const retOver = (closes, bars) => {
 };
 
 // One pass per stock — ~1-2ms over a 4-year series.
-function computeScreenerRow(candles) {
+function computeScreenerRow(candles, { benchmarkCandles = [] } = {}) {
   const S = buildSeries(candles);
   const n = candles.length;
   const last = n - 1;
@@ -173,6 +181,7 @@ function computeScreenerRow(candles) {
   const hi55 = rollingMax(S.highs, Math.min(55, last), last);
 
   return {
+    ...rangeBreakoutFields(candles, benchmarkCandles),
     price: +price.toFixed(2),
     change1D: last >= 1 && closes[last - 1] > 0 ? +(((price / closes[last - 1]) - 1) * 100).toFixed(2) : null,
     change1W: retOver(closes, 5),

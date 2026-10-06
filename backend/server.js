@@ -4909,17 +4909,50 @@ app.get('/api/macro-overview', async (req, res) => {
 // basket backtests, since a cold universe needs multi-year history per stock.
 const { SCREENER_FIELDS, computeScreenerRow, validateConditions, evaluateConditions } = require('./screener/engine');
 
+const { createCapUniverse, CAP_GROUPS, validateCaps } = require('./screener/capUniverse');
+const { RULE_VERSION: RANGE_BREAKOUT_RULE } = require('./screener/rangeBreakout');
+const capUniverse = createCapUniverse();
+const SCREENER_BENCHMARKS = FLOW_OVERLAY_INDICES.map(index => ({ key: index.key, label: index.label }));
+const DEFAULT_SCREENER_BENCHMARK = 'NSE:NIFTY SMLCAP 250';
+const RELATIVE_FIELDS = new Set(['rangeBreakoutRs', 'relativeReturn20d']);
+function validateScreenerSettings(scope, benchmark) {
+  if (!['caps', 'sector', 'theme', 'holdings'].includes(scope?.type)) throw new Error('Choose a valid universe.');
+  if (scope?.type === 'caps') validateCaps(scope.caps);
+  if (!SCREENER_BENCHMARKS.some(index => index.key === benchmark)) throw new Error('Choose a valid comparison index.');
+}
+
 const MIN_SCREENER_BARS = 60; // enough for RSI/ADX/ST + 20d windows; longer fields go null
 
 app.get('/api/screener/fields', (req, res) => {
-  res.json({ fields: SCREENER_FIELDS });
+  res.json({ fields: SCREENER_FIELDS, capGroups: CAP_GROUPS.map(({ id, label }) => ({ id, label })), benchmarks: SCREENER_BENCHMARKS });
 });
 
 const screenerJobs = {};
 let screenerJobSeq = 0;
 
-async function runScreenerJob(job, { scope, conditions }) {
-  const { label, list } = await resolveBasketConstituents(scope);
+async function runScreenerJob(job, { scope, conditions, benchmark }) {
+  let benchmarkCandles = [];
+  if (conditions.some(condition => RELATIVE_FIELDS.has(condition.field))) {
+    job.progress.symbol = 'Loading comparison index…';
+    const [{ token }] = await resolveIndexTokens([benchmark]);
+    if (!token) throw new Error('Comparison index token unavailable. Retry the screen.');
+    benchmarkCandles = await getScreenerHistory(token);
+    if (!Array.isArray(benchmarkCandles) || benchmarkCandles.length < 31) throw new Error('Comparison index history is unavailable or too short. Retry the screen.');
+    job.benchmark = { key: benchmark, label: SCREENER_BENCHMARKS.find(index => index.key === benchmark).label, candleAsOf: benchmarkCandles.at(-1)?.date?.slice(0, 10) };
+  }
+  let universe;
+  if (scope.type === 'caps') {
+    universe = await capUniverse.resolve(scope.caps);
+    // Quote in modest batches: no database membership seed or giant MCP request.
+    const resolved = [];
+    for (let i = 0; i < universe.list.length; i += 50) {
+      job.progress.symbol = `Resolving instruments ${i + 1}–${Math.min(i + 50, universe.list.length)}`;
+      const batch = universe.list.slice(i, i + 50);
+      resolved.push(...(await resolveConstituentsFromRows(batch)).map((row, j) => ({ ...row, capGroups: batch[j].capGroups })));
+    }
+    universe.list = resolved;
+  } else universe = await resolveBasketConstituents(scope);
+  const { label, list } = universe;
   job.progress.total = list.length;
 
   const matches = [];
@@ -4940,9 +4973,12 @@ async function runScreenerJob(job, { scope, conditions }) {
         const token = String(c.token);
         const candles = await getScreenerHistory(token);
         if (!Array.isArray(candles) || candles.length < MIN_SCREENER_BARS) { notReady.push(c.symbol); continue; }
-        const values = computeScreenerRow(candles);
+        const values = computeScreenerRow(candles, { benchmarkCandles });
+        if (conditions.some(condition => RELATIVE_FIELDS.has(condition.field)) && values.relativeReturn20d == null) {
+          notReady.push(c.symbol); continue;
+        }
         if (evaluateConditions(values, conditions)) {
-          matches.push({ symbol: c.symbol, token, values, name: c.name || null });
+          matches.push({ symbol: c.symbol, token, values, name: c.name || null, capGroups: c.capGroups || [], candleAsOf: candles.at(-1)?.date?.slice(0, 10) });
         }
       } catch (e) {
         console.log(`  ⚠️ [screener] ${c.symbol}: ${e.message}`);
@@ -4982,15 +5018,19 @@ async function runScreenerJob(job, { scope, conditions }) {
     total: job.progress.total,
     notReady,
     generatedAt: new Date().toISOString(),
+    benchmark: job.benchmark || null,
+    sources: universe.sources || [],
+    rangeBreakoutRule: RANGE_BREAKOUT_RULE,
   };
 }
 
 app.post('/api/screener/run', async (req, res) => {
   if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
-  const { scope, conditions } = req.body || {};
-  if (!scope?.type) return res.status(400).json({ error: 'scope.type is required (sector | theme | holdings)' });
+  const { scope, conditions, benchmark = DEFAULT_SCREENER_BENCHMARK } = req.body || {};
+  if (!scope?.type) return res.status(400).json({ error: 'scope.type is required (caps | sector | theme | holdings)' });
   try {
     validateConditions(conditions);
+    validateScreenerSettings(scope, benchmark);
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -5004,7 +5044,7 @@ app.post('/api/screener/run', async (req, res) => {
   const job = { id: jobId, status: 'running', progress: { loaded: 0, total: 0, symbol: null }, result: null, error: null, createdAt: Date.now() };
   screenerJobs[jobId] = job;
 
-  runScreenerJob(job, { scope, conditions })
+  runScreenerJob(job, { scope, conditions, benchmark })
     .then(result => { job.result = result; job.status = 'done'; })
     .catch(e => { job.status = 'error'; job.error = e.message; console.error('[screener]', e.message); });
 
@@ -5036,18 +5076,22 @@ const screenRowToApi = (row) => {
     name: row.name,
     scope,
     conditions: row.rules?.conditions || [],
+    benchmark: row.rules?.benchmark || DEFAULT_SCREENER_BENCHMARK,
     created_at: row.created_at,
   };
 };
 
 app.post('/api/screener/screens', async (req, res) => {
   if (!supabase) return res.status(500).json({ error: 'Supabase not configured' });
-  const { name, scope, conditions } = req.body || {};
+  const { name, scope, conditions, benchmark = DEFAULT_SCREENER_BENCHMARK } = req.body || {};
   if (!name || !scope?.type) return res.status(400).json({ error: 'name and scope are required' });
   try {
     validateConditions(conditions);
+    validateScreenerSettings(scope, benchmark);
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+  try {
     const { data, error } = await supabase.from('saved_screens')
-      .insert({ name: String(name).trim(), rules: { conditions }, universe: JSON.stringify(scope) })
+      .insert({ name: String(name).trim(), rules: { conditions, benchmark }, universe: JSON.stringify(scope) })
       .select().single();
     if (error) throw new Error(error.message);
     res.json({ screen: screenRowToApi(data) });
