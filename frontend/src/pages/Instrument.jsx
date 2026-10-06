@@ -19,6 +19,9 @@ import VolatilityPanel from '../components/VolatilityPanel'
 import InstitutionalPanel from '../components/InstitutionalPanel'
 import EventBadge from '../components/EventBadge'
 import NewsPanel from '../components/NewsPanel'
+import IndexComparisonControls from '../components/IndexComparisonControls'
+import useIndexComparison from '../hooks/useIndexComparison'
+import { COMPARISON_INDICES, percentageChange } from '../lib/indexComparison'
 
 // ₹ formatters for the shared AnalystsPanel: prices/EPS in rupees, revenue in Cr.
 const inrMoney = (v) => (v == null ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
@@ -551,6 +554,12 @@ function Instrument() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [timeframe, setTimeframe] = useState('1M')
+  const indexComparison = useIndexComparison(data, timeframe, token)
+  const comparison = indexComparison.comparison
+  const comparing = comparison.base != null
+  const priceChartData = comparing ? comparison.data : data
+  const priceY = value => comparing ? percentageChange(value, comparison.base) : value
+  const plottedDates = new Set(priceChartData.map(bar => bar.date))
   const [showSR, setShowSR] = useState(true) // support/resistance overlay
   const [showBreakouts, setShowBreakouts] = useState(true) // breakout markers
   const [showSignals, setShowSignals] = useState(false) // 10/50 MA-crossover Buy/Sell markers (off by default)
@@ -980,6 +989,7 @@ function Instrument() {
               const safeDate = `${months[parseInt(mm, 10) - 1]} ${parseInt(dd, 10)}, ${yyyy}`;
 
               return {
+                timestamp: c.date,
                 dateObj: new Date(c.date),
                 date: timeframe === '1D'
                   ? c.date.substring(11, 16) // Extracts "09:15" directly from "2026-04-07T09:15:00+05:30"
@@ -1829,6 +1839,8 @@ function Instrument() {
             )}
           </div>
 
+          <IndexComparisonControls model={indexComparison} loading={loading} />
+
           {/* Breakout engine control panel */}
           {showBreakouts && timeframe !== '1D' && !loading && !error && data.length > 0 && (() => {
             const nConfirmed = breakouts.filter(b => b.status === 'confirmed').length;
@@ -1895,30 +1907,31 @@ function Instrument() {
                   so the axis is printed once, at the bottom. */}
               <div style={{ flex: 1, minHeight: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data} margin={{ top: 10, right: 78, left: 0, bottom: 0 }}>
+                <LineChart data={priceChartData} margin={{ top: 10, right: 78, left: 0, bottom: 0 }}>
                   <XAxis
                     dataKey="date"
                     stroke="var(--text-secondary)"
-                    tick={hasTradedVolume(data) ? false : { fill: 'var(--text-secondary)', fontSize: 12 }}
-                    height={hasTradedVolume(data) ? 1 : undefined}
+                    tick={hasTradedVolume(priceChartData) ? false : { fill: 'var(--text-secondary)', fontSize: 12 }}
+                    height={hasTradedVolume(priceChartData) ? 1 : undefined}
                     tickFormatter={fmtAxisDate}
                     interval="preserveStartEnd"
                     minTickGap={56}
                     tickMargin={8}
                   />
-                  <YAxis domain={['auto', 'auto']} stroke="var(--text-secondary)" tick={{ fill: 'var(--text-secondary)' }} />
+                  <YAxis domain={['auto', 'auto']} stroke="var(--text-secondary)" tick={{ fill: 'var(--text-secondary)' }} tickFormatter={comparing ? value => `${Number(value).toFixed(1)}%` : undefined} />
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                   <Tooltip
                     contentStyle={{ backgroundColor: 'var(--bg-dark)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
-                    itemStyle={{ color: 'var(--accent)' }}
+                    formatter={comparing ? (value, name) => [`${Number(value).toFixed(2)}%`, name] : undefined}
                   />
                   <Legend />
+                  {comparing && <ReferenceLine y={0} stroke="var(--text-secondary)" strokeDasharray="4 4" />}
                   {showSR && sr.supports.map(l => {
                     const st = srStrength(l.touches);
                     return (
                       <ReferenceLine
                         key={`sup-${l.price}`}
-                        y={l.price}
+                        y={priceY(l.price)}
                         stroke="#f87171"
                         strokeDasharray="2 4"
                         strokeWidth={st.width}
@@ -1933,7 +1946,7 @@ function Instrument() {
                     return (
                       <ReferenceLine
                         key={`res-${l.price}`}
-                        y={l.price}
+                        y={priceY(l.price)}
                         stroke="#4ade80"
                         strokeDasharray="2 4"
                         strokeWidth={st.width}
@@ -1943,7 +1956,7 @@ function Instrument() {
                       />
                     );
                   })}
-                  {showBreakouts && breakouts.map((b) => {
+                  {showBreakouts && breakouts.filter(b => plottedDates.has(b.date)).map((b) => {
                     const isFail = b.status === 'failed';
                     const isPending = b.status === 'pending';
                     const c = isFail ? '#ef4444' : isPending ? '#fbbf24' : '#22c55e';
@@ -1955,7 +1968,7 @@ function Instrument() {
                       <ReferenceDot
                         key={`bo-${b.index}`}
                         x={b.date}
-                        y={b.price}
+                        y={priceY(b.price)}
                         ifOverflow="extendDomain"
                         shape={({ cx, cy }) => (
                           <g style={{ cursor: 'pointer' }}>
@@ -1971,7 +1984,7 @@ function Instrument() {
                       />
                     );
                   })}
-                  {showSignals && maSignals.map((s) => {
+                  {showSignals && maSignals.filter(s => plottedDates.has(s.bar.date)).map((s) => {
                     const buy = s.type === 'buy';
                     if (buy && s.deadCat) return null; // dead-cat bounce: not an actionable buy
                     const c = buy ? '#22c55e' : '#ef4444';
@@ -1982,7 +1995,7 @@ function Instrument() {
                       <ReferenceDot
                         key={`sig-${s.index}`}
                         x={s.bar.date}
-                        y={s.bar.close}
+                        y={priceY(s.bar.close)}
                         ifOverflow="extendDomain"
                         shape={({ cx, cy }) => (
                           <g style={{ cursor: 'pointer' }}>
@@ -2006,11 +2019,14 @@ function Instrument() {
                       />
                     );
                   })}
-                  <Line type="monotone" name="Price" dataKey="close" stroke="var(--accent)" strokeWidth={2} dot={false} />
+                  <Line type="monotone" name={comparing ? (symbol || 'Instrument') : 'Price'} dataKey={comparing ? 'stockReturn' : 'close'} stroke="var(--accent)" strokeWidth={2} dot={false} />
+                  {COMPARISON_INDICES.filter(index => comparison.indices.includes(index.id)).map(index => (
+                    <Line key={index.id} type="linear" name={index.label} dataKey={index.id} stroke={index.color} strokeWidth={2} dot={false} connectNulls={false} isAnimationActive={false} />
+                  ))}
                 </LineChart>
               </ResponsiveContainer>
               </div>
-              <VolumePane data={data} margin={{ top: 0, right: 78, left: 0, bottom: 0 }} fmtAxisDate={fmtAxisDate} />
+              <VolumePane data={priceChartData} margin={{ top: 0, right: 78, left: 0, bottom: 0 }} fmtAxisDate={fmtAxisDate} />
               </>
             )}
           </section>
