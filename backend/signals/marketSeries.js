@@ -92,6 +92,21 @@ async function fetchCloses(symbols, since) {
   return bySymbol;
 }
 
+/** OHLC path for adverse-move measurements; missing lows remain unavailable. */
+async function fetchPriceBars(symbols, since) {
+  const bySymbol = new Map();
+  for (let i = 0; i < symbols.length; i += 50) {
+    const rows = await fetchAll('nse_bhavcopy', 'trade_date,symbol,series,close,high,low',
+      q => q.in('symbol', symbols.slice(i, i + 50)).gte('trade_date', since));
+    for (const row of rows) {
+      if (!bySymbol.has(row.symbol)) bySymbol.set(row.symbol, new Map());
+      const map = bySymbol.get(row.symbol);
+      if (!map.has(row.trade_date) || row.series === 'EQ') map.set(row.trade_date, row);
+    }
+  }
+  return bySymbol;
+}
+
 /** NIFTY 50 daily closes as date -> close. */
 async function fetchBenchmark(since) {
   const c = await yf.chart(BENCHMARK, { period1: since, interval: '1d' });
@@ -113,7 +128,7 @@ async function fetchBenchmark(since) {
 async function buildMarketContext(symbols, since) {
   const [tdatesAll, closesBySymbol, benchByDate] = await Promise.all([
     fetchTradingDates(),
-    fetchCloses(symbols, since),
+    fetchPriceBars(symbols, since),
     fetchBenchmark(since).catch(() => null),
   ]);
 
@@ -121,7 +136,13 @@ async function buildMarketContext(symbols, since) {
   const calendarGaps = findCalendarGaps(tdatesAll, calendar);
 
   const seriesBySymbol = {};
-  for (const s of symbols) seriesBySymbol[s] = alignToCalendar(calendar, closesBySymbol.get(s));
+  for (const s of symbols) {
+    const bars = closesBySymbol.get(s);
+    seriesBySymbol[s] = calendar.map(date => ({
+      date, close: bars?.get(date)?.close ?? null,
+      high: bars?.get(date)?.high ?? null, low: bars?.get(date)?.low ?? null,
+    }));
+  }
 
   return {
     calendar,
@@ -134,5 +155,5 @@ async function buildMarketContext(symbols, since) {
 
 module.exports = {
   BENCHMARK, fetchAll, mergeCalendars, findCalendarGaps, alignToCalendar,
-  fetchTradingDates, fetchCloses, fetchBenchmark, buildMarketContext,
+  fetchTradingDates, fetchCloses, fetchPriceBars, fetchBenchmark, buildMarketContext,
 };

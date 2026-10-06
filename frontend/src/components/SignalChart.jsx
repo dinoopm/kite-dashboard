@@ -78,7 +78,7 @@ const barTime = (b) => {
 
 // View = how much recent history to ZOOM to. Full 5Y is loaded up front so the
 // Slow SMA stays warm even on a 1-month view; these only pan/zoom the time axis.
-const VIEW_DAYS = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '3Y': 1095, '5Y': null };
+const VIEW_DAYS = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365, '2Y': 730, '3Y': 1095, '4Y': 1460, '5Y': null };
 
 // The periods the backend registry scores. The sliders can move off them, and
 // when they do the markers stop being the rule anything has a record for.
@@ -656,7 +656,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
           </span>
         </div>
         <div style={{ display: 'flex', gap: '0.4rem' }}>
-          {['1M', '3M', '6M', '1Y', '3Y', '5Y'].map(t => (
+          {['1M', '3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y'].map(t => (
             <button key={t} onClick={() => setView(t)} title="Zoom the view (5Y of history is always loaded so the SMAs stay accurate)" style={{
               padding: '0.3rem 0.7rem', borderRadius: '4px', fontSize: '0.75rem', cursor: 'pointer',
               border: `1px solid ${view === t ? 'var(--accent)' : 'var(--border)'}`,

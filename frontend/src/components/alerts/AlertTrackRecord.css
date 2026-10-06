@@ -1,0 +1,26 @@
+.alert-audit select, .alert-audit button {
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0.35rem 0.5rem;
+}
+.alert-audit button { cursor: pointer; }
+.alert-audit button:disabled { opacity: 0.6; cursor: wait; }
+.alert-audit code { overflow-wrap: anywhere; }
+.alert-audit summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.alert-audit-cards { display: none; }
+.alert-audit-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.65rem;
+  margin: 0.5rem 0;
+}
+.alert-audit-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+.alert-audit-card dt { color: var(--text-secondary); font-size: 0.7rem; }
+.alert-audit-card dd { margin: 0.2rem 0 0; font-weight: 600; }
+@media (max-width: 600px) {
+  .alert-audit-table { display: none; }
+  .alert-audit-cards { display: block; }
+}

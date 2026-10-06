@@ -49,6 +49,41 @@ const median = (xs) => {
 };
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
+// Illustrative all-in fee and slippage assumptions, not broker-specific rates.
+const DEFAULT_COST_MODEL = Object.freeze({ version: 'illustrative-v1', feeBpsPerSide: 10, slippageBpsPerSide: 5 });
+
+function validateCostModel(model) {
+  for (const key of ['feeBpsPerSide', 'slippageBpsPerSide']) {
+    if (!Number.isFinite(model?.[key]) || model[key] < 0) throw new TypeError(`Invalid ${key}`);
+  }
+  if (model.feeBpsPerSide + model.slippageBpsPerSide >= 10000) throw new TypeError('Costs must be below 100% per side');
+  return model;
+}
+
+function forwardOutcome(series, fromIdx, horizon, { entryPrice, costModel } = {}) {
+  if (!Number.isInteger(horizon) || horizon < 1 || !Array.isArray(series) || fromIdx < 0 || fromIdx + horizon >= series.length) return null;
+  const entry = entryPrice ?? series[fromIdx]?.close;
+  const exit = series[fromIdx + horizon]?.close;
+  if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(exit) || exit <= 0) return null;
+  const grossReturnPct = ((exit / entry) - 1) * 100;
+  let netReturnPct = null;
+  if (costModel) {
+    validateCostModel(costModel);
+    const rate = (costModel.feeBpsPerSide + costModel.slippageBpsPerSide) / 10000;
+    netReturnPct = ((exit * (1 - rate)) / (entry * (1 + rate)) - 1) * 100;
+  }
+  // Exclude the observation-day low: it may precede an intraday observation.
+  // Any missing session low leaves the adverse-move measurement unresolved.
+  const path = series.slice(fromIdx + 1, fromIdx + horizon + 1);
+  const pathComplete = path.every(bar => Number.isFinite(bar.low) && bar.low > 0);
+  const maxAdversePct = pathComplete ? Math.min(0, (Math.min(...path.map(bar => bar.low)) / entry - 1) * 100) : null;
+  return {
+    grossReturnPct, netReturnPct, maxAdversePct, pathComplete,
+    exitDate: series[fromIdx + horizon].date,
+    outcomeAfterCosts: netReturnPct === null ? null : netReturnPct > 0 ? 'gain' : netReturnPct < 0 ? 'loss' : 'flat',
+  };
+}
+
 /**
  * Score a set of signal emissions.
  *
@@ -72,6 +107,9 @@ function scoreSignal(emissions, seriesBySymbol, opts = {}) {
   for (const h of horizons) {
     const raw = [];
     const excess = [];
+    const net = [];
+    const adverse = [];
+    let adverseUnresolved = 0;
     let unresolved = 0;
 
     for (const e of emissions || []) {
@@ -79,9 +117,13 @@ function scoreSignal(emissions, seriesBySymbol, opts = {}) {
       const idx = indexOfDate(series, e?.date);
       if (idx < 0) { unresolved++; continue; }
 
-      const r = forwardReturn(series, idx, h);
-      if (r == null) { unresolved++; continue; }
+      const result = forwardOutcome(series, idx, h, { entryPrice: e.entryPrice, costModel: e.costModel || opts.costModel });
+      if (!result) { unresolved++; continue; }
+      const r = result.grossReturnPct;
       raw.push(r);
+      if (result.netReturnPct !== null) net.push(result.netReturnPct);
+      if (result.maxAdversePct !== null) adverse.push(result.maxAdversePct);
+      else adverseUnresolved++;
 
       if (benchmark) {
         const bIdx = indexOfDate(benchmark, e.date);
@@ -102,6 +144,15 @@ function scoreSignal(emissions, seriesBySymbol, opts = {}) {
       meanExcessPct: excess.length ? mean(excess) : null,
       hitRateExcess: excess.length ? excess.filter(r => r > 0).length / excess.length : null,
       nExcess: excess.length,
+      nNet: net.length,
+      medianNetPct: median(net),
+      meanNetPct: mean(net),
+      hitRateNet: net.length ? net.filter(r => r > 0).length / net.length : null,
+      outcomesAfterCosts: { gains: net.filter(r => r > 0).length, losses: net.filter(r => r < 0).length, flat: net.filter(r => r === 0).length },
+      nAdverse: adverse.length,
+      adverseUnresolved,
+      medianMaxAdversePct: median(adverse),
+      worstMaxAdversePct: adverse.length ? Math.min(...adverse) : null,
     };
   }
 
@@ -123,4 +174,4 @@ function summarise(stat, { minN = 20 } = {}) {
   return `n=${stat.n}, median ${dir} benchmark by ${Math.abs(edge).toFixed(2)}%`;
 }
 
-module.exports = { forwardReturn, indexOfDate, scoreSignal, summarise };
+module.exports = { forwardReturn, forwardOutcome, indexOfDate, scoreSignal, summarise, DEFAULT_COST_MODEL, validateCostModel };

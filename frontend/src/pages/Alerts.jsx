@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import AlertRow from '../components/alerts/AlertRow'
 import ConvictionModal from '../components/alerts/ConvictionModal'
 import TradePlanModal from '../components/alerts/TradePlanModal'
+import AlertTrackRecord from '../components/alerts/AlertTrackRecord'
 import { biasClass } from '../components/alerts/biasClass'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 
@@ -27,6 +28,8 @@ function Alerts() {
   const [sortConfig, setSortConfig] = useState({ key: 'confidence', direction: 'desc' })
   const [showLegend, setShowLegend] = useState(false)
   const [freshness, setFreshness] = useState(null)
+  const [recording, setRecording] = useState(null)
+  const [ruleVersion, setRuleVersion] = useState(null)
   const [modalStock, setModalStock] = useState(null)
   const [tradePlanModalStock, setTradePlanModalStock] = useState(null)
   const searchInputRef = useRef(null)
@@ -60,10 +63,14 @@ function Alerts() {
           setAlerts(data)
           setSummary(null)
           setFreshness(null)
+          setRecording(null)
+          setRuleVersion(null)
         } else {
           setAlerts(data.alerts || [])
           setSummary(data.summary || null)
           setFreshness(data.freshness || null)
+          setRecording(data.recording || null)
+          setRuleVersion(data.ruleVersion || null)
         }
         setLoading(false)
       } catch (err) {
@@ -296,6 +303,8 @@ function Alerts() {
         </div>
       )}
 
+      <AlertTrackRecord recording={recording} ruleVersion={ruleVersion} />
+
       {/* Holdings Summary Banner */}
       {summary && (
         <div style={{
@@ -498,7 +507,7 @@ function Alerts() {
                 </div>
                 <div>
                   <span style={{ color: '#fcd34d', fontWeight: 800 }}>BREAKOUT (WEAK)</span> — Price crossed resistance but technicals AND volume are weak. High chance of a bull trap.<br />
-                  <em>Action:</em> Do NOT buy. Wait for score &gt; 60% and volume surge.
+                  <em>Action:</em> Do NOT buy. Wait for score &gt; 60/100 and volume surge.
                 </div>
                 <div>
                   <span style={{ color: '#f59e0b', fontWeight: 800 }}>HOLD / WAIT</span> — No clear edge, or reward/risk is below 1.5×.<br />
@@ -538,7 +547,7 @@ function Alerts() {
             <div onClick={() => requestSort('vwap')} className="sort-header" title="20-day VWAP deviation and RSI trends">CORE TECHNICALS <span className="info-icon">ⓘ</span> {renderSortArrow('vwap')}</div>
             <div onClick={() => requestSort('aggressor')} className="sort-header" style={{ justifyContent: 'center' }} title="Chaikin-style money flow: right (Cyan) = accumulation, left (Red) = distribution">MONEY FLOW <span className="info-icon">ⓘ</span> {renderSortArrow('aggressor')}</div>
             <div style={{ textAlign: 'center' }} title="Algorithmic entry and exit positioning">TRADE PLAN <span className="info-icon">ⓘ</span></div>
-            <div onClick={() => requestSort('confidence')} className="sort-header" style={{ justifyContent: 'flex-end' }} title="Momentum conviction score (0-100)">MOMENTUM {renderSortArrow('confidence')}</div>
+            <div onClick={() => requestSort('confidence')} className="sort-header" style={{ justifyContent: 'flex-end' }} title="Heuristic bullish-bias score out of 100; not a calibrated probability">SCORE /100 {renderSortArrow('confidence')}</div>
           </div>
 
           {filteredStocks.map(stock => (

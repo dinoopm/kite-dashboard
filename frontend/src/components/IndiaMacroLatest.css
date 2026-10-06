@@ -1,0 +1,18 @@
+.india-macro-latest { min-width: 0; }
+.india-macro-heading { display: flex; flex-wrap: wrap; gap: .7rem; justify-content: space-between; align-items: center; }
+.india-macro-heading h2 { margin: 0; font-size: 1.1rem; }
+.india-macro-help { color: var(--text-secondary); font-size: .8rem; line-height: 1.6; }
+.india-macro-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 265px), 1fr)); gap: .8rem; }
+.india-macro-card { padding: 1rem; min-width: 0; overflow-wrap: anywhere; }
+.india-macro-card-title { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .4rem; font-size: .8rem; font-weight: 600; }
+.india-macro-status { padding: .2rem .4rem; border-radius: 4px; font-size: .65rem; background: rgba(56,189,248,.1); color: var(--accent); }
+.india-macro-status.stale, .india-macro-status.unavailable, .india-macro-warning { color: #fbbf24; }
+.india-macro-value { display: block; font-size: 1.55rem; margin: .8rem 0 .4rem; }
+.india-macro-card p { margin: .4rem 0; font-size: .74rem; line-height: 1.5; color: var(--text-secondary); }
+.india-macro-card .india-macro-period { color: var(--text-primary); font-weight: 600; }
+.india-macro-card .india-macro-warning { color: #fbbf24; }
+.india-macro-card a { display: inline-block; margin: .4rem 0; font-size: .75rem; color: var(--accent); }
+.india-macro-card details { margin-top: .7rem; font-size: .75rem; color: var(--text-secondary); }
+.india-macro-card summary { cursor: pointer; }
+.india-macro-card li { margin-bottom: .4rem; line-height: 1.5; }
+.india-macro-latest button:focus-visible, .india-macro-card a:focus-visible, .india-macro-card summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

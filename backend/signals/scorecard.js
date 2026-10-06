@@ -15,9 +15,13 @@
 //                 assembled after the fact, and pooling it with recorded rows
 //                 would launder the weaker evidence into the stronger.
 
-const { scoreSignal, summarise } = require('../signalScoring');
+const { scoreSignal, summarise, DEFAULT_COST_MODEL } = require('../signalScoring');
+const { normalizeEmission } = require('./audit');
+const { PRICE_RULE_VERSION } = require('./ruleVersions');
 const { fetchAll, buildMarketContext } = require('./marketSeries');
-const { ALL_SIGNALS, BLOCKED_SIGNALS, signalMeta } = require('./registry');
+const { ALL_SIGNALS, PRICE_SIGNALS, BLOCKED_SIGNALS, signalMeta } = require('./registry');
+
+const currentRuleVersions = Object.fromEntries(PRICE_SIGNALS.map(signal => [signal.name, PRICE_RULE_VERSION]));
 
 const HORIZONS = [5, 10, 22];
 // Below this, `summarise` refuses to call a direction. Reported anyway, so an
@@ -25,9 +29,9 @@ const HORIZONS = [5, 10, 22];
 const MIN_N = 20;
 
 async function fetchEmissions() {
-  const rows = await fetchAll('signal_emissions', 'signal,snap_date,symbol,source',
-    (q) => q.order('snap_date', { ascending: true }));
-  return rows.map(r => ({ signal: r.signal, date: r.snap_date, symbol: r.symbol, source: r.source }));
+  const rows = await fetchAll('signal_emissions', 'signal,snap_date,symbol,source,canonicalSignal:meta->>signal,ruleVersion:meta->>ruleVersion,costModel:meta->costModel,inputSnapshot:meta->>inputSnapshot',
+    (q) => q.order('snap_date', { ascending: true }).order('signal').order('symbol'));
+  return rows.filter(row => !row.signal.startsWith('technical_alert/')).map(normalizeEmission);
 }
 
 const pct = (x) => (x == null ? null : +x.toFixed(2));
@@ -45,6 +49,15 @@ function present(stats) {
     medianExcessPct: pct(s.medianExcessPct),
     meanExcessPct: pct(s.meanExcessPct),
     hitRateExcessPct: rate(s.hitRateExcess),
+    nNet: s.nNet,
+    medianNetPct: pct(s.medianNetPct),
+    meanNetPct: pct(s.meanNetPct),
+    hitRateNetPct: rate(s.hitRateNet),
+    outcomesAfterCosts: s.outcomesAfterCosts,
+    nAdverse: s.nAdverse,
+    adverseUnresolved: s.adverseUnresolved,
+    medianMaxAdversePct: pct(s.medianMaxAdversePct),
+    worstMaxAdversePct: pct(s.worstMaxAdversePct),
     underSampled: s.n < MIN_N,
     verdict: summarise(s, { minN: MIN_N }),
   }));
@@ -91,14 +104,14 @@ function headline(rows, { source, blockedReason, direction = 'bullish', benchmar
 }
 
 /** Score every signal in the registry. */
-async function runSignalScorecard() {
-  const all = await fetchEmissions();
+async function runSignalScorecard({ fetchRows = fetchEmissions, context = buildMarketContext } = {}) {
+  const all = await fetchRows();
 
   // Group by (signal, source) — the split is the point, so it happens before
   // anything is measured rather than being a filter applied afterwards.
   const groups = new Map();
   for (const e of all) {
-    const key = `${e.signal}|${e.source || 'reconstructed'}`;
+    const key = `${e.signal}|${e.source || 'reconstructed'}|${e.ruleVersion}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(e);
   }
@@ -113,6 +126,7 @@ async function runSignalScorecard() {
   if (!groups.size) {
     return {
       params: { horizons: HORIZONS, minN: MIN_N },
+      currentRuleVersions,
       signals: [...blocked],
       calendarGaps: [],
       caveats: ['signal_emissions is empty — run `node signals/backfill.js` after creating the table (see migrate_signal_emissions.js).'],
@@ -122,11 +136,11 @@ async function runSignalScorecard() {
 
   const since = all.reduce((min, e) => (e.date < min ? e.date : min), all[0].date);
   const symbols = [...new Set(all.map(e => e.symbol))];
-  const ctx = await buildMarketContext(symbols, since);
-  const opts = { horizons: HORIZONS, benchmark: ctx.benchmark };
+  const ctx = await context(symbols, since);
+  const opts = { horizons: HORIZONS, benchmark: ctx.benchmark, costModel: DEFAULT_COST_MODEL };
 
   for (const [key, emissions] of groups) {
-    const [name, source] = key.split('|');
+    const [name, source, ruleVersion] = key.split('|');
     const meta = signalMeta(name);
     const rows = present(scoreSignal(emissions, ctx.seriesBySymbol, opts));
     const dates = [...new Set(emissions.map(e => e.date))];
@@ -135,6 +149,9 @@ async function runSignalScorecard() {
       label: meta?.label || name,
       description: meta?.description || null,
       source,
+      ruleVersion,
+      currentRules: currentRuleVersions[name] ? ruleVersion === currentRuleVersions[name] : null,
+      inputSnapshots: emissions.filter(e => e.inputsRecorded || e.inputs).length,
       firings: emissions.length,
       symbols: new Set(emissions.map(e => e.symbol)).size,
       firstFired: dates[0],
@@ -170,7 +187,8 @@ async function runSignalScorecard() {
   signals.sort((a, b) => b.firings - a.firings);
 
   return {
-    params: { horizons: HORIZONS, minN: MIN_N, benchmark: ctx.benchmarkSymbol },
+    params: { horizons: HORIZONS, minN: MIN_N, benchmark: ctx.benchmarkSymbol, costModel: DEFAULT_COST_MODEL },
+    currentRuleVersions,
     period: { first: since, calendarSessions: ctx.calendar.length },
     calendarGaps: ctx.calendarGaps,
     signals: [...signals, ...neverFired, ...blocked],
@@ -180,7 +198,8 @@ async function runSignalScorecard() {
         : []),
       'Excess is over NIFTY 50. Raw return is shown too, but in a rising market it flatters every signal.',
       'Firings overlap: many symbols fire on the same day for the same market-wide reason, so n overstates how much independent evidence there is.',
-      'Entry at the firing day close. Costs, slippage and liquidity are not modeled; a floor of ₹1 crore median daily turnover is applied at recording time.',
+      'Entry at the firing day close. Net long-holding returns assume 10 bps fees and 5 bps slippage per side, illustratively; these are not actual broker charges. Adverse moves use subsequent daily lows. Missing lows are unresolved.',
+      'Rule versions and recorded/reconstructed sources are measured separately. Legacy rows have unknown rule versions and inputs. A floor of ₹1 crore median daily turnover applies to price detectors.',
       '`reconstructed` signals were recomputed from stored OHLC after the fact — faithful, since bhavcopy is not revised and the detectors are causal, but weaker evidence than `recorded`.',
       'Recent firings have not had time to resolve at the longer horizons; they are counted as unresolved, never as flat.',
     ],

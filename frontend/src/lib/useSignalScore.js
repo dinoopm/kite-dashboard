@@ -37,11 +37,17 @@ export function useSignalScore(signalName, { source, market = 'IN' } = {}) {
       .then(j => {
         if (!on) return
         const matches = (j.signals || []).filter(s => s.signal === signalName)
+        const currentVersion = j.currentRuleVersions?.[signalName]
+        const eligible = currentVersion ? matches.filter(s => s.ruleVersion === currentVersion) : matches
         // Prefer recorded evidence when a signal has both — it was written
         // before the outcome existed, which reconstruction can never claim.
-        const entry = (source && matches.find(s => s.source === source))
-          || matches.find(s => s.source === 'recorded')
-          || matches[0]
+        const entry = (source && eligible.find(s => s.source === source))
+          || eligible.find(s => s.source === 'recorded')
+          || eligible[0]
+          || (currentVersion ? {
+            signal: signalName, ruleVersion: currentVersion,
+            headline: { state: 'no-data', text: 'Current rules unmeasured', detail: 'No observations with this rule version have resolved. Older rule results are kept separate.' },
+          } : null)
           || null
         setState({ entry, error: null, loading: false })
       })

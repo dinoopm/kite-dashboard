@@ -63,16 +63,17 @@ function ConvictionModal({ stock, onClose }) {
           <div>
             <div
               style={{ fontSize: '0.65rem', color: '#94a3b8', letterSpacing: '1px', marginBottom: '0.25rem' }}
-              title="Bullish bias score: 0 = strongly bearish, 50 = balanced, 100 = strongly bullish. Not a confidence in the trade direction."
+              title="Heuristic bullish-bias points out of 100. This is not a calibrated probability of a profitable trade."
             >
               BULLISH BIAS BREAKDOWN
             </div>
+            <div style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: '0.3rem' }}>Rule: {stock.ruleVersion || 'Unavailable'}</div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem' }}>
               <span style={{ fontSize: '1.1rem', fontWeight: 800, color: '#f8fafc' }}>{stock.symbol}</span>
               {(() => {
                 const conf = stock.confidence
                 const cColor = conf > 75 ? '#10b981' : conf < 40 ? '#ef4444' : '#f59e0b'
-                return <span className="mono" style={{ fontSize: '1.6rem', fontWeight: 800, color: cColor }}>{conf}%</span>
+                return <span className="mono" style={{ fontSize: '1.6rem', fontWeight: 800, color: cColor }}>{conf}/100</span>
               })()}
             </div>
           </div>
@@ -151,12 +152,12 @@ function ConvictionModal({ stock, onClose }) {
           }}>
             <div style={{ fontSize: '0.6rem', color: '#64748b', letterSpacing: '1px', fontWeight: 700, marginBottom: '0.4rem' }}>HOW IT WORKS</div>
             <div style={{ fontSize: '0.7rem', color: '#94a3b8', lineHeight: 1.6 }}>
-              Measures <strong style={{ color: '#f8fafc' }}>bullish bias</strong>, not direction-neutral confidence.
+              A heuristic <strong style={{ color: '#f8fafc' }}>bullish-bias score</strong> in points out of 100. It is not a calibrated probability of profit.
               Score starts at <span className="mono" style={{ color: '#f8fafc', fontWeight: 700 }}>30</span> (base); bullish signals add points, bearish signals subtract.
               Clamped to <span className="mono" style={{ color: '#f8fafc' }}>0–100</span>: <span style={{ color: '#ef4444' }}>&lt;40 bearish</span>, <span style={{ color: '#f59e0b' }}>40–75 mixed</span>, <span style={{ color: '#10b981' }}>&gt;75 bullish</span>.
             </div>
             <div className="mono" style={{ fontSize: '0.65rem', color: '#475569', marginTop: '0.5rem' }}>
-              {breakdown.map(c => (c.value >= 0 ? `+${c.value}` : `${c.value}`)).join(' ')} = <span style={{ color: '#f8fafc', fontWeight: 700 }}>{breakdown.reduce((s, c) => s + c.value, 0)}</span> → clamped to <span style={{ color: stock.confidence > 75 ? '#10b981' : stock.confidence < 40 ? '#ef4444' : '#f59e0b', fontWeight: 800 }}>{stock.confidence}%</span>
+              {breakdown.map(c => (c.value >= 0 ? `+${c.value}` : `${c.value}`)).join(' ')} = <span style={{ color: '#f8fafc', fontWeight: 700 }}>{breakdown.reduce((s, c) => s + c.value, 0)}</span> → clamped to <span style={{ color: stock.confidence > 75 ? '#10b981' : stock.confidence < 40 ? '#ef4444' : '#f59e0b', fontWeight: 800 }}>{stock.confidence}/100</span>
             </div>
           </div>
 

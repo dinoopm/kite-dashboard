@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'http://localhost';
 process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'test-key';
 const { headline, present, MIN_N } = require('./scorecard');
+const { runSignalScorecard } = require('./scorecard');
 
 const rows = (over) => present({ '5d': { n: 0, unresolved: 0 }, '10d': { n: 0, unresolved: 0 }, ...over });
 
@@ -21,6 +22,26 @@ describe('present', () => {
     assert.equal(r.underSampled, true);
     assert.match(r.verdict, /too few/);
   });
+});
+
+test('scores versions and evidence sources separately without broker or database access', async () => {
+  const emissions = [
+    { signal: 'breakout_20d', source: 'recorded', ruleVersion: 'v1', symbol: 'A', date: '2026-10-05', inputsRecorded: true },
+    { signal: 'breakout_20d', source: 'recorded', ruleVersion: 'v2', symbol: 'A', date: '2026-10-05', inputsRecorded: true },
+    { signal: 'breakout_20d', source: 'reconstructed', ruleVersion: 'v2', symbol: 'A', date: '2026-10-05' },
+  ];
+  const bars = Array.from({ length: 23 }, (_, i) => ({ date: i === 0 ? '2026-10-05' : `later-${i}`, close: 100 + i, low: 95 + i }));
+  const result = await runSignalScorecard({
+    fetchRows: async () => emissions,
+    context: async () => ({ seriesBySymbol: { A: bars }, calendar: bars.map(bar => bar.date), calendarGaps: [], benchmark: bars, benchmarkSymbol: 'FIXTURE' }),
+  });
+  const groups = result.signals.filter(signal => signal.signal === 'breakout_20d');
+  assert.equal(groups.length, 3);
+  assert.ok(groups.every(group => group.firings === 1));
+  assert.equal(groups[0].inputSnapshots, 1);
+  assert.ok(groups[0].horizons[0].medianNetPct < groups[0].horizons[0].medianPct);
+  assert.ok(groups[0].horizons[0].medianMaxAdversePct < 0);
+  assert.ok(result.currentRuleVersions.breakout_20d.startsWith('price-rules-'));
 });
 
 describe('headline', () => {

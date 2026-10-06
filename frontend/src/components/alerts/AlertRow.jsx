@@ -6,7 +6,7 @@ import { biasClass } from './biasClass'
 //
 // Props:
 //   stock            — alert object (see /api/alerts response shape)
-//   onOpenConviction — () => void, called when the bullish-bias % is clicked
+//   onOpenConviction — () => void, called when the heuristic score is clicked
 //   onOpenTradePlan  — () => void, called when the trade-plan tag is clicked
 //   showHoldingsFields — when true (default), renders the qty / avg / P&L sub-block
 function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields = true }) {
@@ -307,10 +307,12 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
         </div>
 
         {/* Confidence Score — Click to open modal */}
-        <div
+        <button
+          type="button"
           className="conviction-click"
-          style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'center', position: 'relative' }}
-          title="Click for conviction breakdown"
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'center', position: 'relative', background: 'transparent', border: 0, padding: 0, cursor: 'pointer' }}
+          aria-label={`View ${stock.symbol} heuristic score breakdown: ${stock.confidence} out of 100`}
+          title="Heuristic bullish-bias score out of 100; not a calibrated probability. Click for breakdown."
           onClick={onOpenConviction}
         >
           {(() => {
@@ -319,17 +321,17 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
             const shadowAlpha = conf > 75 ? '16,185,129,0.4' : conf < 40 ? '239,68,68,0.4' : '245,158,11,0.4'
             return (
               <span className="mono" style={{ fontSize: '1.4rem', fontWeight: 800, color: cColor, textShadow: `0 0 8px rgba(${shadowAlpha})` }}>
-                {conf}%
+                {conf}/100
               </span>
             )
           })()}
           <span
             style={{ fontSize: '0.55rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}
-            title="Bullish bias: 0 = strongly bearish, 50 = balanced, 100 = strongly bullish. Click for breakdown."
+            title="Heuristic bullish bias: 0 = strongly bearish, 50 = balanced, 100 = strongly bullish. Not a calibrated probability."
           >
-            Bullish Bias ⓘ
+            Heuristic Bias ⓘ
           </span>
-        </div>
+        </button>
       </div>
 
       {/* Multi-Window Breakout Ladder */}
@@ -365,8 +367,6 @@ function AlertRow({ stock, onOpenConviction, onOpenTradePlan, showHoldingsFields
           const span = overallHigh - overallLow
           const toPos = (val) => Math.max(0, Math.min(100, ((val - overallLow) / span) * 100))
           const pricePos = toPos(stock.price)
-
-          const broken = windows.filter(w => w.isBreakingOut).map(w => SHORT[w.key]).join(' ')
 
           // Longest broken window (windows are ordered 3y → 1m).
           const longestBroken = windows.find(w => w.isBreakingOut) ?? null

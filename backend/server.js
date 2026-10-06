@@ -12,6 +12,9 @@ const { createPortfolioRiskService } = require('./portfolioRisk');
 const { buildAlertsFreshness } = require('./alertsFreshness');
 const { prepareAlertCandles } = require('./alertCandles');
 const { holdingMetrics, buildHoldingSummary } = require('./holdingMetrics');
+const { createAlertAuditService } = require('./alertAudit');
+const { fileRuleVersion, ruleFingerprint } = require('./signals/audit');
+const { DEFAULT_COST_MODEL } = require('./signalScoring');
 
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const { createClient } = require('@supabase/supabase-js');
@@ -1699,7 +1702,8 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   if (!candles || candles.length < 15) return null;
 
   const currentPrice = lastPrice || candles[candles.length - 1].close;
-  const workingCandles = prepareAlertCandles(candles, lastPrice);
+  const evaluatedAt = new Date();
+  const workingCandles = prepareAlertCandles(candles, lastPrice, evaluatedAt);
   const position = holding ? holdingMetrics(holding) : null;
 
   const closes = workingCandles.map(c => c.close);
@@ -1870,7 +1874,7 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   if (aggressorDelta < -0.2) addConf('Distribution (money flow)', -10);
   if (regime === 'WILD SWINGS') addConf('Volatile regime', -10);
   // SuperTrend BULL acts as a confidence floor — a stock in a confirmed
-  // uptrend deserves at least 70% bias regardless of weaker secondary signals.
+  // uptrend has a floor of 70 heuristic points regardless of weaker secondary signals.
   if (supertrend?.signal === 'BULL' && confidence < 70) {
     addConf('SuperTrend(10,3) uptrend (floor)', 70 - confidence);
   }
@@ -2027,16 +2031,16 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     tradePlan.reason = `Price broke above the ${breakoutLabel} on ${volSurge.toFixed(1)}× avg volume. Breakout confirmed.${nextResistanceNote}`;
   } else if (isBreakout && confidence >= 75 && !volumeConfirmed) {
     tradePlan.action = 'BREAKOUT (CAUTION)';
-    tradePlan.reason = `Price crossed the ${breakoutLabel} with strong score ${confidence}%, but volume is only ${volSurge.toFixed(1)}× avg (<1.5×). Wait for volume confirmation.${nextResistanceNote}`;
+    tradePlan.reason = `Price crossed the ${breakoutLabel} with strong score ${confidence}/100, but volume is only ${volSurge.toFixed(1)}× avg (<1.5×). Wait for volume confirmation.${nextResistanceNote}`;
   } else if (isBreakout && confidence >= 50 && volumeConfirmed) {
     tradePlan.action = 'BREAKOUT (CAUTION)';
-    tradePlan.reason = `Price crossed the ${breakoutLabel} on ${volSurge.toFixed(1)}× volume, but conviction is moderate at ${confidence}%. Watch for follow-through.${nextResistanceNote}`;
+    tradePlan.reason = `Price crossed the ${breakoutLabel} on ${volSurge.toFixed(1)}× volume, but the heuristic score is moderate at ${confidence}/100. Watch for follow-through.${nextResistanceNote}`;
   } else if (isBreakout && confidence >= 50) {
     tradePlan.action = 'BREAKOUT (WEAK)';
-    tradePlan.reason = `Breakout above ${breakoutLabel} lacks both strong score (${confidence}%) and volume (${volSurge.toFixed(1)}×). High risk of a false breakout.${nextResistanceNote}`;
+    tradePlan.reason = `Breakout above ${breakoutLabel} lacks both strong score (${confidence}/100) and volume (${volSurge.toFixed(1)}×). High risk of a false breakout.${nextResistanceNote}`;
   } else if (isBreakout) {
     tradePlan.action = 'BREAKOUT (WEAK)';
-    tradePlan.reason = `Price breached ${breakoutLabel} but underlying technicals are weak (score ${confidence}%). Likely bull trap.${nextResistanceNote}`;
+    tradePlan.reason = `Price breached ${breakoutLabel} but underlying technicals are weak (score ${confidence}/100). Likely bull trap.${nextResistanceNote}`;
   } else if (confidence >= 80 && distanceToRes > 0.02) {
     tradePlan.action = 'BUY SEEN';
     tradePlan.reason = `Momentum is high with ${(distanceToRes * 100).toFixed(1)}% room to run before the 20-day resistance ceiling.`;
@@ -2078,7 +2082,7 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
   // mismatched labels — HINDZINC vs IDEAFORGE was exactly this case.
   if (rsi14 !== null && rsi14 >= 70 && confidence >= 75 && tradePlan.action === 'HOLD / WAIT') {
     tradePlan.action = 'HOLD (OVERBOUGHT)';
-    tradePlan.reason = `Bullish bias is ${confidence}%, but RSI is stretched to ${rsi14.toFixed(0)} — avoid fresh buys here.`;
+    tradePlan.reason = `Heuristic bullish bias is ${confidence}/100, but RSI is stretched to ${rsi14.toFixed(0)} — avoid fresh buys here.`;
   }
 
   // Holdings-aware overrides — only when called from /api/alerts (holding present).
@@ -2123,10 +2127,10 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     ) {
       if (divergence === 'SELL SETUP') {
         tradePlan.action = 'STRONG BUY (DIV WARN)';
-        tradePlan.reason = `Trend setup clean (ADX ${adxStr} · ST green · RSI ${rsi14.toFixed(0)} · vol ${volSurge.toFixed(1)}× · conviction ${confidence}%) but RSI is diverging bearishly from price — momentum may be fading. Tighter stops or wait for divergence to resolve.`;
+        tradePlan.reason = `Trend setup clean (ADX ${adxStr} · ST green · RSI ${rsi14.toFixed(0)} · vol ${volSurge.toFixed(1)}× · score ${confidence}/100) but RSI is diverging bearishly from price — momentum may be fading. Tighter stops or wait for divergence to resolve.`;
       } else {
         tradePlan.action = 'STRONG BUY';
-        tradePlan.reason = `ADX ${adxStr} confirms trending tape · Price ₹${currentPrice.toFixed(1)} > 200 EMA ₹${ema200} · SuperTrend green (line ₹${supertrend.line}) · RSI ${rsi14.toFixed(0)} in momentum band · vol ${volSurge.toFixed(1)}× · conviction ${confidence}%.`;
+        tradePlan.reason = `ADX ${adxStr} confirms trending tape · Price ₹${currentPrice.toFixed(1)} > 200 EMA ₹${ema200} · SuperTrend green (line ₹${supertrend.line}) · RSI ${rsi14.toFixed(0)} in momentum band · vol ${volSurge.toFixed(1)}× · score ${confidence}/100.`;
       }
     } else if (
       supertrend.signal === 'BULL' &&
@@ -2136,7 +2140,7 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
       // Core rule (ADX + ST + RSI band) passes but volume or confidence fails.
       const failing = [];
       if (volSurge < 1.2) failing.push(`vol only ${volSurge.toFixed(1)}× (need ≥ 1.2)`);
-      if (confidence < 70) failing.push(`conviction only ${confidence}% (need ≥ 70)`);
+      if (confidence < 70) failing.push(`score only ${confidence}/100 (need ≥ 70/100)`);
       tradePlan.action = 'STRONG BUY (UNCONFIRMED)';
       tradePlan.reason = `Core rule passes (ADX ${adxStr} · ST green · RSI ${rsi14.toFixed(0)}) but ${failing.join(' · ')}. Wait for confirmation or take a smaller position.`;
     } else if (supertrend.signal === 'BULL' && rsi14 != null && rsi14 > 70) {
@@ -2203,6 +2207,9 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     rsiHistory,
     confidence,
     confBreakdown,
+    ruleVersion: ALERT_RULE_VERSION,
+    scoreType: 'heuristic-bullish-bias',
+    scoreScale: '/100',
     alerts: stockAlerts,
     sector: resolvedSector,
   };
@@ -2216,8 +2223,71 @@ async function computeStockAlert({ symbol, token, lastPrice, previousClose, cand
     out.dayChangeRupee = round(position.dayChangeRupee);
   }
 
+  Object.defineProperty(out, 'signalInputs', { value: {
+    evaluatedAt: evaluatedAt.toISOString(), candleAsOf: candles[candles.length - 1]?.date,
+    lastPrice, previousClose,
+    holding: holding ? {
+      exchange: holding.exchange,
+      quantity: holding.quantity, t1_quantity: holding.t1_quantity,
+      average_price: holding.average_price, last_price: holding.last_price,
+      close_price: holding.close_price, day_change: holding.day_change,
+    } : null,
+    candles: candles.map(c => [c.date, c.open, c.high, c.low, c.close, c.volume]),
+    metrics: { currentPrice, rsi14, sma5, sma20, sma50, sma200, ema200, adx14, atr,
+      supertrend, vwap20, vwapDeviation, aggressorDelta, volSurge, avgVol20,
+      todayBar, prevBarClose, regime, trendDirection, divergence, windowLevels,
+      supportLvl, resistanceLvl, confidence, confBreakdown },
+  } });
   return out;
 }
+
+const ALERT_RULE_VERSION = ruleFingerprint('alerts', [
+  computeStockAlert.toString(),
+  fileRuleVersion('shared-math', [require.resolve('./backtest/indicators'), require.resolve('./screener/vcp'),
+    require.resolve('./alertCandles'), require.resolve('./holdingMetrics')]),
+  require('technicalindicators/package.json').version,
+  JSON.stringify(DEFAULT_COST_MODEL),
+]);
+
+const alertAudit = createAlertAuditService({
+  ruleVersion: ALERT_RULE_VERSION,
+  store: supabase ? async rows => {
+    const { data, error } = await supabase.from('signal_emissions')
+      .upsert(rows, { onConflict: 'signal,snap_date,symbol', ignoreDuplicates: true })
+      .select('signal').abortSignal(AbortSignal.timeout(5000));
+    if (error) throw new Error(error.message);
+    return data?.length || 0;
+  } : null,
+  fetchRows: supabase ? async () => {
+    const { fetchAll } = require('./signals/marketSeries');
+    const rows = await fetchAll('signal_emissions', 'signal,snap_date,symbol,source,canonicalSignal:meta->>signal,ruleVersion:meta->>ruleVersion,inputSnapshot:meta->>inputSnapshot,action:meta->>action,exchange:meta->>exchange,observedAt:meta->>observedAt,candleAsOf:meta->>candleAsOf,score:meta->score,entryPrice:meta->entryPrice,costModel:meta->costModel',
+      q => q.like('signal', 'technical_alert/%').order('snap_date', { ascending: true }).order('signal').order('symbol'));
+    // Outcomes need compact metadata only. Read derived inputs for the latest
+    // 20 observations; never download every stored OHLCV snapshot to score.
+    const { data, error } = await supabase.from('signal_emissions')
+      .select('signal,snap_date,symbol,metrics:meta->inputs->metrics')
+      .like('signal', 'technical_alert/%').order('created_at', { ascending: false }).limit(20)
+      .abortSignal(AbortSignal.timeout(5000));
+    if (error) throw new Error(error.message);
+    const recentMetrics = new Map((data || []).map(row => [`${row.signal}|${row.snap_date}|${row.symbol}`, row.metrics]));
+    return rows.map(row => ({ ...row, meta: {
+      signal: row.canonicalSignal, ruleVersion: row.ruleVersion, inputSnapshot: row.inputSnapshot,
+      action: row.action, exchange: row.exchange, observedAt: row.observedAt, candleAsOf: row.candleAsOf,
+      score: row.score, entryPrice: row.entryPrice, costModel: row.costModel,
+      inputs: recentMetrics.has(`${row.signal}|${row.snap_date}|${row.symbol}`)
+        ? { metrics: recentMetrics.get(`${row.signal}|${row.snap_date}|${row.symbol}`) } : null,
+    } }));
+  } : null,
+  context: (...args) => require('./signals/marketSeries').buildMarketContext(...args),
+});
+
+app.get('/api/alerts/track-record', async (req, res) => {
+  try {
+    res.json(await alertAudit.trackRecord());
+  } catch (error) {
+    res.status(error.statusCode || 502).json({ error: error.message });
+  }
+});
 
 // ─── Portfolio Alerts ──────────────────────────────────────────
 app.get('/api/alerts', async (req, res) => {
@@ -2243,6 +2313,8 @@ app.get('/api/alerts', async (req, res) => {
         alerts: [],
         summary: null,
         freshness: buildAlertsFreshness({ holdings: [], refreshResults: [] }),
+        recording: { status: 'empty', observationsStored: 0 },
+        ruleVersion: ALERT_RULE_VERSION,
       });
     }
 
@@ -2264,7 +2336,12 @@ app.get('/api/alerts', async (req, res) => {
         : null;
       refreshResults.push({ symbol, token, candleAsOf, ...refreshResult });
       const alert = await computeStockAlert({ symbol, token, lastPrice, previousClose: h.close_price, candles, holding: h });
-      if (alert) alerts.push({ ...alert, candleAsOf });
+      if (alert) {
+        alert.candleAsOf = candleAsOf;
+        alert.signalInputs.holdingsFetchedAt = apiCache.holdings.timestamp
+          ? new Date(apiCache.holdings.timestamp).toISOString() : null;
+        alerts.push(alert);
+      }
     }
 
     const summary = {
@@ -2277,7 +2354,8 @@ app.get('/api/alerts', async (req, res) => {
       sectorConcentration: computeSectorConcentration(alerts),
     };
     const freshness = buildAlertsFreshness({ holdings, refreshResults });
-    res.json({ alerts, summary, freshness });
+    const recording = await alertAudit.record(alerts);
+    res.json({ alerts, summary, freshness, recording, ruleVersion: ALERT_RULE_VERSION });
   } catch (err) {
     console.error("Alerts computation error:", err);
     res.status(500).json({ error: "Failed to compute alerts: " + err.message });
@@ -4586,6 +4664,27 @@ const MACRO_PARTIAL_TTL_MS = 15 * 60 * 1000;  // retry sooner after partial fail
 const macroCache = { data: null, ts: 0, ttl: MACRO_TTL_MS, fy: null, lastGood: null };
 let macroInflight = null; // coalesce concurrent cold fetches
 
+const { createStore: createIndiaMacroStore } = require('./indiaMacro/store');
+const { createSources: createIndiaMacroSources } = require('./indiaMacro/sources');
+const { createIndiaMacroService } = require('./indiaMacro/service');
+const indiaMacroDb = supabase ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, {
+  global: { fetch: (url, options) => fetch(url, { ...options, signal: AbortSignal.timeout(15000) }) },
+}) : null;
+const indiaMacroService = createIndiaMacroService({ store: createIndiaMacroStore({ supabase: indiaMacroDb }), sources: createIndiaMacroSources() });
+
+app.get('/api/india-macro', async (req, res) => {
+  try { res.json(await indiaMacroService.get()); }
+  catch(e) { res.status(503).json({ error: `Stored India releases unavailable: ${e.message}` }); }
+});
+let indiaMacroRefreshAt = 0;
+app.post('/api/india-macro/refresh', async (req, res) => {
+  const remaining = 60000 - (Date.now() - indiaMacroRefreshAt);
+  if (remaining > 0) { res.set('Retry-After', String(Math.ceil(remaining / 1000))); return res.status(429).json({ error: 'Please wait before checking sources again.' }); }
+  indiaMacroRefreshAt = Date.now();
+  try { res.json(await indiaMacroService.sync({ force: true })); }
+  catch(e) { res.status(503).json({ error: `India release check failed: ${e.message}` }); }
+});
+
 // Indian FY runs April–March: June 2026 → '2026-27', Feb 2026 → '2025-26'.
 function currentIndianFY(d = new Date()) {
   const start = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
@@ -6151,5 +6250,6 @@ app.listen(PORT, async () => {
   // Snapshot the picks and record signal emissions on a timer rather than off
   // the back of a page view — see dailyJobs.js for why that mattered.
   startDailyJobs();
+  indiaMacroService.startSchedule();
   await connectToKiteMcp();
 });

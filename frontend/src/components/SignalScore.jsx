@@ -69,10 +69,14 @@ export default function SignalScore({ signal, label, source, style, market = 'IN
   const detail = [
     h.detail,
     entry.description,
+    entry.ruleVersion ? `Rule version: ${entry.ruleVersion}. Inputs saved for ${entry.inputSnapshots || 0} observations.` : null,
+    ...((entry.horizons || []).filter(row => row.horizon === '10d').map(row =>
+      `10 sessions: median long-holding return after illustrative costs ${row.medianNetPct == null ? 'unavailable' : `${row.medianNetPct}%`}; median maximum adverse move ${row.medianMaxAdversePct == null ? 'unavailable' : `${row.medianMaxAdversePct}%`} (${row.nAdverse || 0} paths measured).`)),
     entry.firings ? `${entry.firings} firings across ${entry.symbols} symbols since ${entry.firstFired}.` : null,
     entry.source === 'reconstructed'
       ? 'Reconstructed from stored daily prices — faithful, but assembled after the fact.'
-      : 'Recorded the day it fired, before the outcome existed.',
+      : entry.source === 'recorded' ? 'Recorded the day it fired, before the outcome existed.'
+        : 'No recorded provenance is available.',
   ].filter(Boolean).join('\n\n')
 
   return <Badge tone={TONE[h.state] || TONE['no-data']} label={label} headline={h} detail={detail} style={style} />

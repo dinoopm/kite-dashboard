@@ -5,7 +5,7 @@
 // being captured elsewhere (published picks, 52-week highs) into the same table
 // so one scorer can read them all.
 //
-// Upsert on the primary key makes every run idempotent: a daily run, a
+// Insert-only conflict handling makes every run idempotent: a daily run, a
 // re-run after a crash, and a full backfill are the same operation, which is
 // what stops the record from developing the holes it exists to detect.
 //
@@ -17,11 +17,15 @@
 const { createClient } = require('@supabase/supabase-js');
 const { buildSeries } = require('../backtest/indicators');
 const { detectAll, PRICE_SIGNALS } = require('./registry');
+const { fileRuleVersion, versionEmission, seriesInputs } = require('./audit');
+const { PRICE_RULE_VERSION } = require('./ruleVersions');
+const { DEFAULT_COST_MODEL } = require('../signalScoring');
+const HIGH_RULE_VERSION = fileRuleVersion('high-52w', [__filename]);
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 const MIN_MEDIAN_TURNOVER_LACS = 100; // ₹1 crore/day median over the window
-const UPSERT_CHUNK = 500;
+const UPSERT_CHUNK = 50; // causal input snapshots are larger than scalar emissions
 
 async function fetchAll(table, cols, applyFilters) {
   const PAGE = 1000;
@@ -95,10 +99,10 @@ async function upsertEmissions(rows) {
   let saved = 0;
   for (let i = 0; i < rows.length; i += UPSERT_CHUNK) {
     const chunk = rows.slice(i, i + UPSERT_CHUNK);
-    const { error } = await supabase.from('signal_emissions')
-      .upsert(chunk, { onConflict: 'signal,snap_date,symbol' });
+    const { data, error } = await supabase.from('signal_emissions')
+      .upsert(chunk, { onConflict: 'signal,snap_date,symbol', ignoreDuplicates: true }).select('signal');
     if (error) throw new Error(`signal_emissions: ${error.message}`);
-    saved += chunk.length;
+    saved += data?.length || 0;
   }
   return saved;
 }
@@ -114,7 +118,11 @@ async function recordPriceSignals({ fromDate = null } = {}) {
     if (candles.length <= minBarsNeeded) { skippedShort++; continue; }
     const S = buildSeries(candles);
     for (const hit of detectAll(S, { fromDate })) {
-      rows.push({ signal: hit.signal, snap_date: hit.date, symbol, source: 'reconstructed', meta: hit.meta });
+      const index = S.dates.indexOf(hit.date);
+      rows.push(versionEmission(
+        { signal: hit.signal, snap_date: hit.date, symbol, source: 'reconstructed', meta: { ...hit.meta, costModel: DEFAULT_COST_MODEL } },
+        PRICE_RULE_VERSION, seriesInputs(S, index),
+      ));
     }
   }
 
@@ -180,10 +188,10 @@ async function record52wHighs({ fromDate = null } = {}) {
       // the back, which moves high_date backwards — that is a high expiring, not
       // a new one being set.
       if (curr <= prev) continue;
-      rows.push({
+      rows.push(versionEmission({
         signal: 'high_52w', snap_date: snaps[i].trade_date, symbol, source: 'recorded',
-        meta: { high: snaps[i].adjusted_52_week_high, highSetOn: curr },
-      });
+        meta: { high: snaps[i].adjusted_52_week_high, highSetOn: curr, costModel: DEFAULT_COST_MODEL },
+      }, HIGH_RULE_VERSION, { previousSnapshot: snaps[i - 1], snapshot: snaps[i] }));
     }
   }
   return { saved: await upsertEmissions(rows) };
@@ -197,4 +205,4 @@ async function recordAll({ fromDate = null } = {}) {
   return { price, picks, highs, fromDate, recordedAt: new Date().toISOString() };
 }
 
-module.exports = { recordAll, recordPriceSignals, recordPickSignals, record52wHighs, loadCandles };
+module.exports = { recordAll, recordPriceSignals, recordPickSignals, record52wHighs, loadCandles, PRICE_RULE_VERSION };
