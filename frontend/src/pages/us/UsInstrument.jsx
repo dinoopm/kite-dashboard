@@ -18,6 +18,11 @@ import EventBadge from '../../components/EventBadge';
 import { realizedVol } from '../../lib/vixAnalytics';
 import { adx14 } from '../../lib/indicators';
 import AnalystsPanel from '../../components/AnalystsPanel';
+import IndexComparisonControls from '../../components/IndexComparisonControls';
+import useUsIndexComparison from '../../hooks/useUsIndexComparison';
+import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
+import { percentageChange } from '../../lib/indexComparison';
+import { US_COMPARISON_INDICES, usBarsUrl } from '../../lib/usIndexComparison';
 
 // US ETF/equity detail: company name, snapshot, price chart with MA overlays,
 // RSI panel, a technical-signal strip, period stats, and a full indicator grid —
@@ -1133,16 +1138,18 @@ export default function UsInstrument() {
   const loadSnap = useCallback(async () => {
     try { const r = await fetch(`/api/us/snapshot/${sym}`); const j = await r.json(); if (r.ok) setSnap(j); } catch { /* */ }
   }, [sym]);
-  const loadBars = useCallback(async () => {
+  const loadBars = useCallback(async (signal) => {
     setLoading(true);
+    setBars([]);
     try {
-      // Extended hours only exists intraday; the flag is a no-op on daily ranges.
-      const ext = range === '1D' && showExtended ? '&extended=1' : '';
-      const r = await fetch(`/api/us/bars/${sym}?range=${range}${ext}`);
+      const r = await fetchWithAbort(usBarsUrl(sym, range, showExtended), { signal });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      if (signal.aborted) return;
       setBars(j.bars || []); setError(null);
-    } catch (e) { setError(e.message); } finally { setLoading(false); }
+    } catch (e) {
+      if (!signal.aborted) setError(e.name === 'RateLimitedError' ? 'Rate limited. Please wait before retrying.' : e.message);
+    } finally { if (!signal.aborted) setLoading(false); }
   }, [sym, range, showExtended]);
   const loadDaily = useCallback(async () => {
     try { const r = await fetch(`/api/us/bars/${sym}?range=2Y`); const j = await r.json(); if (r.ok) setDailyBars(j.bars || []); } catch { /* */ }
@@ -1152,13 +1159,23 @@ export default function UsInstrument() {
   }, [sym]);
 
   useEffect(() => { loadSnap(); }, [loadSnap]);
-  useEffect(() => { loadBars(); }, [loadBars]);
+  useEffect(() => {
+    const controller = new AbortController();
+    loadBars(controller.signal);
+    return () => controller.abort();
+  }, [loadBars]);
   useEffect(() => { loadDaily(); }, [loadDaily]);
   useEffect(() => { loadVcp(); }, [loadVcp]);
 
   const q = snap?.quote || {};
   const companyName = snap?.name || snap?.meta?.label || sym;
   const intraday = range === '1D';
+  const indexComparison = useUsIndexComparison(bars, range, sym, showExtended);
+  const comparison = indexComparison.comparison;
+  const comparing = comparison.base != null;
+  const priceChartData = comparing ? comparison.data : bars;
+  const priceY = value => comparing ? percentageChange(value, comparison.base) : value;
+  const plottedDates = new Set(priceChartData.map(bar => bar.date));
 
   // Support/resistance + breakout markers on the visible candles (skip intraday).
   const sr = useMemo(() => intraday ? { supports: [], resistances: [] } : computeSupportResistance(bars), [bars, intraday]);
@@ -1515,6 +1532,11 @@ export default function UsInstrument() {
         </div>
       </div>
 
+      <IndexComparisonControls model={indexComparison} loading={loading} indices={US_COMPARISON_INDICES}
+        formatStartDate={value => new Date(value).toLocaleString('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'short', day: 'numeric', ...(intraday ? { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' } : {}) })}
+        returnNote="Changes in Alpaca-adjusted closes, including dividend adjustments."
+        sourceNote="ETF proxies: SPY tracks S&P 500, QQQ tracks Nasdaq 100, IWM tracks Russell 2000. Their returns can differ from the indexes." />
+
       {/* Breakout engine control panel */}
       {showBreakouts && !intraday && !loading && !error && bars.length > 0 && (
         <div className="glass-panel" style={{ display: 'flex', gap: '1.75rem', alignItems: 'center', flexWrap: 'wrap', padding: '0.85rem 1.1rem', marginBottom: '0.75rem' }}>
@@ -1556,7 +1578,7 @@ export default function UsInstrument() {
             <>
               <div style={{ height: '440px' }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={bars} margin={{ top: 10, right: showSR ? 74 : 10, left: 0, bottom: 0 }}>
+                  <ComposedChart data={priceChartData} margin={{ top: 10, right: showSR ? 74 : 10, left: 0, bottom: 0 }}>
                     <defs>
                       <linearGradient id="usFill" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor={chartColor} stopOpacity={0.35} />
@@ -1574,21 +1596,22 @@ export default function UsInstrument() {
                     )}
                     {/* Labels move to the volume pane below when there is one,
                         so the shared date axis is printed once. */}
-                    <XAxis dataKey="date" tickFormatter={fmtAxis} tick={hasTradedVolume(bars) ? false : { fill: GREY, fontSize: 11 }} height={hasTradedVolume(bars) ? 1 : undefined} minTickGap={40} />
-                    <YAxis domain={['auto', 'auto']} tick={{ fill: GREY, fontSize: 11 }} width={55} tickFormatter={(v) => v.toFixed(0)} />
+                    <XAxis dataKey="date" tickFormatter={fmtAxis} tick={hasTradedVolume(priceChartData) ? false : { fill: GREY, fontSize: 11 }} height={hasTradedVolume(priceChartData) ? 1 : undefined} minTickGap={40} />
+                    <YAxis domain={['auto', 'auto']} tick={{ fill: GREY, fontSize: 11 }} width={60} tickFormatter={(v) => comparing ? `${Number(v).toFixed(1)}%` : v.toFixed(0)} />
                     <Tooltip contentStyle={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '8px' }}
                       labelFormatter={(d) => new Date(d).toLocaleString('en-US')}
-                      formatter={(v, name) => [`$${fmtPrice(v)}`, name === 'close' ? 'Price' : name.toUpperCase()]} />
+                      formatter={(v, name) => [comparing ? `${Number(v).toFixed(2)}%` : `$${fmtPrice(v)}`, name]} />
                     <Legend />
+                    {comparing && <ReferenceLine y={0} stroke={GREY} strokeDasharray="4 4" />}
                     {showSR && sr.supports.map(l => {
                       const st = srStrength(l.touches);
-                      return <ReferenceLine key={`sup-${l.price}`} y={l.price} stroke="#f87171" strokeDasharray="2 4" strokeWidth={st.width} strokeOpacity={st.opacity} ifOverflow="extendDomain" label={srPriceTag(l.price, '#f87171', st.tag)} />;
+                      return <ReferenceLine key={`sup-${l.price}`} y={priceY(l.price)} stroke="#f87171" strokeDasharray="2 4" strokeWidth={st.width} strokeOpacity={st.opacity} ifOverflow="extendDomain" label={srPriceTag(l.price, '#f87171', st.tag)} />;
                     })}
                     {showSR && sr.resistances.map(l => {
                       const st = srStrength(l.touches);
-                      return <ReferenceLine key={`res-${l.price}`} y={l.price} stroke="#4ade80" strokeDasharray="2 4" strokeWidth={st.width} strokeOpacity={st.opacity} ifOverflow="extendDomain" label={srPriceTag(l.price, '#4ade80', st.tag)} />;
+                      return <ReferenceLine key={`res-${l.price}`} y={priceY(l.price)} stroke="#4ade80" strokeDasharray="2 4" strokeWidth={st.width} strokeOpacity={st.opacity} ifOverflow="extendDomain" label={srPriceTag(l.price, '#4ade80', st.tag)} />;
                     })}
-                    {showBreakouts && breakouts.map((b) => {
+                    {showBreakouts && breakouts.filter(b => plottedDates.has(b.date)).map((b) => {
                       const isFail = b.status === 'failed';
                       const isPending = b.status === 'pending';
                       const c = isFail ? '#ef4444' : isPending ? '#fbbf24' : '#22c55e';
@@ -1596,7 +1619,7 @@ export default function UsInstrument() {
                         + `Volume: ${b.volX != null ? b.volX + '×' : '—'} avg · RSI: ${b.rsi ?? '—'}\n`
                         + `Held for: ${b.heldPeriods} / ${b.confirmPeriods} period${b.confirmPeriods === 1 ? '' : 's'}`;
                       return (
-                        <ReferenceDot key={`bo-${b.index}`} x={b.date} y={b.price} ifOverflow="extendDomain"
+                        <ReferenceDot key={`bo-${b.index}`} x={b.date} y={priceY(b.price)} ifOverflow="extendDomain"
                           shape={({ cx, cy }) => (
                             <g style={{ cursor: 'pointer' }}>
                               <title>{tip}</title>
@@ -1609,7 +1632,7 @@ export default function UsInstrument() {
                         />
                       );
                     })}
-                    {showSignals && maSignals.map((s) => {
+                    {showSignals && maSignals.filter(s => plottedDates.has(s.bar.date)).map((s) => {
                       const buy = s.type === 'buy';
                       if (buy && s.deadCat) return null; // dead-cat bounce: not an actionable buy
                       const c = buy ? '#22c55e' : '#ef4444';
@@ -1617,7 +1640,7 @@ export default function UsInstrument() {
                         + `Fast(10) ${buy ? 'crossed above' : 'crossed below'} Slow(50)\n`
                         + `RSI ${s.rsi.toFixed(1)} · $${s.bar.close}`;
                       return (
-                        <ReferenceDot key={`sig-${s.index}`} x={s.bar.date} y={s.bar.close} ifOverflow="extendDomain"
+                        <ReferenceDot key={`sig-${s.index}`} x={s.bar.date} y={priceY(s.bar.close)} ifOverflow="extendDomain"
                           shape={({ cx, cy }) => (
                             <g style={{ cursor: 'pointer' }}>
                               <title>{tip}</title>
@@ -1640,13 +1663,16 @@ export default function UsInstrument() {
                         />
                       );
                     })}
-                    <Area type="monotone" name="Price" dataKey="close" stroke={chartColor} strokeWidth={2} fill="url(#usFill)" isAnimationActive={false} />
+                    <Area type="monotone" name={comparing ? sym : 'Price'} dataKey={comparing ? 'stockReturn' : 'close'} stroke={chartColor} strokeWidth={2} fill="url(#usFill)" isAnimationActive={false} />
+                    {indexComparison.indices.filter(index => comparison.indices.includes(index.id)).map(index => (
+                      <Line key={index.id} type="linear" name={index.label} dataKey={index.id} stroke={index.color} strokeWidth={2} dot={false} connectNulls={false} isAnimationActive={false} />
+                    ))}
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
               {/* Same data and same left/right margins as the chart above, so a
                   bar lines up with its own bar of price. */}
-              <VolumePane data={bars} margin={{ top: 0, right: showSR ? 74 : 10, left: 0, bottom: 0 }} fmtAxisDate={fmtAxis} />
+              <VolumePane data={priceChartData} margin={{ top: 0, right: showSR ? 74 : 10, left: 0, bottom: 0 }} fmtAxisDate={fmtAxis} />
             </>
           )}
       </div>

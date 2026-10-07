@@ -21,7 +21,7 @@ import EventBadge from '../components/EventBadge'
 import NewsPanel from '../components/NewsPanel'
 import IndexComparisonControls from '../components/IndexComparisonControls'
 import useIndexComparison from '../hooks/useIndexComparison'
-import { COMPARISON_INDICES, percentageChange } from '../lib/indexComparison'
+import { percentageChange } from '../lib/indexComparison'
 
 // ₹ formatters for the shared AnalystsPanel: prices/EPS in rupees, revenue in Cr.
 const inrMoney = (v) => (v == null ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
@@ -2020,7 +2020,7 @@ function Instrument() {
                     );
                   })}
                   <Line type="monotone" name={comparing ? (symbol || 'Instrument') : 'Price'} dataKey={comparing ? 'stockReturn' : 'close'} stroke="var(--accent)" strokeWidth={2} dot={false} />
-                  {COMPARISON_INDICES.filter(index => comparison.indices.includes(index.id)).map(index => (
+                  {indexComparison.indices.filter(index => comparison.indices.includes(index.id)).map(index => (
                     <Line key={index.id} type="linear" name={index.label} dataKey={index.id} stroke={index.color} strokeWidth={2} dot={false} connectNulls={false} isAnimationActive={false} />
                   ))}
                 </LineChart>
