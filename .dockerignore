@@ -1,0 +1,15 @@
+.git
+**/node_modules
+frontend/dist
+frontend/build
+.env
+.env.*
+**/.env
+**/.env.*
+**/*.log
+**/.DS_Store
+backups
+.claude
+.vercel
+backend/data/kite-sessions
+backend/data/india-macro

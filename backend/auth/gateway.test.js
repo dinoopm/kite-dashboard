@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 const { createGateway, cookieToken } = require('./gateway');
 
 async function listen(app) {
@@ -50,6 +53,35 @@ async function fixture(t, options = {}) {
   }
   return { gateway, browser, workers, base };
 }
+
+test('deployment serves health, static assets and frontend routes without starting a Kite worker', async t => {
+  const frontendRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'kite-frontend-test-'));
+  t.after(() => fs.rm(frontendRoot, { recursive: true, force: true }));
+  await fs.mkdir(path.join(frontendRoot, 'assets'));
+  const html = '<!doctype html><title>Kite Analytics</title><div id="root"></div>';
+  await fs.writeFile(path.join(frontendRoot, 'index.html'), html);
+  await fs.writeFile(path.join(frontendRoot, 'assets', 'app.js'), 'window.appLoaded = true;');
+  const { browser, workers } = await fixture(t, { frontendRoot });
+  const client = browser();
+  const health = await client.request('/healthz');
+  assert.equal(health.status, 200);
+  assert.deepEqual(await health.json(), { status: 'ok' });
+  assert.equal(health.headers.get('cache-control'), 'no-store');
+  assert.equal(health.headers.get('set-cookie'), null);
+  for (const route of ['/', '/portfolio/risk', '/us/AMZN']) {
+    const response = await client.request(route);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /text\/html/);
+    assert.equal(await response.text(), html);
+  }
+  const asset = await client.request('/assets/app.js');
+  assert.equal(asset.status, 200);
+  assert.equal(await asset.text(), 'window.appLoaded = true;');
+  const profile = await client.request('/api/profile');
+  assert.equal(profile.status, 401);
+  assert.match(profile.headers.get('content-type'), /application\/json/);
+  assert.equal(workers.length, 0);
+});
 
 test('anonymous requests cannot inherit existing account; each login rotates and owns its worker', async t => {
   const { gateway, browser, workers } = await fixture(t);

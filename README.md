@@ -78,9 +78,9 @@ Portfolio-level technical scanner with per-stock conviction scoring and trade pl
 ## Getting Started
 
 ### Prerequisites
-- Node.js 18+
+- Node.js 22+
 - A [Zerodha Kite](https://kite.zerodha.com) account
-- *(Optional)* A Supabase project for institutional data, gainers/losers, and volume analytics
+- A Supabase project with the [Kite ownership migration](backend/migrate_kite_users.sql) applied for user workspaces
 
 ### Environment
 
@@ -88,11 +88,19 @@ Create a `.env` at the project root:
 
 ```
 PORT=3001
-SUPABASE_URL=...              # optional, for FII/DII + surveillance + gainers
-SUPABASE_SERVICE_KEY=...      # optional
+SUPABASE_URL=...              # required for Kite user identity and saved workspaces
+SUPABASE_SERVICE_KEY=...      # backend only
 ```
 
-If Supabase isn't configured, the institutional/surveillance endpoints return 500 but the rest of the app works normally.
+Kite login requires the workspace database. See [Kite user setup](docs/kite-user-setup.md)
+for the ownership migration and account isolation.
+
+### Deployment
+
+The root Dockerfile builds both the frontend and backend into one service.
+`railway.json` configures a single replica and the `/healthz` check. Follow
+[deployment setup](docs/deployment.md) to host both together or keep the existing
+Vercel frontend connected to the hosted backend.
 
 ### Setup & Run
 

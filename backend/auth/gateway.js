@@ -93,6 +93,9 @@ function createGateway({ workerFactory = createWorkerFactory(), now = Date.now,
   timer.unref();
   async function close() { clearInterval(timer); await Promise.allSettled([...sessions.keys()].map(remove)); }
 
+  // Hosting health checks must not create a broker session or require a login.
+  app.get('/healthz', (req, res) => res.set('Cache-Control', 'no-store').json({ status: 'ok' }));
+
   app.use('/api', (req, res, next) => {
     res.set('Cache-Control', 'private, no-store');
     res.set('Vary', 'Cookie');
