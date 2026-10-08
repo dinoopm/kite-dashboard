@@ -1,3 +1,4 @@
+import { userPreferences } from '../lib/userSession'
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import VixWidget from '../components/VixWidget'
@@ -20,7 +21,7 @@ function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   // Privacy toggle — hide invested amounts and P&L (persisted across sessions).
-  const [hideAmounts, setHideAmounts] = useState(() => localStorage.getItem('hideAmounts') === '1');
+  const [hideAmounts, setHideAmounts] = useState(() => userPreferences.getItem('hideAmounts') === '1');
   const [xraySummary, setXraySummary] = useState(null); // holdings needing attention (score ≥3)
   const [briefingTop, setBriefingTop] = useState(null); // top items from today's briefing
 
@@ -51,7 +52,7 @@ function Dashboard() {
   }, []);
   const toggleHideAmounts = () => setHideAmounts(prev => {
     const next = !prev;
-    localStorage.setItem('hideAmounts', next ? '1' : '0');
+    userPreferences.setItem('hideAmounts', next ? '1' : '0');
     return next;
   });
 

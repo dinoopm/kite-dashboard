@@ -51,6 +51,8 @@ export async function fetchWithAbort(url, { signal, timeoutMs = DEFAULT_TIMEOUT_
   const composed = combineSignals([signal, timeoutSignal])
   const res = await fetch(url, { ...init, signal: composed })
 
+  if (res.status === 401 && url !== '/api/profile') window.dispatchEvent(new Event('kite-session-expired'))
+
   if (res.status === 429) {
     const headerVal = res.headers.get('Retry-After')
     const retryAfterSeconds = headerVal ? parseFloat(headerVal) : NaN

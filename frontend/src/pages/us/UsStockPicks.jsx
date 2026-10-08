@@ -1,3 +1,4 @@
+import { userPreferences } from '../../lib/userSession'
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
@@ -24,7 +25,7 @@ const PRESETS = [
   { name: 'Revisions-on', weights: { momentum: 25, volume: 15, fiftyTwo: 10, relStrength: 20, revisions: 30 } },
 ]
 const PREFS_KEY = 'usStockPicks.prefs.v1'
-const loadPrefs = () => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {} } catch { return {} } }
+const loadPrefs = () => { try { return JSON.parse(userPreferences.getItem(PREFS_KEY)) || {} } catch { return {} } }
 
 // "10-27" is not a date anyone reads at a glance. Render the day and the month
 // name, and put the full date with the year in the tooltip.
@@ -149,7 +150,7 @@ export default function UsStockPicks() {
   const [backtest, setBacktest] = useState(null)
   const [backtestOpen, setBacktestOpen] = useState(false)
   const [backtestLoading, setBacktestLoading] = useState(false)
-  useEffect(() => { try { localStorage.setItem(PREFS_KEY, JSON.stringify({ weights, topN, excludeTraps })) } catch { /* private mode */ } }, [weights, topN, excludeTraps])
+  useEffect(() => { try { userPreferences.setItem(PREFS_KEY, JSON.stringify({ weights, topN, excludeTraps })) } catch { /* private mode */ } }, [weights, topN, excludeTraps])
 
   const load = useCallback(async () => {
     setLoading(true); setError(null); setSummary(null)

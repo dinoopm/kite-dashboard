@@ -20,7 +20,7 @@
 // decided by querying the database rather than by trusting a flag. Retrying is
 // safe because every write is an upsert on its primary key.
 
-const { createClient } = require('@supabase/supabase-js');
+const { createClient } = require('./auth/database');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
@@ -179,7 +179,7 @@ function macroRecordDue(hasSnapshotToday, results, scoredIds) {
  * logged and the next still runs, because a broken picks snapshot is no reason
  * to also stop recording price signals.
  */
-async function runDailyJobs({ force = false } = {}) {
+async function runDailyJobs({ force = false, privateOnly = false } = {}) {
   const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null, stops: null, macro: null, usPicks: null };
 
   // Trades first, and on EVERY tick rather than once a day. Kite exposes only
@@ -202,6 +202,7 @@ async function runDailyJobs({ force = false } = {}) {
     }
   }
 
+  if (!privateOnly) {
   try {
     const state = await picksSnapshotDue();
     if (force || state.due) {
@@ -247,6 +248,8 @@ async function runDailyJobs({ force = false } = {}) {
     console.error('[daily] signal recording failed (will retry next tick):', err.message);
   }
 
+  } // Market recording runs once in the gateway, independent of Kite sessions.
+
   // Once per session, not once per tick. Each run fetches holdings plus a year
   // of daily bars for every one of them — ~26 external requests — and the stop
   // levels are computed from DAILY bars, so 48 runs a day would produce the
@@ -273,6 +276,8 @@ async function runDailyJobs({ force = false } = {}) {
       console.warn('[daily] stop proposals failed (will retry next tick):', err.message);
     }
   }
+
+  if (privateOnly) return out;
 
   // Macro: ingest the official series on EVERY tick, then record today's regime
   // BEFORE the outcome exists — the same standard as the picks snapshot, and
@@ -348,9 +353,9 @@ function runOnce(opts) {
 }
 
 /** Start the timer. Returns a stop function, mainly so tests can clean up. */
-function startDailyJobs() {
-  const first = setTimeout(() => { runOnce().catch(() => {}); }, FIRST_TICK_MS);
-  const timer = setInterval(() => { runOnce().catch(() => {}); }, TICK_MS);
+function startDailyJobs(options = {}) {
+  const first = setTimeout(() => { runOnce(options).catch(() => {}); }, FIRST_TICK_MS);
+  const timer = setInterval(() => { runOnce(options).catch(() => {}); }, TICK_MS);
   if (timer.unref) timer.unref();
   if (first.unref) first.unref();
   console.log(`[daily] recorder scheduled — first run in ${FIRST_TICK_MS / 60000}min, then every ${TICK_MS / 60000}min`);

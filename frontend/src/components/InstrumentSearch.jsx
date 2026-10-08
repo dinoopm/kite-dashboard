@@ -84,9 +84,10 @@ function InstrumentSearch() {
   };
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', width: '260px' }}>
+    <div ref={containerRef} style={{ position: 'relative', width: '100%', minWidth: 0 }}>
       <input
         type="text"
+        aria-label="Search stocks in India and US"
         value={query}
         placeholder="Search stocks (India + US)…"
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
@@ -94,6 +95,7 @@ function InstrumentSearch() {
         onKeyDown={onKeyDown}
         style={{
           width: '100%',
+          height: '38px',
           padding: '0.5rem 0.8rem',
           fontSize: '0.85rem',
           background: 'rgba(255,255,255,0.04)',

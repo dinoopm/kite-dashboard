@@ -32,6 +32,7 @@
     "yahoo-finance2": "^4.0.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "nodemon": "^3.1.14"
   }
 }

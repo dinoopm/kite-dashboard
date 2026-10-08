@@ -14,7 +14,7 @@
 // including such names would let the scorecard be carried by prices nobody
 // could have traded at.
 
-const { createClient } = require('@supabase/supabase-js');
+const { createClient } = require('../auth/database');
 const { buildSeries } = require('../backtest/indicators');
 const { detectAll, PRICE_SIGNALS } = require('./registry');
 const { fileRuleVersion, versionEmission, seriesInputs } = require('./audit');

@@ -1,3 +1,4 @@
+import { userPreferences } from '../lib/userSession'
 import { useMemo, useState } from 'react'
 import { ResponsiveContainer, AreaChart, Area, YAxis, XAxis, Tooltip, ReferenceLine } from 'recharts'
 import { computeVolStats, volRegime } from '../lib/volatility'
@@ -22,7 +23,7 @@ export default function VolatilityPanel({ bars, currency = '' }) {
   // suggestion. Persisted per currency so it survives navigation.
   const budgetKey = `volRiskBudget:${currency || 'x'}`
   const [budget, setBudget] = useState(() => {
-    const saved = Number(localStorage.getItem(budgetKey))
+    const saved = Number(userPreferences.getItem(budgetKey))
     return saved > 0 ? saved : (currency === '$' ? 100 : 2000)
   })
   if (!stats) return null
@@ -117,7 +118,7 @@ export default function VolatilityPanel({ bars, currency = '' }) {
         const onBudget = (e) => {
           const v = Number(e.target.value)
           setBudget(v)
-          if (v > 0) localStorage.setItem(budgetKey, String(v))
+          if (v > 0) userPreferences.setItem(budgetKey, String(v))
         }
         return (
           <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.9rem', paddingTop: '0.75rem', display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>

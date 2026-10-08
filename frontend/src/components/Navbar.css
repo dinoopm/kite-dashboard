@@ -1,0 +1,99 @@
+.app-navbar.glass-panel {
+  display: grid;
+  grid-template-areas: 'brand links search account';
+  grid-template-columns: auto minmax(0, 1fr) 220px auto;
+  align-items: center;
+  gap: 18px;
+  position: relative;
+  z-index: 9999;
+  padding: 16px 20px;
+  margin-bottom: 2rem;
+}
+.app-navbar:hover { transform: none; }
+.navbar-brand { grid-area: brand; display: flex; align-items: center; gap: 10px; }
+.navbar-brand > a { text-decoration: none; flex-shrink: 0; }
+.navbar-links {
+  grid-area: links;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 1.0625rem;
+}
+.navbar-links > a, .navbar-menu-trigger { display: inline-flex; align-items: center; min-height: 36px; }
+.navbar-menu { position: relative; }
+.navbar-menu-trigger {
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.navbar-dropdown-panel { position: absolute; top: 100%; left: 0; padding-top: 8px; min-width: 220px; z-index: 10000; }
+.navbar-menu-market .navbar-dropdown-panel { min-width: 260px; }
+.navbar-search { grid-area: search; min-width: 0; }
+.navbar-account-actions { grid-area: account; display: flex; align-items: center; justify-content: flex-end; gap: 10px; white-space: nowrap; }
+.navbar-signout {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  border-radius: 8px;
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.06);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.navbar-signout:hover { background: rgba(239, 68, 68, 0.14); border-color: rgba(248, 113, 113, 0.5); }
+.navbar-toggle { display: none; }
+.app-navbar a:focus-visible, .app-navbar button:focus-visible, .app-navbar input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+@media (max-width: 1550px) {
+  .app-navbar.glass-panel {
+    grid-template-areas: 'brand search account' 'links links links';
+    grid-template-columns: minmax(0, 1fr) 260px auto;
+    gap: 12px 18px;
+  }
+  .navbar-links { border-top: 1px solid var(--border); padding-top: 10px; gap: 20px; }
+}
+@media (max-width: 1100px) {
+  .navbar-links { gap: 8px; font-size: 1rem; }
+}
+@media (max-width: 1050px) {
+  .app-navbar.glass-panel {
+    grid-template-areas: 'brand account' 'search search' 'links links';
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    padding: 14px 12px;
+  }
+  .navbar-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  .navbar-links { display: none; }
+  .navbar-links[data-open='true'] { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 10px; }
+  .navbar-links > a, .navbar-menu-trigger { padding: 4px 6px; width: 100%; border-radius: 6px; }
+  .navbar-links > a:hover, .navbar-menu-trigger:hover { background: rgba(255, 255, 255, 0.04); }
+  .navbar-dropdown-panel, .navbar-menu-market .navbar-dropdown-panel { min-width: min(260px, calc(100vw - 4rem)); }
+  .navbar-menu-us .navbar-dropdown-panel { left: auto; right: 0; }
+}
+@media (max-width: 420px) {
+  .navbar-account-actions { gap: 8px; }
+  .navbar-links[data-open='true'] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

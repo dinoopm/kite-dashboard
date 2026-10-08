@@ -1,3 +1,4 @@
+import { userPreferences } from '../lib/userSession'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
@@ -13,7 +14,7 @@ const PREFERENCES_KEY = 'kite-portfolio-risk-preferences:v1'
 
 function readPreferences() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(PREFERENCES_KEY) || '{}')
+    const parsed = JSON.parse(userPreferences.getItem(PREFERENCES_KEY) || '{}')
     return {
       stockLimit: parsed.stockLimit == null ? '' : String(parsed.stockLimit),
       sectorLimit: parsed.sectorLimit == null ? '' : String(parsed.sectorLimit),
@@ -128,7 +129,7 @@ function PortfolioRisk() {
     const stockLimit = normalizeOptionalLimit(preferences.stockLimit)
     const sectorLimit = normalizeOptionalLimit(preferences.sectorLimit)
     try {
-      localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ stockLimit, sectorLimit }))
+      userPreferences.setItem(PREFERENCES_KEY, JSON.stringify({ stockLimit, sectorLimit }))
     } catch {
       // Preferences remain usable for this session when storage is unavailable.
     }

@@ -31,7 +31,7 @@ const MIN_SCREENER_BARS = 60;
 
 // Supabase for persisting US user data (baskets, virtual portfolios, screens).
 // Reads env that server.js already loaded via dotenv before requiring this file.
-const { createClient } = require('@supabase/supabase-js');
+const { createClient } = require('./auth/database');
 const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY)
   ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY)
   : null;

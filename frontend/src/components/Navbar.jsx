@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useState, useRef } from 'react';
 import InstrumentSearch from './InstrumentSearch';
 import Logo from './Logo';
+import './Navbar.css';
 
 // Sublinks under the "Market Data" dropdown. Adding more is a one-liner.
 const MARKET_DATA_LINKS = [
@@ -30,6 +31,7 @@ const US_LINKS = [
 
 function Navbar({ onDisconnect }) {
   const location = useLocation();
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [marketDataOpen, setMarketDataOpen] = useState(false);
   // Small close delay so brief cursor wobbles between trigger and panel
   // don't immediately dismiss the menu. Cleared on re-entry.
@@ -68,170 +70,151 @@ function Navbar({ onDisconnect }) {
   });
 
   return (
-    <nav className="glass-panel" style={{ display: 'flex', gap: '1.5rem', marginBottom: '2rem', padding: '1rem 2rem', alignItems: 'center', position: 'relative', zIndex: 9999 }}>
-      <Link to="/" style={{ marginRight: '1rem', textDecoration: 'none' }} title="Kite Analytics">
-        <Logo height={52} />
-      </Link>
-      <Link to="/" style={linkStyle(location.pathname === '/')}>Dashboard</Link>
-      <Link to="/portfolio" style={linkStyle(location.pathname === '/portfolio')}>Portfolio</Link>
-      <Link to="/journal" style={linkStyle(location.pathname === '/journal')}>Journal</Link>
-      <Link to="/virtual" style={linkStyle(location.pathname.startsWith('/virtual'))}>Virtual</Link>
-      <Link to="/basket" style={linkStyle(location.pathname.startsWith('/basket'))}>Basket</Link>
-      <Link to="/screener" style={linkStyle(location.pathname === '/screener')}>Screener</Link>
-      <Link to="/indices" style={linkStyle(location.pathname === '/indices')}>Indices</Link>
-      <Link to="/vix" style={linkStyle(location.pathname === '/vix')}>VIX</Link>
-      <Link to="/crypto" style={linkStyle(location.pathname === '/crypto')}>Crypto</Link>
-      {/* US dropdown (Indices + Screener) */}
-      <div onMouseEnter={openUsMenu} onMouseLeave={scheduleUsClose} style={{ position: 'relative' }}>
-        <span style={{ ...linkStyle(onUsPage), cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-          US
-          <span style={{ fontSize: '0.7rem', transition: 'transform 0.15s', transform: usOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
-        </span>
-        {usOpen && (
-          <div onMouseEnter={openUsMenu} onMouseLeave={scheduleUsClose} style={{ position: 'absolute', top: '100%', left: 0, paddingTop: '0.5rem', minWidth: '220px', zIndex: 10000 }}>
-            <div style={{ background: 'var(--bg-card, #0f172a)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.4rem 0', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
-              {US_LINKS.map(l => {
-                const active = l.to === '/us'
-                  ? (onUsPage && !['/us/macro', '/us/screener', '/us/stock-picks', '/us/basket', '/us/virtual'].some(p => location.pathname.startsWith(p)))
-                  : location.pathname.startsWith(l.to);
-                return (
-                  <Link
-                    key={l.to}
-                    to={l.to}
-                    title={l.hint}
-                    onClick={() => setUsOpen(false)}
-                    style={{
-                      display: 'block', padding: '0.55rem 0.9rem', textDecoration: 'none',
-                      color: active ? 'white' : 'var(--text-secondary)',
-                      background: active ? 'rgba(56,189,248,0.10)' : 'transparent',
-                      fontSize: '0.85rem', fontWeight: active ? 600 : 500,
-                    }}
-                    onMouseOver={(e) => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
-                    onMouseOut={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
-                  >
-                    {l.label}
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
-        )}
+    <nav className="glass-panel app-navbar" aria-label="Main navigation" onKeyDown={e => {
+      if (e.key === 'Escape') { setMobileOpen(false); setUsOpen(false); setMarketDataOpen(false); }
+    }}>
+      <div className="navbar-brand">
+        <Link to="/" title="Kite Analytics"><Logo height={40} /></Link>
+        <button type="button" className="navbar-toggle" aria-label="Toggle navigation"
+          aria-expanded={mobileOpen} aria-controls="primary-navigation" onClick={() => setMobileOpen(!mobileOpen)}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <path d={mobileOpen ? 'M6 6l12 12M6 18L18 6' : 'M4 6h16M4 12h16M4 18h16'} />
+          </svg>
+        </button>
       </div>
+      <div className="navbar-links" id="primary-navigation" data-open={mobileOpen} onClick={e => {
+        if (e.target.closest('a')) { setMobileOpen(false); setUsOpen(false); setMarketDataOpen(false); }
+      }}>
+        <Link to="/" style={linkStyle(location.pathname === '/')}>Dashboard</Link>
+        <Link to="/portfolio" style={linkStyle(location.pathname === '/portfolio')}>Portfolio</Link>
+        <Link to="/journal" style={linkStyle(location.pathname === '/journal')}>Journal</Link>
+        <Link to="/virtual" style={linkStyle(location.pathname.startsWith('/virtual'))}>Virtual</Link>
+        <Link to="/basket" style={linkStyle(location.pathname.startsWith('/basket'))}>Basket</Link>
+        <Link to="/screener" style={linkStyle(location.pathname === '/screener')}>Screener</Link>
+        <Link to="/indices" style={linkStyle(location.pathname === '/indices')}>Indices</Link>
+        <Link to="/vix" style={linkStyle(location.pathname === '/vix')}>VIX</Link>
+        <Link to="/crypto" style={linkStyle(location.pathname === '/crypto')}>Crypto</Link>
+        {/* US dropdown (Indices + Screener) */}
+        <div className="navbar-menu navbar-menu-us" onMouseEnter={openUsMenu} onMouseLeave={scheduleUsClose} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setUsOpen(false); }}>
+          <button type="button" className="navbar-menu-trigger" aria-expanded={usOpen} aria-controls="us-navigation" onClick={e => setUsOpen(e.detail ? true : !usOpen)} style={linkStyle(onUsPage)}>
+            US
+            <span style={{ fontSize: '0.7rem', transition: 'transform 0.15s', transform: usOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
+          </button>
+          {usOpen && (
+            <div id="us-navigation" className="navbar-dropdown-panel" onMouseEnter={openUsMenu} onMouseLeave={scheduleUsClose}>
+              <div style={{ background: 'var(--bg-card, #0f172a)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.4rem 0', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
+                {US_LINKS.map(l => {
+                  const active = l.to === '/us'
+                    ? (onUsPage && !['/us/macro', '/us/screener', '/us/stock-picks', '/us/basket', '/us/virtual'].some(p => location.pathname.startsWith(p)))
+                    : location.pathname.startsWith(l.to);
+                  return (
+                    <Link
+                      key={l.to}
+                      to={l.to}
+                      title={l.hint}
+                      onClick={() => setUsOpen(false)}
+                      style={{
+                        display: 'block', padding: '0.55rem 0.9rem', textDecoration: 'none',
+                        color: active ? 'white' : 'var(--text-secondary)',
+                        background: active ? 'rgba(56,189,248,0.10)' : 'transparent',
+                        fontSize: '0.85rem', fontWeight: active ? 600 : 500,
+                      }}
+                      onMouseOver={(e) => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
+                      onMouseOut={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                    >
+                      {l.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
 
-      {/* Market Data dropdown. The outer wrapper keeps cursor-tracking
-          continuous across the trigger and the panel — no inter-element gap. */}
-      <div
-        onMouseEnter={openMenu}
-        onMouseLeave={scheduleClose}
-        style={{ position: 'relative' }}
-      >
-        <span
+        {/* Market Data dropdown. The outer wrapper keeps cursor-tracking
+            continuous across the trigger and the panel — no inter-element gap. */}
+        <div
+          onMouseEnter={openMenu}
+          onMouseLeave={scheduleClose}
+          className="navbar-menu navbar-menu-market"
+          onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setMarketDataOpen(false); }}
+        >
+          <button type="button" className="navbar-menu-trigger" style={linkStyle(onMarketDataPage)}
+            aria-expanded={marketDataOpen} aria-controls="market-navigation" onClick={e => setMarketDataOpen(e.detail ? true : !marketDataOpen)}>
+            Market Data
+            <span style={{ fontSize: '0.7rem', transition: 'transform 0.15s', transform: marketDataOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
+          </button>
+          {marketDataOpen && (
+            // Panel sits FLUSH against the trigger (top: 100%, no marginTop).
+            // A transparent paddingTop creates the visual breathing room while
+            // keeping the hover area continuous so the cursor never crosses
+            // dead space on its way down to the menu items.
+            <div
+              onMouseEnter={openMenu}
+              onMouseLeave={scheduleClose}
+              id="market-navigation" className="navbar-dropdown-panel"
+            >
+              <div
+                style={{
+                  background: 'var(--bg-card, #0f172a)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  padding: '0.4rem 0',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                }}
+              >
+                {MARKET_DATA_LINKS.map(l => {
+                  const active = location.pathname === l.to;
+                  return (
+                    <Link
+                      key={l.to}
+                      to={l.to}
+                      title={l.hint}
+                      onClick={() => setMarketDataOpen(false)}
+                      style={{
+                        display: 'block',
+                        padding: '0.55rem 0.9rem',
+                        textDecoration: 'none',
+                        color: active ? 'white' : 'var(--text-secondary)',
+                        background: active ? 'rgba(56,189,248,0.10)' : 'transparent',
+                        fontSize: '0.85rem',
+                        fontWeight: active ? 600 : 500,
+                      }}
+                      onMouseOver={(e) => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
+                      onMouseOut={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                    >
+                      {l.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <Link
+          to="/chat"
           style={{
-            ...linkStyle(onMarketDataPage),
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.25rem',
+            textDecoration: 'none',
+            color: location.pathname === '/chat' ? 'white' : 'var(--accent)',
+            fontWeight: location.pathname === '/chat' ? 'bold' : '600',
+            transition: 'color 0.2s',
+            background: location.pathname === '/chat' ? 'rgba(56, 189, 248, 0.2)' : 'rgba(56, 189, 248, 0.08)',
+            border: '1px solid rgba(56, 189, 248, 0.2)',
+            borderRadius: '8px',
+            padding: '0.3rem 0.8rem',
+            fontSize: '0.95rem',
+            whiteSpace: 'nowrap',
           }}
         >
-          Market Data
-          <span style={{ fontSize: '0.7rem', transition: 'transform 0.15s', transform: marketDataOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▾</span>
-        </span>
-        {marketDataOpen && (
-          // Panel sits FLUSH against the trigger (top: 100%, no marginTop).
-          // A transparent paddingTop creates the visual breathing room while
-          // keeping the hover area continuous so the cursor never crosses
-          // dead space on its way down to the menu items.
-          <div
-            onMouseEnter={openMenu}
-            onMouseLeave={scheduleClose}
-            style={{
-              position: 'absolute',
-              top: '100%',
-              left: 0,
-              paddingTop: '0.5rem',
-              minWidth: '260px',
-              zIndex: 10000,
-            }}
-          >
-            <div
-              style={{
-                background: 'var(--bg-card, #0f172a)',
-                border: '1px solid var(--border)',
-                borderRadius: '8px',
-                padding: '0.4rem 0',
-                boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-              }}
-            >
-              {MARKET_DATA_LINKS.map(l => {
-                const active = location.pathname === l.to;
-                return (
-                  <Link
-                    key={l.to}
-                    to={l.to}
-                    title={l.hint}
-                    onClick={() => setMarketDataOpen(false)}
-                    style={{
-                      display: 'block',
-                      padding: '0.55rem 0.9rem',
-                      textDecoration: 'none',
-                      color: active ? 'white' : 'var(--text-secondary)',
-                      background: active ? 'rgba(56,189,248,0.10)' : 'transparent',
-                      fontSize: '0.85rem',
-                      fontWeight: active ? 600 : 500,
-                    }}
-                    onMouseOver={(e) => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
-                    onMouseOut={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
-                  >
-                    {l.label}
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
-        )}
+          Ask AI
+        </Link>
+
       </div>
-
-      <Link
-        to="/chat"
-        style={{
-          textDecoration: 'none',
-          color: location.pathname === '/chat' ? 'white' : 'var(--accent)',
-          fontWeight: location.pathname === '/chat' ? 'bold' : '600',
-          transition: 'color 0.2s',
-          background: location.pathname === '/chat' ? 'rgba(56, 189, 248, 0.2)' : 'rgba(56, 189, 248, 0.08)',
-          border: '1px solid rgba(56, 189, 248, 0.2)',
-          borderRadius: '8px',
-          padding: '0.3rem 0.8rem',
-          fontSize: '0.85rem',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        Ask AI
-      </Link>
-
-      <div style={{ flex: 1 }}></div>
-
-      <InstrumentSearch />
-
-      <button
-        onClick={onDisconnect}
-        style={{
-          background: 'rgba(239, 68, 68, 0.1)',
-          color: '#ef4444',
-          border: '1px solid rgba(239, 68, 68, 0.2)',
-          padding: '0.6rem 1.2rem',
-          borderRadius: '10px',
-          cursor: 'pointer',
-          fontWeight: '600',
-          transition: 'all 0.2s ease',
-          whiteSpace: 'nowrap',
-        }}
-        onMouseOver={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
-        onMouseOut={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
-      >
-        Sign Out
-      </button>
+      <div className="navbar-search"><InstrumentSearch /></div>
+      <div className="navbar-account-actions">
+        <button type="button" className="navbar-signout" onClick={onDisconnect}>Sign Out</button>
+      </div>
     </nav>
   );
 }

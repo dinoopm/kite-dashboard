@@ -1,5 +1,9 @@
+// Each browser session gets an isolated worker and private MCP credentials.
+if (process.env.KITE_SESSION_WORKER !== '1') {
+  require('./auth/gateway').startGateway();
+  return;
+}
 const express = require('express');
-const cors = require('cors');
 const path = require('path');
 const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
 const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio.js");
@@ -17,9 +21,10 @@ const { fileRuleVersion, ruleFingerprint } = require('./signals/audit');
 const { DEFAULT_COST_MODEL } = require('./signalScoring');
 
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
-const { createClient } = require('@supabase/supabase-js');
+const { createClient, createRawClient } = require('./auth/database');
+const { bindKiteIdentity, getIdentity } = require('./auth/identity');
 // Alpaca US market-data router (required after dotenv so it sees the keys).
-const { alpacaRouter, checkFeedAgreement } = require('./alpaca');
+const { alpacaRouter } = require('./alpaca');
 const { cryptoRouter } = require('./crypto');
 let supabase = null;
 if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
@@ -27,7 +32,11 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY) {
 }
 
 const app = express();
-app.use(cors());
+app.use((req, res, next) => {
+  if (!process.env.KITE_WORKER_SECRET || req.get('x-kite-worker-secret') !== process.env.KITE_WORKER_SECRET) return res.sendStatus(403);
+  if (req.path.startsWith('/api/') && !['/api/login', '/api/profile', '/api/disconnect'].includes(req.path) && !getIdentity()) return res.status(401).json({ error: 'Verified Kite identity required' });
+  next();
+});
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
@@ -386,7 +395,7 @@ async function warmCache(retries = 3) {
     // reconnects don't stack intervals; the prewarm itself skips still-fresh tokens.
     if (!indexPrewarmTimer) {
       indexPrewarmTimer = setInterval(
-        () => prewarmRrgHistoricalCache().catch(e => console.error("Index prewarm (timer) error:", e.message)),
+        () => getIdentity() && prewarmRrgHistoricalCache().catch(e => console.error("Index prewarm (timer) error:", e.message)),
         50 * 60 * 1000,
       );
     }
@@ -403,7 +412,8 @@ async function connectToKiteMcp() {
   console.log("Connecting to Kite MCP server...");
   mcpTransport = new StdioClientTransport({
     command: "npx",
-    args: ["--yes", "mcp-remote", "https://mcp.kite.trade/mcp"],
+    args: ["--yes", "mcp-remote@0.1.38", "https://mcp.kite.trade/mcp", process.env.MCP_CALLBACK_PORT],
+    env: { MCP_REMOTE_CONFIG_DIR: process.env.MCP_REMOTE_CONFIG_DIR },
   });
 
   mcpClient = new Client(
@@ -420,6 +430,7 @@ async function connectToKiteMcp() {
     // (re)connect the session can be slow to answer get_quotes (token resolution),
     // so retry with backoff until the cache actually has entries. Idempotent.
     const kickIndexPrewarm = (attempt = 0) => {
+      if (!getIdentity()) return;
       prewarmRrgHistoricalCache()
         .catch(e => console.error("Index prewarm (connect) error:", e.message))
         .finally(() => {
@@ -431,12 +442,14 @@ async function connectToKiteMcp() {
     setTimeout(() => kickIndexPrewarm(), 12000);
     if (!indexPrewarmTimer) {
       indexPrewarmTimer = setInterval(
-        () => prewarmRrgHistoricalCache().catch(e => console.error("Index prewarm (timer) error:", e.message)),
+        () => getIdentity() && prewarmRrgHistoricalCache().catch(e => console.error("Index prewarm (timer) error:", e.message)),
         50 * 60 * 1000,
       );
     }
   } catch (err) {
-    console.error("Failed to connect to MCP:", err);
+    try { await mcpTransport.close(); } catch { /* already closed */ }
+    mcpClient = null; mcpTransport = null;
+    console.error("Failed to connect to MCP:", err.message);
   }
 }
 
@@ -454,10 +467,6 @@ async function reconnectMcp() {
   try {
     if (mcpTransport) await mcpTransport.close();
   } catch (e) { /* ignore */ }
-
-  try {
-    require('child_process').execSync('pkill -f "mcp-remote"');
-  } catch (e) { /* ignore if no process */ }
 
   mcpClient = null;
   mcpTransport = null;
@@ -813,20 +822,8 @@ app.post('/api/disconnect', async (req, res) => {
     console.error("Error closing transport:", err.message);
   }
 
-  try {
-    // Force kill any dangling mcp-remote child processes to prevent Invalid Session conflicts
-    require('child_process').execSync('pkill -f "mcp-remote"');
-  } catch (e) {
-    // Ignore if no process found
-  }
-
   mcpClient = null;
   mcpTransport = null;
-
-  // 3. Restart MCP process (with delay to ensure clean kill)
-  setTimeout(() => {
-    connectToKiteMcp().catch(e => console.error(e));
-  }, 1000);
 
   res.json({ success: true, message: "Disconnected successfully" });
 });
@@ -892,6 +889,7 @@ const apiPromises = {
 // to the frontend (which uses `Retry-After` to back off polling).
 function detectRateLimit(err) {
   if (!err) return null;
+  if (err.statusCode === 429) return { retryAfter: err.retryAfter || 5 };
   const msg = (err.message || String(err)).toLowerCase();
   if (msg.includes('too many requests') || msg.includes('rate limit') || msg.includes('429')) {
     const m = msg.match(/retry[\s-]?after[^0-9]*(\d+)/);
@@ -1073,12 +1071,20 @@ const getPortfolioRisk = createPortfolioRiskService({
 });
 
 app.get('/api/profile', async (req, res) => {
-  if (!mcpClient) return res.status(500).json({ error: "MCP not connected" });
+  if (!mcpClient) return res.status(401).json({ error: "Sign in with Kite to continue." });
   try {
     const result = await fetchWithCache("get_profile", "profile", {});
-    res.json(result);
+    const rateLimit = detectRateLimit(result?.content?.[0]?.text);
+    if (rateLimit) throw Object.assign(new Error("Kite is rate limited. Please retry shortly."), { statusCode: 429, retryAfter: rateLimit.retryAfter });
+    const rawDb = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY
+      ? createRawClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY) : null;
+    const identity = await bindKiteIdentity(rawDb, result);
+    startPrivateJobs();
+    res.json({ ...result, identity });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const rateLimit = detectRateLimit(err);
+    if (rateLimit) res.set('Retry-After', String(rateLimit.retryAfter));
+    res.status(rateLimit ? 429 : err.statusCode || 502).json({ error: err.message });
   }
 });
 
@@ -2252,7 +2258,7 @@ const ALERT_RULE_VERSION = ruleFingerprint('alerts', [
 const alertAudit = createAlertAuditService({
   ruleVersion: ALERT_RULE_VERSION,
   store: supabase ? async rows => {
-    const { data, error } = await supabase.from('signal_emissions')
+    const { data, error } = await supabase.from('user_signal_emissions')
       .upsert(rows, { onConflict: 'signal,snap_date,symbol', ignoreDuplicates: true })
       .select('signal').abortSignal(AbortSignal.timeout(5000));
     if (error) throw new Error(error.message);
@@ -2260,11 +2266,11 @@ const alertAudit = createAlertAuditService({
   } : null,
   fetchRows: supabase ? async () => {
     const { fetchAll } = require('./signals/marketSeries');
-    const rows = await fetchAll('signal_emissions', 'signal,snap_date,symbol,source,canonicalSignal:meta->>signal,ruleVersion:meta->>ruleVersion,inputSnapshot:meta->>inputSnapshot,action:meta->>action,exchange:meta->>exchange,observedAt:meta->>observedAt,candleAsOf:meta->>candleAsOf,score:meta->score,entryPrice:meta->entryPrice,costModel:meta->costModel',
+    const rows = await fetchAll('user_signal_emissions', 'signal,snap_date,symbol,source,canonicalSignal:meta->>signal,ruleVersion:meta->>ruleVersion,inputSnapshot:meta->>inputSnapshot,action:meta->>action,exchange:meta->>exchange,observedAt:meta->>observedAt,candleAsOf:meta->>candleAsOf,score:meta->score,entryPrice:meta->entryPrice,costModel:meta->costModel',
       q => q.like('signal', 'technical_alert/%').order('snap_date', { ascending: true }).order('signal').order('symbol'));
     // Outcomes need compact metadata only. Read derived inputs for the latest
     // 20 observations; never download every stored OHLCV snapshot to score.
-    const { data, error } = await supabase.from('signal_emissions')
+    const { data, error } = await supabase.from('user_signal_emissions')
       .select('signal,snap_date,symbol,metrics:meta->inputs->metrics')
       .like('signal', 'technical_alert/%').order('created_at', { ascending: false }).limit(20)
       .abortSignal(AbortSignal.timeout(5000));
@@ -5512,7 +5518,7 @@ app.get('/api/stock-picks/backtest', async (req, res) => {
 
 // Feed ingest health — which price tables are stale or missing sessions the
 // index traded. Cheap and read-only; cached briefly so a UI banner can poll it.
-const { checkDataHealth, logDataHealth } = require('./dataHealth');
+const { checkDataHealth } = require('./dataHealth');
 let dataHealthCache = null; // { data, ts }
 const DATA_HEALTH_TTL = 15 * 60 * 1000;
 app.get('/api/data-health', async (req, res) => {
@@ -6279,21 +6285,21 @@ app.get(/^.*$/, (req, res) => {
   });
 });
 
-app.listen(PORT, async () => {
-  console.log(`Backend server running on http://localhost:${PORT}`);
-  // Diagnostic only — verifies the two Alpaca feeds report the same settled
-  // closes. A mismatch means prices are being rendered from a partial-volume
-  // feed. Never blocks startup; see backend/feedAgreement.js.
-  checkFeedAgreement().catch(() => {});
-  // Same spirit for the India feeds: compare every price table against the
-  // sessions NIFTY actually traded. Logs only when something is missing or
-  // stale, so a silent startup means the data underneath is whole.
-  checkDataHealth()
-    .then(r => { logDataHealth(r); if (r.ok) console.log('[data-health] all feeds current'); })
-    .catch(e => console.error('[data-health] check failed:', e.message));
-  // Snapshot the picks and record signal emissions on a timer rather than off
-  // the back of a page view — see dailyJobs.js for why that mattered.
-  startDailyJobs();
-  indiaMacroService.startSchedule();
-  await connectToKiteMcp();
+let privateJobsStarted = false;
+function startPrivateJobs() {
+  if (privateJobsStarted) return;
+  privateJobsStarted = true;
+  startDailyJobs({ privateOnly: true });
+  // Run the existing cache warmup after identity is established.
+  prewarmRrgHistoricalCache().catch(() => {});
+}
+const listener = app.listen(Number(PORT), '127.0.0.1', () => {
+  if (process.send) process.send({ type: 'ready', port: listener.address().port });
 });
+async function stopWorker() {
+  listener.close();
+  try { if (mcpTransport) await mcpTransport.close(); } catch { /* already closed */ }
+  process.exit(0);
+}
+process.once('SIGTERM', stopWorker);
+process.once('SIGINT', stopWorker);

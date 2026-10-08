@@ -14,7 +14,7 @@
 // "why was there no stop on that position?", which is the only question that
 // matters after a loss.
 
-const { createClient } = require('@supabase/supabase-js');
+const { createClient } = require('../auth/database');
 const { stopSeries } = require('../stopStudy');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);

@@ -1,3 +1,4 @@
+import { userPreferences } from '../../lib/userSession'
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
@@ -36,7 +37,7 @@ const PRESETS = [
 
 // Sliders/toggles survive reloads; the daily snapshot always uses DEFAULT_WEIGHTS.
 const PREFS_KEY = 'stockPicks.prefs.v1'
-const loadPrefs = () => { try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {} } catch { return {} } }
+const loadPrefs = () => { try { return JSON.parse(userPreferences.getItem(PREFS_KEY)) || {} } catch { return {} } }
 
 // 'NSE:NIFTY ENERGY' -> 'Energy'; 'NSE:NIFTY FIN SERVICE' -> 'Fin Service'.
 const fmtSector = (s) => (!s ? '—' : s.replace(/^NSE:NIFTY\s*/i, '').toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) || '—')
@@ -102,7 +103,7 @@ export default function StockPicks() {
   const [excludeTraps, setExcludeTraps] = useState(prefs.excludeTraps !== false)
   const [hideMicro, setHideMicro] = useState(prefs.hideMicro === true)
   useEffect(() => {
-    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ mode, lookback, weights, topN, excludeTraps, hideMicro })) } catch { /* private mode */ }
+    try { userPreferences.setItem(PREFS_KEY, JSON.stringify({ mode, lookback, weights, topN, excludeTraps, hideMicro })) } catch { /* private mode */ }
   }, [mode, lookback, weights, topN, excludeTraps, hideMicro])
   const [summary, setSummary] = useState(null)
   const [summarizing, setSummarizing] = useState(false)

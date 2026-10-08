@@ -8,7 +8,7 @@
 // Dependencies injected by server.js: getQuotes(instruments) → Kite quotes
 // map, and getXray() → the /api/portfolio/xray payload (cached there).
 
-const { createClient } = require('@supabase/supabase-js');
+const { createClient } = require('./auth/database');
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 const today = () => new Date().toISOString().slice(0, 10);

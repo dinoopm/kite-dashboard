@@ -1,3 +1,4 @@
+import { userPreferences } from '../lib/userSession'
 import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import EyeIcon from '../components/EyeIcon'
@@ -47,10 +48,10 @@ function Portfolio() {
   const [activeTab, setActiveTab] = useState('equity')
   // Privacy toggle — shares the dashboard's localStorage key so the two stay in
   // sync. When on, invested amounts and P&L are masked.
-  const [hideAmounts, setHideAmounts] = useState(() => localStorage.getItem('hideAmounts') === '1')
+  const [hideAmounts, setHideAmounts] = useState(() => userPreferences.getItem('hideAmounts') === '1')
   const toggleHideAmounts = () => setHideAmounts(prev => {
     const next = !prev;
-    localStorage.setItem('hideAmounts', next ? '1' : '0');
+    userPreferences.setItem('hideAmounts', next ? '1' : '0');
     return next;
   });
 

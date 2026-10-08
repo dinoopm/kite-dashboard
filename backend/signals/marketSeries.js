@@ -15,7 +15,7 @@
 // hole landing on an endpoint has no price to score and becomes `unresolved`.
 
 const YahooFinance = require('yahoo-finance2').default;
-const { createClient } = require('@supabase/supabase-js');
+const { createClient } = require('../auth/database');
 
 const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);

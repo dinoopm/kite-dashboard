@@ -41,3 +41,6 @@ backups/
 
 # Local fallback cache of public India macro releases (shared store is Supabase).
 backend/data/india-macro/
+
+# Per-browser Kite MCP credentials; never copy or commit these.
+backend/data/kite-sessions/

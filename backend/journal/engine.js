@@ -11,7 +11,7 @@
 // window, or a short) can't be attributed an entry price — those fills are
 // counted in `unmatched` and excluded from stats rather than guessed at.
 
-const { createClient } = require('@supabase/supabase-js');
+const { createClient } = require('../auth/database');
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 // NSE series suffixes that ride on Kite's tradingsymbol (BE = trade-to-trade,

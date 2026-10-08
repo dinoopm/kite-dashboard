@@ -181,24 +181,7 @@ function extractSQL(raw) {
 
 // Defense in depth: even though readonly_user can't write, refuse anything
 // that isn't a single SELECT/WITH statement.
-function assertSafeSQL(sql) {
-  if (!sql) throw new Error('Empty SQL query generated');
-
-  // Reject multi-statement queries (any semicolon that isn't trailing)
-  if (sql.includes(';')) {
-    throw new Error('Multi-statement SQL is not allowed');
-  }
-
-  if (!/^\s*(SELECT|WITH)\b/i.test(sql)) {
-    throw new Error('Only SELECT/WITH queries are allowed');
-  }
-
-  // Block obvious DDL/DML keywords as a belt-and-braces check
-  const banned = /\b(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE|COPY)\b/i;
-  if (banned.test(sql)) {
-    throw new Error('Query contains a forbidden keyword');
-  }
-}
+const { assertSafeSQL } = require('./sqlSafety');
 
 async function generateSQL(question, previousError = null) {
   const errorContext = previousError
@@ -302,4 +285,4 @@ async function runSqlAgent(question) {
 
 // `llm`, `withTimeout`, `contentToString` are reused by the stock-picks AI brief
 // (backend/picks/engine.js) so the whole app shares one Groq client + config.
-module.exports = { runSqlAgent, llm, withTimeout, contentToString };
+module.exports = { assertSafeSQL, runSqlAgent, llm, withTimeout, contentToString };

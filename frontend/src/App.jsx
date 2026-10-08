@@ -40,6 +40,8 @@ import ExpiryStudy from './pages/marketData/ExpiryStudy'
 import EventsCalendar from './pages/marketData/EventsCalendar'
 import OilTracker from './pages/marketData/OilTracker'
 import Navbar from './components/Navbar'
+import { setBrowserIdentity } from './lib/userSession'
+import { fetchWithAbort } from './hooks/useFetchWithAbort'
 
 // Pull the authorize link out of the MCP login tool's reply. It arrives both as
 // a markdown link and as a bare URL; take whichever matches first and strip the
@@ -52,44 +54,68 @@ const extractAuthUrl = (text) => {
   return bare ? bare[0] : null
 }
 
+function announceSessionChange() {
+  if (typeof BroadcastChannel !== 'function') return
+  const channel = new BroadcastChannel('kite-session')
+  channel.postMessage('changed'); channel.close()
+}
+
 function App() {
   const [authState, setAuthState] = useState('loading') // 'loading' | 'authenticated' | 'unauthenticated'
+  const [identity, setIdentity] = useState(null)
   const [loginMsg, setLoginMsg] = useState(null)
   const [authUrl, setAuthUrl] = useState(null)
   const [awaitingAuth, setAwaitingAuth] = useState(false)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
 
+  const acceptIdentity = useCallback(data => {
+    if (!data?.identity?.appUserId || !data.identity.kiteUserId) return false
+    setBrowserIdentity(data.identity)
+    setIdentity(data.identity)
+    setAuthState('authenticated')
+    return true
+  }, [])
+  const clearIdentity = useCallback(() => {
+    setBrowserIdentity(null)
+    setIdentity(null)
+    setAuthState('unauthenticated')
+  }, [])
+
   const checkAuth = useCallback(async () => {
     try {
       setAuthState('loading')
       // Fail fast if backend is completely frozen or stuck after 10s
-      const res = await fetch('/api/profile', { signal: AbortSignal.timeout(10000) })
+      const res = await fetchWithAbort('/api/profile', { timeoutMs: 10000 })
       const data = await res.json()
 
-      if (!res.ok || data.isError || data.error) {
-        const errText = JSON.stringify(data).toLowerCase()
-        if (errText.includes('429') || errText.includes('rate') || errText.includes('too many')) {
-          // Rate limited — retry after a short delay
-          setTimeout(() => checkAuth(), 3000)
-          return
-        }
-        setAuthState('unauthenticated')
-      } else {
-        setAuthState('authenticated')
-      }
-    } catch {
-      setAuthState('unauthenticated')
+      if (!res.ok || data.isError || data.error || !acceptIdentity(data)) {
+        clearIdentity()
+        if (res.status !== 401) setLoginMsg(data.error || (res.ok && !data.identity ? 'Run the Kite ownership migration, then restart the updated backend.' : 'Unable to verify your Kite account. Please retry.'))
+      } else return true
+    } catch (error) {
+      clearIdentity()
+      if (error.name === 'RateLimitedError') setLoginMsg('Kite is rate limited. Please wait and check again.')
     }
-  }, [])
+  }, [acceptIdentity, clearIdentity])
 
   useEffect(() => {
+    // Profile verification occurs on mount and when another tab changes login.
+    const channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('kite-session') : null
+    const update = () => { clearIdentity(); checkAuth() }
+    const expired = () => clearIdentity()
+    const visible = () => { if (document.visibilityState === 'visible') update() }
+    channel?.addEventListener('message', update)
+    window.addEventListener('kite-session-expired', expired)
+    document.addEventListener('visibilitychange', visible)
     checkAuth()
-  }, [checkAuth])
+    return () => { channel?.close(); window.removeEventListener('kite-session-expired', expired); document.removeEventListener('visibilitychange', visible) }
+  }, [checkAuth, clearIdentity])
 
   const handleLogin = async () => {
     try {
       setIsLoggingIn(true)
-      const res = await fetch('/api/login', { method: 'POST' })
+      setLoginMsg(null)
+      const res = await fetchWithAbort('/api/login', { method: 'POST', timeoutMs: 100000 })
       const data = await res.json()
       if (data?.content?.[0]?.text) {
         const text = data.content[0].text
@@ -105,17 +131,17 @@ function App() {
         setLoginMsg("❌ **Connection issue:** " + data.error + "\n\nThe system attempted to auto-reconnect. Please click **Login to Kite** again.")
       }
     } catch {
-      // ignore
+      setLoginMsg('Kite connection failed. Please retry.')
     } finally {
       setIsLoggingIn(false)
     }
   }
 
-  const handleLoginComplete = () => {
+  const handleLoginComplete = async () => {
     setLoginMsg(null)
     setAuthUrl(null)
     setAwaitingAuth(false)
-    checkAuth()
+    if (await checkAuth()) announceSessionChange()
   }
 
   // Once the user opens the Kite tab, poll quietly so the dashboard lets them
@@ -123,29 +149,45 @@ function App() {
   useEffect(() => {
     if (!awaitingAuth) return
     let cancelled = false
+    let polling = false
     const id = setInterval(async () => {
+      if (polling) return
+      polling = true
       try {
-        const res = await fetch('/api/profile', { signal: AbortSignal.timeout(8000) })
+        const res = await fetchWithAbort('/api/profile', { timeoutMs: 8000 })
         const data = await res.json()
-        if (cancelled || !res.ok || data.isError || data.error) return
+        if (cancelled) return
+        if (res.status === 401) return // The broker authorization is still pending.
+        if (!res.ok || data.isError || data.error || !data.identity?.appUserId) {
+          setAwaitingAuth(false)
+          setAuthUrl(null)
+          setLoginMsg(data.error || 'Run the Kite ownership migration, then restart the updated backend.')
+          return
+        }
         setAwaitingAuth(false)
         setAuthUrl(null)
-        setAuthState('authenticated')
+        if (acceptIdentity(data)) {
+          announceSessionChange()
+        }
       } catch {
-        // keep polling — the Kite tab is probably still open
-      }
+        // Backoff and transient failures retry without overlapping requests.
+      } finally { polling = false }
     }, 2500)
     return () => { cancelled = true; clearInterval(id) }
-  }, [awaitingAuth])
+  }, [awaitingAuth, acceptIdentity])
 
   const handleDisconnect = async (e) => {
     if (e) e.preventDefault();
-    setAuthState('unauthenticated');
-    setLoginMsg(null);
+    setLoginMsg(null)
+    setAuthUrl(null)
+    setAwaitingAuth(false)
     try {
-      await fetch('/api/disconnect', { method: 'POST' });
-    } catch (err) {
-      console.error('Failed to disconnect', err);
+      const res = await fetchWithAbort('/api/disconnect', { method: 'POST', timeoutMs: 10000 })
+      if (!res.ok) throw new Error('Sign out failed. Please retry.')
+      clearIdentity()
+      announceSessionChange()
+    } catch (error) {
+      setLoginMsg(error.message)
     }
   }
 
@@ -222,7 +264,10 @@ function App() {
                   onClick={handleLoginComplete}
                   style={{padding: '0.5rem 1rem', background: 'var(--success)', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', marginTop: '1rem'}}
                 >
-                  I have logged in
+                  Check authorization
+                </button>
+                <button onClick={handleLogin} disabled={isLoggingIn} style={{ marginLeft: '1rem', padding: '0.5rem 1rem' }}>
+                  {isLoggingIn ? 'Connecting…' : 'Retry Kite login'}
                 </button>
               </div>
             )}
@@ -233,9 +278,10 @@ function App() {
   }
 
   return (
-    <BrowserRouter>
+    <BrowserRouter key={identity.appUserId}>
       <div style={{ maxWidth: '1600px', width: '95%', margin: '0 auto', padding: '2rem 1rem' }}>
         <Navbar onDisconnect={handleDisconnect} />
+        {loginMsg && <p role="alert">{loginMsg}</p>}
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/portfolio" element={<Portfolio />} />
