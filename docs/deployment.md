@@ -57,6 +57,43 @@ origin. The template disables API caching and provides the SPA route fallback.
 See [Vercel rewrites](https://vercel.com/docs/routing/rewrites) and
 [Vite deployment](https://vercel.com/docs/frameworks/frontend/vite).
 
+## Vercel Services frontend routing
+
+The root `vercel.json` defines two services: the Vite frontend at `/` and the
+Express backend at `/api/*` (plus `/healthz`). The frontend has its own production
+build and SPA fallback, so the website and static assets are served separately
+from the backend. Do not deploy the repository root as a standalone Express app:
+Vercel's Express runtime does not serve `express.static()` assets.
+
+For this Services configuration, set the Vercel project's Root Directory to the
+repository root (`./`) and use the Services preset. Remove project-level build
+and output overrides that apply the backend's settings to the frontend. Do not
+include the automatically detected `web` container in addition to these services.
+Redeploy after the root configuration is present in the selected Git commit.
+
+Verify `/` and its referenced `/assets/*` JavaScript/CSS return `200`, and refresh
+a deep link such as `/portfolio/risk`. A failed `/api/profile` must not prevent
+Vercel from serving the frontend HTML and assets.
+
+This configuration fixes service selection and frontend routing; it does not
+complete the backend's migration to Vercel. Kite sessions still depend on
+in-memory state and long-lived per-user workers, and background timers need a
+scheduled execution model. Backend startup also requires `SUPABASE_URL` and
+`SUPABASE_SERVICE_KEY`. Store those only as backend environment variables, and
+set `APP_ORIGIN` to the production frontend origin. Browser automation needs a
+separately supported Chromium runtime; the backend install skips Puppeteer's
+large local Chromium download for the function deployment.
+
+Runtime errors must be diagnosed from Vercel Logs rather than inferred from the
+generic `FUNCTION_INVOCATION_FAILED` page. A reliable Kite login on an entirely
+Vercel-hosted deployment still requires the backend migration described above.
+The single Railway container remains the configuration tested with the current
+Kite session architecture.
+
+References: [Services routing](https://vercel.com/docs/services/routing),
+[Express static assets](https://vercel.com/docs/frameworks/backend/express#serving-static-assets),
+and [Fluid compute lifecycle](https://vercel.com/kb/guide/vercel-services-fluid-compute).
+
 ## Local container check
 
 With Docker running, build from the repository root:
