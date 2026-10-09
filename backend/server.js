@@ -18,6 +18,7 @@ const { prepareAlertCandles } = require('./alertCandles');
 const { holdingMetrics, buildHoldingSummary } = require('./holdingMetrics');
 const { createAlertAuditService } = require('./alertAudit');
 const { fileRuleVersion, ruleFingerprint } = require('./signals/audit');
+const { TECHNICAL_INDICATORS_VERSION } = require('./signals/indicatorVersion');
 const { DEFAULT_COST_MODEL } = require('./signalScoring');
 
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
@@ -2251,7 +2252,7 @@ const ALERT_RULE_VERSION = ruleFingerprint('alerts', [
   computeStockAlert.toString(),
   fileRuleVersion('shared-math', [require.resolve('./backtest/indicators'), require.resolve('./screener/vcp'),
     require.resolve('./alertCandles'), require.resolve('./holdingMetrics')]),
-  require('technicalindicators/package.json').version,
+  TECHNICAL_INDICATORS_VERSION,
   JSON.stringify(DEFAULT_COST_MODEL),
 ]);
 

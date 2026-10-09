@@ -90,6 +90,17 @@ Vercel-hosted deployment still requires the backend migration described above.
 The single Railway container remains the configuration tested with the current
 Kite session architecture.
 
+The signal-version metadata reader loads the installed indicator package's JSON
+with `readFileSync(require.resolve(...))`. Keep this as a file read: direct
+`require('technicalindicators/package.json')` imports trigger a `JSON_PARSE`
+failure in Vercel's backend bundler. On 2026-10-09, the exact failure was reproduced
+with Vercel CLI 63.1.0, and the complete frontend/backend Services build passed
+after this change in a clean checkout with synthetic environment settings. Ten
+gateway/worker/signal-audit tests passed; the indicator version and existing
+price-rule fingerprint were unchanged. The two metadata modules linted cleanly;
+`server.js` retained its existing 17 errors and one warning with no new lint
+diagnostics. This build check does not verify an authenticated cloud Kite session.
+
 References: [Services routing](https://vercel.com/docs/services/routing),
 [Express static assets](https://vercel.com/docs/frameworks/backend/express#serving-static-assets),
 and [Fluid compute lifecycle](https://vercel.com/kb/guide/vercel-services-fluid-compute).
