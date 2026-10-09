@@ -30,6 +30,9 @@ backend/backend.log
 scratch*.py
 scratch*.js
 
+# Local API debugging response; not application data or build input.
+/holdings.json
+
 # local worktrees and secret-file backups
 .claude/
 .env*
