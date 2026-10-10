@@ -207,8 +207,27 @@ async function scrapeOnce() {
  * ASM scrape and says nothing about GSM.
  */
 function isCompleteScrape(stocks) {
-  if (!stocks?.length) return false;
-  return stocks.some(s => s.measure === 'ASM') && stocks.some(s => s.measure === 'GSM');
+  if (!Array.isArray(stocks) || !stocks.length) return false;
+  return stocks.some(s => s?.measure === 'ASM') && stocks.some(s => s?.measure === 'GSM');
+}
+
+// The table is keyed by symbol, while NSE can repeat a symbol across reports.
+// Match the previous report order: the last row for a symbol wins (GSM is
+// collected after ASM). Deduplicate the entire scrape before making batches.
+function normalizeSurveillanceStocks(stocks) {
+  if (!Array.isArray(stocks)) throw new TypeError('Surveillance response must be an array');
+  const bySymbol = new Map();
+  for (const [index, stock] of stocks.entries()) {
+    if (typeof stock?.symbol !== 'string' || !stock.symbol.trim()
+      || !['ASM', 'GSM'].includes(stock.measure)) {
+      throw new Error(`Invalid surveillance row at index ${index}; existing data will not be pruned`);
+    }
+    const symbol = stock.symbol.trim().toUpperCase();
+    const stage = typeof stock.stage === 'string' || typeof stock.stage === 'number'
+      ? String(stock.stage).trim() : '';
+    bySymbol.set(symbol, { symbol, measure: stock.measure, stage: stage || 'Unknown' });
+  }
+  return [...bySymbol.values()];
 }
 
 // Retry the whole scrape. NSE blocks datacenter IPs intermittently, and a fresh
@@ -237,44 +256,52 @@ async function scrapeWithRetry() {
   return best;
 }
 
-async function syncSurveillance() {
-  try {
-    const affectedStocks = await scrapeWithRetry();
+async function syncSurveillance({ client = supabase, scrape = scrapeWithRetry, logger = console } = {}) {
+  const sourceStocks = await scrape();
+  const affectedStocks = normalizeSurveillanceStocks(sourceStocks);
 
-    // The sync REPLACES the table — delete, then insert — and picks/engine.js
-    // hard-excludes every symbol in it. So a partial scrape is not a partial
-    // update, it is a silent deletion: an ASM-only run would drop ~82 GSM
-    // names and let them straight back into the published picks, reporting
-    // success while doing it. Leaving yesterday's complete list in place is
-    // strictly better than replacing it with a confident subset, because the
-    // surveillance list changes slowly and is a safety gate.
-    if (!isCompleteScrape(affectedStocks)) {
-      const measures = [...new Set(affectedStocks.map(s => s.measure))].join(', ') || 'none';
-      console.warn(`[Surveillance] Incomplete after ${MAX_ATTEMPTS} attempts (${affectedStocks.length} rows, measures: ${measures}) — leaving existing data untouched rather than replacing the exclusion list with a subset.`);
-      return;
-    }
-
-    console.log(`[Surveillance] Total surveillance stocks: ${affectedStocks.length}. Syncing to Supabase...`);
-
-    // Clear old data and upsert new list
-    const { error: deleteErr } = await supabase.from('surveillance_stocks').delete().neq('symbol', 'DUMMY');
-    if (deleteErr) throw new Error("Failed to clear old data: " + deleteErr.message);
-
-    // Upsert in batches of 100 to avoid payload limits
-    for (let i = 0; i < affectedStocks.length; i += 100) {
-      const batch = affectedStocks.slice(i, i + 100);
-      const { error: insertErr } = await supabase
-        .from('surveillance_stocks')
-        .upsert(batch, { onConflict: 'symbol' });
-      if (insertErr) throw new Error("Supabase Insert Error: " + insertErr.message);
-    }
-
-    console.log(`[Surveillance] ✅ Successfully synced ${affectedStocks.length} stocks.`);
-
-  } catch (err) {
-    console.error("[Surveillance] Fatal Error:", err);
-    process.exit(1);
+  // Check source coverage before deduplication: a symbol in both reports is
+  // stored once, but still proves that both reports were retrieved.
+  if (!isCompleteScrape(sourceStocks)) {
+    logger.warn(`[Surveillance] Incomplete after ${MAX_ATTEMPTS} attempts (${sourceStocks.length} rows) — leaving existing data untouched.`);
+    return;
   }
+  if (!client) throw new Error('Supabase is not configured');
+
+  logger.log(`[Surveillance] ${sourceStocks.length} report rows, ${affectedStocks.length} unique stocks. Syncing to Supabase...`);
+
+  // Upload first. A failed batch must never clear the previous exclusion list.
+  const batchSize = 100;
+  for (let i = 0; i < affectedStocks.length; i += batchSize) {
+    const { error } = await client.from('surveillance_stocks')
+      .upsert(affectedStocks.slice(i, i + batchSize), { onConflict: 'symbol' });
+    if (error) throw new Error('Supabase Insert Error: ' + error.message);
+  }
+
+  // Read the whole stored list before deleting anything. Stable ordering and
+  // pagination avoid silently retaining stale rows past Supabase's row cap.
+  const currentSymbols = new Set(affectedStocks.map(stock => stock.symbol));
+  const staleSymbols = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await client.from('surveillance_stocks')
+      .select('symbol').order('symbol', { ascending: true }).range(offset, offset + pageSize - 1);
+    if (error) throw new Error('Supabase Read Error: ' + error.message);
+    if (!Array.isArray(data) || data.some(row => typeof row?.symbol !== 'string' || !row.symbol.trim())) {
+      throw new Error('Invalid stored surveillance symbols; existing data will not be pruned');
+    }
+    for (const row of data) {
+      if (!currentSymbols.has(row.symbol)) staleSymbols.push(row.symbol);
+    }
+    if (data.length < pageSize) break;
+  }
+  for (let i = 0; i < staleSymbols.length; i += batchSize) {
+    const { error } = await client.from('surveillance_stocks')
+      .delete().in('symbol', staleSymbols.slice(i, i + batchSize));
+    if (error) throw new Error('Supabase Delete Error: ' + error.message);
+  }
+
+  logger.log(`[Surveillance] ✅ Successfully synced ${affectedStocks.length} stocks; removed ${staleSymbols.length} stale rows.`);
 }
 
 // Only run when invoked directly, so the test can require this file.
@@ -294,7 +321,10 @@ if (require.main === module) {
     console.warn('[Surveillance] Ignored stray rejection:', reason?.message || reason);
   });
 
-  syncSurveillance();
+  syncSurveillance().catch(err => {
+    console.error('[Surveillance] Fatal Error:', err);
+    process.exitCode = 1;
+  });
 }
 
-module.exports = { readReport, isCompleteScrape, syncSurveillance, scrapeWithRetry };
+module.exports = { readReport, isCompleteScrape, normalizeSurveillanceStocks, syncSurveillance, scrapeWithRetry };
