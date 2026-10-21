@@ -3,6 +3,8 @@ import { createChart } from 'lightweight-charts';
 import { hasTradedVolume } from '../lib/volume';
 import { volumeStats, confirmedAt, THRUST_MULT, AVG_PERIOD, CONFIRM_WINDOW } from '../lib/volumeThrust';
 import SignalScore from './SignalScore';
+import PriceMeasurementOverlay from './PriceMeasurementOverlay';
+import { createPriceMeasurement } from '../lib/priceMeasurement';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 import { generateSignals, DROP_LOOKBACK } from '../lib/signalEngine';
 
@@ -104,6 +106,8 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
   const [hoverRsi, setHoverRsi] = useState(null); // RSI under the crosshair
   const [hoverRvol, setHoverRvol] = useState(null); // relative volume under the crosshair
 
+  const [measurement, setMeasurement] = useState({ active: false, start: null });
+  const measurementRef = useRef(null);
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const candleRef = useRef(null);
@@ -343,6 +347,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
 
       const tip = tooltipRef.current;
       if (!tip) return;
+      if (measurementRef.current?.isActive()) { tip.style.display = 'none'; return; }
       const sig = param.time != null ? signalByTimeRef.current.get(param.time) : null;
       if (!sig || !param.point) { tip.style.display = 'none'; return; }
       if (sig.type === 'buy' && sig.deadCat) {
@@ -412,6 +417,8 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
     bbUpperSqRef.current = bbUpperSq;
     bbLowerSqRef.current = bbLowerSq;
     volumeRef.current = volume;
+    const measure = createPriceMeasurement(chart, candle, el, setMeasurement);
+    measurementRef.current = measure;
 
     // Keep the chart sized to its container (explicit, so the time axis always
     // gets its full height and the date labels aren't clipped at the bottom).
@@ -420,7 +427,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
     });
     ro.observe(el);
 
-    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; };
+    return () => { ro.disconnect(); measure.dispose(); measurementRef.current = null; chart.remove(); chartRef.current = null; };
   }, [bars]);
 
   // Push the SMA overlay lines whenever the engine recomputes (e.g. slider drag).
@@ -617,7 +624,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
     
     try {
       ts.setVisibleRange({ from, to });
-    } catch (e) {
+    } catch {
       ts.fitContent(); // Fallback if setVisibleRange fails (e.g. invalid TimeRange)
     }
   }, [view, bars]);
@@ -731,6 +738,14 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
         </span>
       </div>
 
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.65rem', marginBottom: '0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+        <button type="button" aria-pressed={measurement.active} disabled={loading || !!error || bars.length === 0} onClick={() => measurementRef.current?.toggle()} title="Measure the price and percentage change between two chart points" style={{ padding: '0.4rem 0.75rem', borderRadius: '5px', border: `1px solid ${measurement.active ? FAST_COLOR : 'var(--border)'}`, background: measurement.active ? 'rgba(56,189,248,0.15)' : 'transparent', color: measurement.active ? FAST_COLOR : 'var(--text-primary)', cursor: 'pointer', fontSize: '0.78rem' }}>
+          📏 Measure price
+        </button>
+        {(measurement.active || measurement.start) && <button type="button" onClick={() => measurementRef.current?.clear()} style={{ border: 'none', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.75rem' }}>Clear measurement</button>}
+        <span role="status">{measurement.active ? (measurement.start ? 'Click the end point · Esc to cancel' : 'Click the start point · Esc to cancel') : measurement.end ? 'Measure price to start again · Esc to clear' : 'Select two points to measure price and % change'}</span>
+      </div>
+
       {/* What the Buy markers are actually worth — the two halves side by side,
           because "volume-confirmed looks better" is only a claim until the
           unconfirmed half is on screen next to it. */}
@@ -771,6 +786,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
         ) : (
           <>
             <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+            <PriceMeasurementOverlay measurement={measurement} />
             <div
               ref={tooltipRef}
               style={{
