@@ -25,8 +25,8 @@ export default function PriceMeasurementOverlay({ measurement }) {
       {result && target && <div data-testid="price-measurement-result" role="status" aria-live={active ? 'off' : 'polite'} style={{ position: 'absolute', top, left, width: badgeWidth, boxSizing: 'border-box', padding: '9px 12px', borderRadius: '7px', background: 'rgba(15,23,42,0.97)', border: `1px solid ${color}`, boxShadow: '0 4px 16px rgba(0,0,0,0.35)', color: '#cbd5e1', fontSize: '0.72rem', lineHeight: 1.5, fontVariantNumeric: 'tabular-nums' }}>
         <strong style={{ display: 'block', color, fontSize: '0.95rem' }}>{signed(result.percent)}% <span style={{ fontSize: '0.76rem' }}>({signed(result.change)})</span></strong>
         <div>{number(start.price)} → {number(target.price)}</div>
-        <div>{measurementDate(start.time)} → {measurementDate(target.time)}</div>
-        <div style={{ color: '#94a3b8' }}>{result.bars != null && `${result.bars} bars · `}{result.days != null && `${result.days} calendar days`}{active ? ' · Preview' : ''}</div>
+        <div>{start.label || measurementDate(start.time)} → {target.label || measurementDate(target.time)}</div>
+        <div style={{ color: '#94a3b8' }}>{result.bars != null && `${result.bars} bars · `}{result.days != null && `${result.days} calendar days (~${(result.days / (365.25 / 12)).toLocaleString('en-US', { maximumFractionDigits: 1 })} months)`}{active ? ' · Preview' : ''}</div>
       </div>}
     </div>
   );

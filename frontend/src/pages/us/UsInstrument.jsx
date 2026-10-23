@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import useUrlTab from '../../hooks/useUrlTab';
+import usePointMeasurement from '../../hooks/usePointMeasurement';
+import PriceMeasurementControls from '../../components/PriceMeasurementControls';
+import RechartsPriceMeasurement from '../../components/RechartsPriceMeasurement';
 import {
   ComposedChart, Area, XAxis, YAxis, Tooltip, Legend,
   ResponsiveContainer, CartesianGrid, ReferenceLine, ReferenceDot,
@@ -27,6 +31,9 @@ import { US_COMPARISON_INDICES, usBarsUrl } from '../../lib/usIndexComparison';
 // US ETF/equity detail: company name, snapshot, price chart with MA overlays,
 // RSI panel, a technical-signal strip, period stats, and a full indicator grid —
 // all computed client-side from Alpaca bars.
+
+const INSTRUMENT_TABS = [{ id: 'technicals', label: 'Technicals' }, { id: 'signals', label: 'Signals' }, { id: 'volatility', label: 'Volatility' }, { id: 'fundamentals', label: 'Fundamentals' }, { id: 'analysts', label: 'Analysts' }, { id: 'holders', label: 'Holders' }, { id: 'news', label: 'News' }, { id: 'pnl', label: 'P&L' }, { id: 'balanceSheet', label: 'Balance Sheet' }, { id: 'cashflow', label: 'Cashflow' }];
+const TAB_IDS = INSTRUMENT_TABS.map(tab => tab.id);
 
 const RANGES = ['1D', '1W', '1M', '3M', '6M', 'YTD', '1Y', '2Y', '3Y', '5Y'];
 
@@ -1125,7 +1132,7 @@ export default function UsInstrument() {
   const [range, setRange] = useState('6M');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('technicals');
+  const [activeTab, setActiveTab] = useUrlTab(TAB_IDS);
   // Breakout engine + S/R controls
   const [volMult, setVolMult] = useState(1.5);
   const [confirmPeriods, setConfirmPeriods] = useState(3);
@@ -1176,6 +1183,7 @@ export default function UsInstrument() {
   const priceChartData = comparing ? comparison.data : bars;
   const priceY = value => comparing ? percentageChange(value, comparison.base) : value;
   const plottedDates = new Set(priceChartData.map(bar => bar.date));
+  const priceMeasurement = usePointMeasurement(`${sym}/${range}/${showExtended}/${comparison.base ?? 'price'}/${activeTab}`);
 
   // Support/resistance + breakout markers on the visible candles (skip intraday).
   const sr = useMemo(() => intraday ? { supports: [], resistances: [] } : computeSupportResistance(bars), [bars, intraday]);
@@ -1338,7 +1346,7 @@ export default function UsInstrument() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', marginBottom: '1.5rem' }}>
-        {[{ id: 'technicals', label: 'Technicals' }, { id: 'signals', label: 'Signals' }, { id: 'volatility', label: 'Volatility' }, { id: 'fundamentals', label: 'Fundamentals' }, { id: 'analysts', label: 'Analysts' }, { id: 'holders', label: 'Holders' }, { id: 'news', label: 'News' }, { id: 'pnl', label: 'P&L' }, { id: 'balanceSheet', label: 'Balance Sheet' }, { id: 'cashflow', label: 'Cashflow' }].map(t => (
+        {INSTRUMENT_TABS.map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
             padding: '0.6rem 1.1rem', cursor: 'pointer', background: 'transparent', border: 'none',
             borderBottom: `2px solid ${activeTab === t.id ? 'var(--accent)' : 'transparent'}`,
@@ -1569,6 +1577,8 @@ export default function UsInstrument() {
         </div>
       )}
 
+      <PriceMeasurementControls model={priceMeasurement} disabled={loading || !!error || bars.length === 0} />
+
       {/* Chart */}
       <div className="glass-panel" style={{ padding: '1rem', marginBottom: '1.5rem' }}>
         {loading ? <div className="loader" />
@@ -1598,7 +1608,7 @@ export default function UsInstrument() {
                         so the shared date axis is printed once. */}
                     <XAxis dataKey="date" tickFormatter={fmtAxis} tick={hasTradedVolume(priceChartData) ? false : { fill: GREY, fontSize: 11 }} height={hasTradedVolume(priceChartData) ? 1 : undefined} minTickGap={40} />
                     <YAxis domain={['auto', 'auto']} tick={{ fill: GREY, fontSize: 11 }} width={60} tickFormatter={(v) => comparing ? `${Number(v).toFixed(1)}%` : v.toFixed(0)} />
-                    <Tooltip contentStyle={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '8px' }}
+                    <Tooltip active={priceMeasurement.state.active ? false : undefined} contentStyle={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '8px' }}
                       labelFormatter={(d) => new Date(d).toLocaleString('en-US')}
                       formatter={(v, name) => [comparing ? `${Number(v).toFixed(2)}%` : `$${fmtPrice(v)}`, name]} />
                     <Legend />
@@ -1667,6 +1677,7 @@ export default function UsInstrument() {
                     {indexComparison.indices.filter(index => comparison.indices.includes(index.id)).map(index => (
                       <Line key={index.id} type="linear" name={index.label} dataKey={index.id} stroke={index.color} strokeWidth={2} dot={false} connectNulls={false} isAnimationActive={false} />
                     ))}
+                  <RechartsPriceMeasurement model={priceMeasurement} data={priceChartData} base={comparison.base} intraday={intraday} timeZone="America/New_York" />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>

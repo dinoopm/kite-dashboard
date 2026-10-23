@@ -21,7 +21,29 @@ import EventBadge from '../components/EventBadge'
 import NewsPanel from '../components/NewsPanel'
 import IndexComparisonControls from '../components/IndexComparisonControls'
 import useIndexComparison from '../hooks/useIndexComparison'
+import useUrlTab from '../hooks/useUrlTab'
+import usePointMeasurement from '../hooks/usePointMeasurement';
+import PriceMeasurementControls from '../components/PriceMeasurementControls';
+import RechartsPriceMeasurement from '../components/RechartsPriceMeasurement';
 import { percentageChange } from '../lib/indexComparison'
+
+// Follow the US instrument order; Institutional occupies its Holders slot.
+const INSTRUMENT_TABS = [
+  { id: 'technicals', label: 'Technicals' },
+  { id: 'signals', label: 'Signals' },
+  { id: 'volatility', label: 'Volatility' },
+  { id: 'fundamentals', label: 'Fundamentals' },
+  { id: 'analysts', label: 'Analysts' },
+  { id: 'shareholding', label: 'Institutional' },
+  { id: 'news', label: 'News' },
+  { id: 'quarterly', label: 'P&L' },
+  { id: 'balanceSheet', label: 'Balance Sheet' },
+  { id: 'cashflow', label: 'Cashflow' },
+  { id: 'peers', label: 'Peers' },
+  { id: 'notes', label: 'Notes' },
+  { id: 'valuation', label: 'Valuation' },
+]
+const TAB_IDS = INSTRUMENT_TABS.map(tab => tab.id)
 
 // ₹ formatters for the shared AnalystsPanel: prices/EPS in rupees, revenue in Cr.
 const inrMoney = (v) => (v == null ? '—' : `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`);
@@ -568,7 +590,8 @@ function Instrument() {
   const [volMult, setVolMult] = useState(1.5)
   const [confirmPeriods, setConfirmPeriods] = useState(3)
   const [strictMomentum, setStrictMomentum] = useState(false)
-  const [activeTab, setActiveTab] = useState('technicals')
+  const [activeTab, setActiveTab] = useUrlTab(TAB_IDS)
+  const priceMeasurement = usePointMeasurement(`${token}/${timeframe}/${comparison.base ?? 'price'}/${activeTab}`)
   // Free-text company notes (persisted per symbol in Supabase).
   const [note, setNote] = useState('')
   const [noteSavedAt, setNoteSavedAt] = useState(null)
@@ -1184,215 +1207,16 @@ function Instrument() {
       {symbol && <RedFlagsPanel url={`/api/red-flags/${encodeURIComponent(symbol)}`} />}
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: '1rem', borderBottom: '1px solid var(--border)', marginBottom: '1.5rem', paddingBottom: '0.25rem' }}>
-        <button
-          onClick={() => setActiveTab('technicals')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'technicals' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'technicals' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'technicals' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          Technicals
-        </button>
-        <button
-          onClick={() => setActiveTab('fundamentals')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'fundamentals' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'fundamentals' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'fundamentals' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          Fundamentals
-        </button>
-        <button
-          onClick={() => setActiveTab('quarterly')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'quarterly' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'quarterly' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'quarterly' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          P&L
-        </button>
-        <button
-          onClick={() => setActiveTab('cashflow')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'cashflow' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'cashflow' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'cashflow' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          Cashflow Analysis
-        </button>
-        <button
-          onClick={() => setActiveTab('balanceSheet')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'balanceSheet' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'balanceSheet' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'balanceSheet' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          Balance Sheet
-        </button>
-        <button
-          onClick={() => setActiveTab('analysts')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'analysts' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'analysts' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'analysts' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          Analysts
-        </button>
-        <button
-          onClick={() => setActiveTab('shareholding')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'shareholding' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'shareholding' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'shareholding' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          Institutional
-        </button>
-        <button
-          onClick={() => setActiveTab('peers')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'peers' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'peers' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'peers' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          Peers
-        </button>
-        <button
-          onClick={() => setActiveTab('signals')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'signals' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'signals' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'signals' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          Signals
-        </button>
-        <button
-          onClick={() => setActiveTab('volatility')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'volatility' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'volatility' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'volatility' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          Volatility
-        </button>
-        <button
-          onClick={() => setActiveTab('news')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'news' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'news' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'news' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          News
-        </button>
-        <button
-          onClick={() => setActiveTab('notes')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'notes' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'notes' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'notes' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          Notes
-        </button>
-        <button
-          onClick={() => setActiveTab('valuation')}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            borderBottom: activeTab === 'valuation' ? '2px solid var(--accent)' : '2px solid transparent',
-            color: activeTab === 'valuation' ? 'var(--text-primary)' : 'var(--text-secondary)',
-            padding: '0.5rem 1rem',
-            cursor: 'pointer',
-            fontWeight: activeTab === 'valuation' ? 'bold' : 'normal',
-            transition: 'all 0.2s',
-            fontSize: '1rem'
-          }}
-        >
-          Valuation
-        </button>
+      <div data-testid="instrument-tabs" style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', marginBottom: '1.5rem', overflowX: 'auto', overflowY: 'hidden' }}>
+        {INSTRUMENT_TABS.map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+            padding: '0.6rem 1.1rem', cursor: 'pointer', background: 'transparent', border: 'none',
+            borderBottom: `2px solid ${activeTab === tab.id ? 'var(--accent)' : 'transparent'}`,
+            color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-secondary)',
+            fontWeight: activeTab === tab.id ? 700 : 500,
+            fontSize: '0.95rem', whiteSpace: 'nowrap', flexShrink: 0,
+          }}>{tab.label}</button>
+        ))}
       </div>
 
       {activeTab === 'valuation' && (
@@ -1887,6 +1711,8 @@ function Instrument() {
             );
           })()}
 
+          <PriceMeasurementControls model={priceMeasurement} disabled={loading || !!error || data.length === 0} />
+
           {/* Chart */}
           {/* Flex column, not a calc() height on the chart: ResponsiveContainer
               parses its height prop into a number and silently renders nothing
@@ -1920,7 +1746,7 @@ function Instrument() {
                   />
                   <YAxis domain={['auto', 'auto']} stroke="var(--text-secondary)" tick={{ fill: 'var(--text-secondary)' }} tickFormatter={comparing ? value => `${Number(value).toFixed(1)}%` : undefined} />
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                  <Tooltip
+                  <Tooltip active={priceMeasurement.state.active ? false : undefined}
                     contentStyle={{ backgroundColor: 'var(--bg-dark)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
                     formatter={comparing ? (value, name) => [`${Number(value).toFixed(2)}%`, name] : undefined}
                   />
@@ -2023,6 +1849,7 @@ function Instrument() {
                   {indexComparison.indices.filter(index => comparison.indices.includes(index.id)).map(index => (
                     <Line key={index.id} type="linear" name={index.label} dataKey={index.id} stroke={index.color} strokeWidth={2} dot={false} connectNulls={false} isAnimationActive={false} />
                   ))}
+                <RechartsPriceMeasurement model={priceMeasurement} data={priceChartData} base={comparison.base} intraday={timeframe === '1D'} timeZone="Asia/Kolkata" />
                 </LineChart>
               </ResponsiveContainer>
               </div>
