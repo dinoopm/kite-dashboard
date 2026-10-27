@@ -13,6 +13,10 @@ export function exceedsLimit(weightPct, limit) {
 export function getScenarioExposure(data, target) {
   if (!data || !target) return 0
   if (target === 'portfolio') return Number(data.summary?.coveredValue) || 0
+  if (target.startsWith('market-cap:')) {
+    const category = target.slice('market-cap:'.length)
+    return Number(data.marketCapitalization?.groups?.find(item => item.category === category)?.currentValue) || 0
+  }
   if (target.startsWith('sector:')) {
     const sector = target.slice('sector:'.length)
     return Number(data.sectors?.find(item => item.sector === sector)?.currentValue) || 0

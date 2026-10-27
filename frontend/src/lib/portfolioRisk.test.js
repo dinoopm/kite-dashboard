@@ -44,3 +44,14 @@ test('calculates sector and holding loss against total portfolio value', () => {
   assert.equal(holding.resultingValue, 750)
 });
 
+
+test('market-cap scenarios use category value and retain the whole portfolio denominator', () => {
+  const data = { summary: { coveredValue: 1000 }, marketCapitalization: { groups: [{ category: 'Small Cap', currentValue: 250 }, { category: 'Unknown', currentValue: 100 }] } }
+  assert.equal(getScenarioExposure(data, 'market-cap:Small Cap'), 250)
+  assert.equal(getScenarioExposure(data, 'market-cap:Unknown'), 100)
+  assert.equal(getScenarioExposure(data, 'market-cap:Missing'), 0)
+  assert.equal(getScenarioExposure({}, 'market-cap:Small Cap'), 0)
+  const scenario = calculateRiskScenario({ coveredValue: 1000, affectedExposure: getScenarioExposure(data, 'market-cap:Small Cap'), declinePct: 20 })
+  assert.equal(scenario.hypotheticalLoss, 50)
+  assert.equal(scenario.portfolioLossPct, 5)
+})

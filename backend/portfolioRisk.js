@@ -1,6 +1,7 @@
 'use strict';
 
 const UNKNOWN_SECTOR = 'Unknown';
+const { enrichMarketCaps, marketCapExposure, CATEGORIES, PAGE_URL } = require('./marketCapClassification');
 
 function finiteNumber(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -74,6 +75,7 @@ function aggregatePortfolio(groupedHoldings) {
     .map(item => ({
       ...item,
       sector: item.sector || UNKNOWN_SECTOR,
+      marketCapCategory: CATEGORIES.includes(item.marketCapCategory) ? item.marketCapCategory : 'Unknown',
       weightPct: coveredValue > 0 ? (item.currentValue / coveredValue) * 100 : 0,
     }))
     .sort((a, b) => b.currentValue - a.currentValue || a.symbol.localeCompare(b.symbol));
@@ -102,7 +104,10 @@ function aggregatePortfolio(groupedHoldings) {
     .reduce((sum, entry) => sum + entry.currentValue, 0);
   const largestClassifiedSector = sectors.find(entry => entry.sector !== UNKNOWN_SECTOR) || null;
 
+  const marketCapitalization = marketCapExposure(positions, coveredValue);
+
   return {
+    marketCapitalization,
     positions,
     sectors,
     summary: {
@@ -124,13 +129,13 @@ function aggregatePortfolio(groupedHoldings) {
   };
 }
 
-function withDeadline(promise, milliseconds) {
-  if (milliseconds <= 0) return Promise.resolve(UNKNOWN_SECTOR);
+function withDeadline(promise, milliseconds, fallback = UNKNOWN_SECTOR) {
+  if (milliseconds <= 0) return Promise.resolve(fallback);
   let timer;
   return Promise.race([
     Promise.resolve(promise),
     new Promise(resolve => {
-      timer = setTimeout(() => resolve(UNKNOWN_SECTOR), milliseconds);
+      timer = setTimeout(() => resolve(fallback), milliseconds);
     }),
   ]).finally(() => clearTimeout(timer));
 }
@@ -167,6 +172,8 @@ async function enrichSectors(holdings, resolveSector, timeoutMs, concurrency) {
 function createPortfolioRiskService({
   fetchHoldings,
   resolveSector,
+  resolveMarketCaps = async () => null,
+  marketCapTimeoutMs = 14000,
   timeoutMs = 8000,
   concurrency = 3,
   now = () => new Date(),
@@ -188,16 +195,25 @@ function createPortfolioRiskService({
       item => item.priced && Number.isFinite(item.currentValue) && item.currentValue > 0
     );
     const unpriced = grouped.filter(item => !priced.includes(item));
-    const enriched = [
-      ...await enrichSectors(priced, resolveSector, timeoutMs, concurrency),
-      ...unpriced,
-    ];
+    const [sectorHoldings, catalog] = await Promise.all([
+      enrichSectors(priced, resolveSector, timeoutMs, concurrency),
+      priced.length ? withDeadline(Promise.resolve().then(resolveMarketCaps).catch(() => null), marketCapTimeoutMs, null) : Promise.resolve(null),
+    ]);
+    const enriched = [...enrichMarketCaps(sectorHoldings, catalog), ...unpriced];
     const result = aggregatePortfolio(enriched);
     const fallbackTime = now();
     const fetchedAt = fetched?.fetchedAt ?? fallbackTime;
 
     return {
       ...result,
+      marketCapitalization: {
+        ...result.marketCapitalization,
+        source: 'AMFI',
+        sourceUrl: catalog?.sourceUrl || PAGE_URL,
+        periodEnd: catalog?.periodEnd || null,
+        fetchedAt: catalog?.fetchedAt || null,
+        status: catalog ? 'available' : 'unavailable',
+      },
       holdingsFetchedAt: new Date(fetchedAt).toISOString(),
     };
   };

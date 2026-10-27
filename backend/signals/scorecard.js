@@ -105,7 +105,12 @@ function headline(rows, { source, blockedReason, direction = 'bullish', benchmar
 
 /** Score every signal in the registry. */
 async function runSignalScorecard({ fetchRows = fetchEmissions, context = buildMarketContext } = {}) {
-  const all = await fetchRows();
+  // A market-wide US severity observation must never be scored against NIFTY.
+  // Blocked entries remain visibly unvalidated in the registry output below.
+  const all = (await fetchRows()).filter(row => {
+    const meta = signalMeta(row.signal);
+    return meta?.market !== 'US' && !meta?.blockedReason;
+  });
 
   // Group by (signal, source) — the split is the point, so it happens before
   // anything is measured rather than being a filter applied afterwards.

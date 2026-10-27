@@ -19,10 +19,10 @@ const daysLeft = (dateStr) => {
 };
 const cr = (v) => `${v >= 0 ? '+' : '−'}₹${Math.abs(Math.round(v)).toLocaleString('en-IN')} cr`;
 
-async function marketItems(getQuotes) {
+async function marketItems(getQuotes, database) {
   const items = [];
   try {
-    const { data } = await supabase.from('fii_dii_activity').select('*').order('trade_date', { ascending: false }).limit(5);
+    const { data } = await database.from('fii_dii_activity').select('*').order('trade_date', { ascending: false }).limit(5);
     if (data?.length) {
       const [latest] = data;
       const fii5 = data.reduce((s, r) => s + (r.fii_net || 0), 0);
@@ -38,7 +38,7 @@ async function marketItems(getQuotes) {
   // FOMC/CPI days move every market, India included.
   try {
     const t = new Date(); t.setDate(t.getDate() + 7);
-    const { data } = await supabase.from('macro_events')
+    const { data } = await database.from('macro_events')
       .select('event_date,title').gte('event_date', today()).lte('event_date', t.toISOString().slice(0, 10))
       .order('event_date', { ascending: true }).limit(6);
     for (const e of data || []) {
@@ -69,16 +69,17 @@ async function marketItems(getQuotes) {
 // Compare today's x-ray state per holding with the last stored snapshot and
 // write today's snapshot (idempotent upsert). First-ever run has no baseline,
 // so it just seeds and reports nothing — deltas start tomorrow.
-async function holdingItems(getXray) {
+async function holdingItems(getXray, database) {
   const xray = await getXray();
   const rows = xray?.holdings || [];
   if (!rows.length) return [];
 
-  const { data: prevRows } = await supabase
+  const { data: prevRows, error: readError } = await database
     .from('holding_state_snapshots').select('*')
     .lt('snap_date', today())
     .order('snap_date', { ascending: false })
     .limit(rows.length * 5);
+  if (readError) throw new Error(`Could not read the holdings baseline: ${readError.message}`);
   const prevBySymbol = new Map();
   for (const r of prevRows || []) if (!prevBySymbol.has(r.symbol)) prevBySymbol.set(r.symbol, r);
 
@@ -108,22 +109,23 @@ async function holdingItems(getXray) {
     snap_date: today(), symbol: h.symbol, score: h.score,
     badge_ids: h.badges.map(b => b.id).join(','), signal: h.signal || null,
   }));
-  await supabase.from('holding_state_snapshots').upsert(snap, { onConflict: 'snap_date,symbol' });
+  const { error: writeError } = await database.from('holding_state_snapshots').upsert(snap, { onConflict: 'snap_date,symbol' });
+  if (writeError) throw new Error(`Could not save the holdings baseline: ${writeError.message}`);
 
   return items;
 }
 
-async function pickItems() {
+async function pickItems(database) {
   const items = [];
   try {
-    const { data: dates } = await supabase
+    const { data: dates } = await database
       .from('stock_pick_snapshots').select('snap_date').order('snap_date', { ascending: false }).limit(200);
     const uniq = [...new Set((dates || []).map(d => d.snap_date))].slice(0, 2);
     if (uniq.length === 2) {
       const [latest, prev] = uniq;
       const [a, b] = await Promise.all([
-        supabase.from('stock_pick_snapshots').select('symbol').eq('snap_date', latest),
-        supabase.from('stock_pick_snapshots').select('symbol').eq('snap_date', prev),
+        database.from('stock_pick_snapshots').select('symbol').eq('snap_date', latest),
+        database.from('stock_pick_snapshots').select('symbol').eq('snap_date', prev),
       ]);
       const cur = new Set((a.data || []).map(r => r.symbol));
       const old = new Set((b.data || []).map(r => r.symbol));
@@ -140,16 +142,16 @@ async function pickItems() {
 // in: actual holdings, plus everything they follow — basket/theme instruments
 // and virtual-portfolio holdings. Each item says WHY it's relevant
 // ("holding" beats "watching · <list name>" when a symbol is in both).
-async function eventItems(getEvents, getXray) {
+async function eventItems(getEvents, getXray, database) {
   if (!getEvents) return [];
   try {
     const [rows, xray, themeItems, themes, pfItems, pfs] = await Promise.all([
       getEvents(),
       getXray(),
-      supabase.from('theme_instruments').select('symbol,theme_id'),
-      supabase.from('themes').select('id,name'),
-      supabase.from('portfolio_holdings').select('symbol,portfolio_id'),
-      supabase.from('portfolios').select('id,name'),
+      database.from('theme_instruments').select('symbol,theme_id'),
+      database.from('themes').select('id,name'),
+      database.from('portfolio_holdings').select('symbol,portfolio_id'),
+      database.from('portfolios').select('id,name'),
     ]);
 
     // symbol -> reason label, holdings taking precedence over watchlists
@@ -238,19 +240,43 @@ async function expiryItems(getExpiryStudy) {
   } catch { return []; }
 }
 
-async function composeBriefing({ getQuotes, getXray, getEvents, getExpiryStudy }) {
+async function composeBriefing({ getQuotes, getXray, getEvents, getExpiryStudy, database = supabase }) {
+  let holdingsAvailable = true;
   const [market, holdings, picks, events, expiry] = await Promise.all([
-    marketItems(getQuotes),
-    holdingItems(getXray).catch(e => [{ tone: 'neutral', text: `Holdings deltas unavailable: ${e.message}`, link: '/portfolio' }]),
-    pickItems(),
-    eventItems(getEvents, getXray),
+    marketItems(getQuotes, database),
+    holdingItems(getXray, database).catch(e => {
+      holdingsAvailable = false;
+      return [{ tone: 'neutral', text: `Holdings deltas unavailable: ${e.message}`, link: '/portfolio' }];
+    }),
+    pickItems(database),
+    eventItems(getEvents, getXray, database),
     expiryItems(getExpiryStudy),
   ]);
   return {
     date: today(),
-    market, holdings, picks, events, expiry,
+    market, holdings, picks, events, expiry, holdingsAvailable,
     quiet: market.length + holdings.length + picks.length + events.length + expiry.length === 0,
   };
 }
 
-module.exports = { composeBriefing };
+// This cache belongs to the same session worker as the injected X-Ray getter.
+// Never cache a failed holdings section: the next request can retry immediately.
+function createBriefingService(deps, { now = Date.now, ttlMs = 30 * 60 * 1000 } = {}) {
+  let cache = null;
+  let running = null;
+  return async function getBriefing() {
+    const date = new Date(now()).toISOString().slice(0, 10);
+    if (cache && now() - cache.ts < ttlMs && cache.data.date === date) {
+      return { ...cache.data, cached: true };
+    }
+    if (!running) {
+      running = composeBriefing(deps).then(data => {
+        if (data.holdingsAvailable) cache = { data, ts: now() };
+        return data;
+      }).finally(() => { running = null; });
+    }
+    return running;
+  };
+}
+
+module.exports = { composeBriefing, createBriefingService };

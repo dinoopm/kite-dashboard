@@ -1,10 +1,9 @@
 import MacroDecisionMonitor from '../../components/MacroDecisionMonitor'
-import RiskRegimePanel from '../../components/RiskRegimePanel'
 import TreasuryChart from '../../components/TreasuryChart'
 
 // US Macro dashboard — the rates/flows backdrop that drives both US equities
-// and (via FII flows) Indian markets. Risk-on/off money-flow read + the 10Y
-// Treasury yield chart. Reachable from the US nav dropdown.
+// and (via FII flows) Indian markets. Macro monitor and 10Y Treasury history.
+// Market risk severity lives on the US VIX page.
 export default function UsMacro() {
   return (
     <div className="dashboard-layout">
@@ -16,7 +15,6 @@ export default function UsMacro() {
       </div>
 
       <MacroDecisionMonitor />
-      <RiskRegimePanel />
       <TreasuryChart />
     </div>
   )

@@ -10,7 +10,7 @@ const {
 
 describe('treasury-10y ranges', () => {
   test('every range asks for at least as much history as the one below it', () => {
-    const order = ['1M', '3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y', '10Y'];
+    const order = ['1M', '3M', '6M', '1Y', '2Y', '3Y', '4Y', '5Y', '10Y', '20Y'];
     for (let i = 1; i < order.length; i++) {
       assert.ok(
         TNX_RANGES[order[i]].days > TNX_RANGES[order[i - 1]].days,
@@ -23,7 +23,7 @@ describe('treasury-10y ranges', () => {
     for (const r of ['1M', '3M', '6M', '1Y', '2Y']) {
       assert.equal(TNX_RANGES[r].interval, '1d', `${r} should still be daily`);
     }
-    for (const r of ['3Y', '4Y', '5Y', '10Y']) {
+    for (const r of ['3Y', '4Y', '5Y', '10Y', '20Y']) {
       assert.equal(TNX_RANGES[r].interval, '1wk', `${r} should be weekly`);
     }
   });

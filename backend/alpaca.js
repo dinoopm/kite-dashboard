@@ -15,6 +15,7 @@
 // "delayed_sip" (full-volume, 15-min-delayed; plain "sip" is blocked for recent
 // data on the free tier). Paid SIP accounts can override both via env.
 const express = require('express');
+const { quoteFromSnapshot } = require('./usQuotePricing');
 const axios = require('axios');
 const YahooFinance = require('yahoo-finance2').default;
 const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
@@ -226,6 +227,21 @@ function rangeToQuery(range) {
 }
 
 const router = express.Router();
+// Cboe index data is independent of Alpaca's equity/ETF feed.
+const { createVixService } = require('./usVix');
+const getUsVix = createVixService({ fetchQuote: () => yf.quote('^VIX') });
+router.get('/fear-greed', async (req, res) => {
+  try { res.json(await require('./cnnFearGreed').getCnnFearGreed()); }
+  catch { res.status(502).json({ error: 'CNN Fear & Greed is unavailable.' }); }
+});
+router.get('/risk-severity', async (req, res) => {
+  try { res.json(await require('./usRiskSeverity').getAndRecordUsRiskSeverity()); }
+  catch { res.status(502).json({ error: 'Market risk severity is unavailable.' }); }
+});
+router.get('/vix', async (req, res) => {
+  try { res.json(await getUsVix()); }
+  catch { res.status(502).json({ error: 'US VIX data could not be loaded.' }); }
+});
 
 // Lets the frontend decide whether to render data or a "configure keys" CTA.
 router.get('/config', (req, res) => {
@@ -429,7 +445,7 @@ router.get('/vcp/:symbol', async (req, res) => {
 // RRG universe — the sector + industry ETFs rotated against the benchmark.
 const RRG_US_KEYS = [
   'XLK', 'XLF', 'XLV', 'XLY', 'XLP', 'XLE', 'XLI', 'XLB', 'XLRE', 'XLU', 'XLC',
-  'SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GDX', 'IGV',
+  'SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GLD', 'GDX', 'IGV',
   // Thematic funds — see the note on the frontend INDICES list for why each
   // proxy was chosen. They rotate against the benchmark like any other row.
   'CIBR', 'UFO', 'ITA', 'QTUM', 'HYDR', 'REMX', 'URA',
@@ -450,7 +466,7 @@ const US_LABELS = {
   XLI: 'Industrials', XLB: 'Materials', XLRE: 'Real Estate', XLU: 'Utilities',
   XLC: 'Communication Services', SMH: 'Semiconductors', XBI: 'Biotech',
   KRE: 'Regional Banks', ITB: 'Homebuilders', XOP: 'Oil & Gas E&P',
-  XRT: 'Retail', IYT: 'Transports', GDX: 'Gold Miners', IGV: 'Software',
+  XRT: 'Retail', IYT: 'Transports', GLD: 'Gold ETF (GLD)', GDX: 'Gold Miners', IGV: 'Software',
   // Thematic, and named after the theme rather than the fund because that is
   // what the row is being read as. Each is an ETF proxy for a theme with no
   // GICS sector behind it — see the note on the frontend INDICES list.
@@ -584,23 +600,12 @@ router.post('/quotes', async (req, res) => {
     const out = {};
     for (const sym of symbols) {
       const snap = data?.[sym];
-      const daily = snap?.dailyBar || {};
-      const prev = snap?.prevDailyBar || {};
-      // Prefer the regular-session close (dailyBar.c) — during the session it
-      // tracks the live price, and once closed it's the official close that
-      // Google/Yahoo headline. latestTrade.p is only a fallback: it includes
-      // pre/after-hours prints, which distort (and on thin sessions can flip)
-      // today's change vs the standard regular-session number.
-      const last = daily.c ?? snap?.latestTrade?.p ?? null;
-      const prevClose = prev.c ?? null;
       out[sym] = {
         instrument_token: sym,
-        last_price: last,
-        net_change: last != null && prevClose != null ? last - prevClose : null,
-        ohlc: { open: daily.o ?? null, high: daily.h ?? null, low: daily.l ?? null, close: prevClose },
+        ...quoteFromSnapshot(snap, { extended: req.body?.extended === true, feed: SNAPSHOT_FEED }),
       };
     }
-    res.json({ content: [{ type: 'text', text: JSON.stringify(out) }] });
+    res.json({ content: [{ type: 'text', text: JSON.stringify(out) }], feed: SNAPSHOT_FEED });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message, configured: !err.notConfigured });
   }
@@ -1117,6 +1122,13 @@ async function usWatchedSymbols() {
   return [...out];
 }
 
+// Live inputs for the equity decision-support panel.
+const { getMarketConditions } = require('./marketConditions');
+router.get('/market-conditions', async (req, res) => {
+  try { res.json(await getMarketConditions()); }
+  catch { res.status(502).json({ error: 'Decision inputs could not be loaded.' }); }
+});
+
 // ─── GET /api/us/treasury-10y — US 10Y Treasury yield series ─────────────────
 // The risk-free rate that drives equity valuations and FII flows. The LIVE
 // value + today's change come from CNBC's US10Y quote (real-time, matches
@@ -1144,9 +1156,70 @@ const TNX_RANGES = {
   '4Y':  { days: 4 * 366,  interval: '1wk' },
   '5Y':  { days: 5 * 366,  interval: '1wk' },
   '10Y': { days: 10 * 366, interval: '1wk' },
+  '20Y': { days: 20 * 366, interval: '1wk' },
 };
 const TNX_DEFAULT_RANGE = '6M';
 const tnxRangeConfig = (range) => TNX_RANGES[range] || TNX_RANGES[TNX_DEFAULT_RANGE];
+
+// Calendar-period price returns; daily closes preserve month/year boundaries.
+let treasuryEquityCache = null;
+router.get('/treasury-equity-returns', async (req, res) => {
+  if (treasuryEquityCache && Date.now() - treasuryEquityCache.ts < 300000) return res.json(treasuryEquityCache.data);
+  const now = new Date();
+  const period1 = new Date(Date.UTC(now.getUTCFullYear() - 21, 0, 1));
+  const results = await Promise.allSettled(['^GSPC', '^NDX'].map(async symbol => {
+    const chart = await yf.chart(symbol, { period1, interval: '1d' }, { validateResult: false });
+    const years = new Map(), months = new Map();
+    for (const q of [...(chart.quotes || [])].sort((a, b) => a.date - b.date)) {
+      if (!Number.isFinite(q.close) || q.close <= 0) continue;
+      const date = q.date.toISOString().slice(0, 10);
+      const point = { date, close: q.close };
+      years.set(date.slice(0, 4), point);
+      months.set(date.slice(0, 7), point);
+    }
+    if (!months.size) throw new Error('Index history unavailable');
+    const annual = {}, monthly = {};
+    const result = (point, previous) => ({ asOf: point.date, returnPct: previous ? (point.close / previous.close - 1) * 100 : null });
+    for (const [year, point] of years) annual[year] = result(point, years.get(String(Number(year) - 1)));
+    for (const [month, point] of months) {
+      const previous = new Date(`${month}-01T00:00:00Z`);
+      previous.setUTCMonth(previous.getUTCMonth() - 1);
+      monthly[month] = result(point, months.get(previous.toISOString().slice(0, 7)));
+    }
+    return { annual, monthly };
+  }));
+  const data = { source: 'Yahoo Finance · index price returns, excluding dividends' };
+  ['sp500', 'nasdaq100'].forEach((key, i) => {
+    data[key] = results[i].status === 'fulfilled' ? results[i].value : { error: results[i].reason.message };
+  });
+  if (results.every(r => r.status === 'fulfilled')) treasuryEquityCache = { ts: Date.now(), data };
+  res.json(data);
+});
+
+let treasuryMacroCache = null;
+router.get('/treasury-macro-history', async (req, res) => {
+  if (treasuryMacroCache && Date.now() - treasuryMacroCache.ts < 3600000) return res.json(treasuryMacroCache.data);
+  const { fetchMany } = require('./macro/fred');
+  const start = `${new Date().getUTCFullYear() - 22}-01-01`;
+  const { series, errors } = await fetchMany(['CPIAUCNS', 'FEDFUNDS'], { start });
+  const data = { source: 'FRED · BLS CPI-U, not seasonally adjusted · Federal Reserve effective federal funds rate' };
+  for (const [key, id] of [['inflation', 'CPIAUCNS'], ['fedRate', 'FEDFUNDS']]) {
+    if (errors[id]) { data[key] = { error: errors[id] }; continue; }
+    const points = new Map((series[id]?.observations || []).filter(o => Number.isFinite(o.value)).map(o => [o.observation_date.slice(0, 7), o.value]));
+    const monthly = {}, annual = {};
+    for (const [month, value] of [...points].sort(([a], [b]) => a.localeCompare(b))) {
+      const previous = points.get(`${Number(month.slice(0, 4)) - 1}${month.slice(4)}`);
+      const rate = key === 'inflation' ? (previous > 0 ? (value / previous - 1) * 100 : null) : value;
+      if (rate == null) continue;
+      const point = { value: rate, month };
+      monthly[month] = point;
+      annual[month.slice(0, 4)] = point;
+    }
+    data[key] = Object.keys(monthly).length ? { annual, monthly } : { error: 'History unavailable' };
+  }
+  if (!data.inflation.error && !data.fedRate.error) treasuryMacroCache = { ts: Date.now(), data };
+  res.json(data);
+});
 
 router.get('/treasury-10y', async (req, res) => {
   const range = (req.query.range || TNX_DEFAULT_RANGE).toUpperCase();

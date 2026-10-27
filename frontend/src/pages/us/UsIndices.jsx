@@ -2,11 +2,13 @@ import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Cell as RechartsCell, ResponsiveContainer } from 'recharts';
 import RRGChart from '../../components/RRGChart';
+import UsVixCard from '../../components/UsVixCard';
 import BreadthStrip from '../../components/BreadthStrip';
 import UsGlobalIndices from './UsGlobalIndices';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 import { W_1W, W_1M, W_3M, rsiMultiplierFor, rsi14At, computeScoreMap } from '../../lib/sectorAnalytics';
 import { adx14 as computeAdx14 } from '../../lib/indicators';
+import { historyPricingInputs, returnsAtPrice, mergeIndexQuote, quoteLabel, quoteFeedLabel } from '../../lib/usIndexPricing';
 
 // ─── RRG Color Palette ─────────────────────────────────────────
 const RRG_COLORS = [
@@ -74,6 +76,7 @@ const INDICES = [
   { key: "XOP", name: "Oil & Gas E&P", category: "sector" },
   { key: "XRT", name: "Retail", category: "sector" },
   { key: "IYT", name: "Transports", category: "sector" },
+  { key: "GLD", name: "Gold ETF (GLD)", category: "sector" },
   { key: "GDX", name: "Gold Miners", category: "sector" },
   { key: "IGV", name: "Software", category: "sector" },
   // ─── Thematic rows ─────────────────────────────────────────────────────────
@@ -138,6 +141,10 @@ const INDICES = [
   { key: "URA", name: "Uranium", category: "sector" },
 ];
 
+// Keep rotation coverage aligned with the visible list. WQTM still lacks the
+// multi-quarter history required by the existing RRG universe.
+const US_RRG_SECURITIES = INDICES.filter(row => row.category === 'sector' && row.key !== 'WQTM').map(row => row.key).join(',');
+
 // Empty placeholder row so unloaded-tab indices still render in the table.
 const emptyRowFor = (entry) => ({
   id: entry.key, name: entry.name, category: entry.category, token: null,
@@ -148,7 +155,7 @@ const emptyRowFor = (entry) => ({
 });
 
 // ─── localStorage snapshot for instant paint on revisit ────────
-const SNAPSHOT_KEY = 'us-indices-perf-snapshot-v1';
+const SNAPSHOT_KEY = 'us-indices-perf-snapshot-v2';
 const SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Read the last-rendered rows so the table paints immediately on revisit. The
@@ -176,7 +183,11 @@ function loadIndicesSnapshot() {
 
 function saveIndicesSnapshot(data) {
   try {
-    const rows = data.map(({ history, ...rest }) => rest); // drop history (large, reloads anyway)
+    const rows = data.map(row => {
+      const saved = { ...row };
+      delete saved.history; // large daily history reloads in the background
+      return saved;
+    });
     localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ ts: Date.now(), rows }));
   } catch { /* quota / serialization — non-fatal */ }
 }
@@ -381,7 +392,7 @@ function UsIndices() {
         const res = await fetchWithAbort('/api/us/quotes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments: activeKeys }),
+          body: JSON.stringify({ instruments: activeKeys, extended: true }),
           signal
         });
 
@@ -390,40 +401,13 @@ function UsIndices() {
 
         if (resData?.content?.[0]?.text) {
           const quotes = JSON.parse(resData.content[0].text);
-          const updates = activeIndices.map(entry => {
-            const quote = quotes[entry.key] || {};
-            const lastPrice = quote.last_price ?? null;
-            const prevClose = quote.ohlc?.close;
-
-            // 1D % is derived through several fallbacks: Kite sometimes ships
-            // net_change as a string, sometimes omits it on ETFs, and the most
-            // reliable computation is last_price vs ohlc.close.
-            let pct1D = null;
-            if (prevClose && prevClose > 0) {
-              if (lastPrice != null) {
-                pct1D = ((lastPrice - prevClose) / prevClose) * 100;
-              } else if (quote.net_change != null && !Number.isNaN(+quote.net_change)) {
-                pct1D = (+quote.net_change / prevClose) * 100;
-              }
-            }
-
-            // Surface missing-quote cases once per instrument so the cause is
-            // obvious in the browser console instead of a silent dash.
-            if (entry.category === 'commodity' && lastPrice == null) {
-              console.warn(`[quotes] no last_price for ${entry.key} — got:`, quote);
-            }
-
-            return {
-              id: entry.key,
-              token: quote.instrument_token,
-              price: lastPrice ?? 0,
-              '1D': pct1D,
-            };
-          });
-
+          const updates = activeIndices.map(entry => ({
+            id: entry.key,
+            ...mergeIndexQuote(emptyRowFor(entry), quotes[entry.key] || {}),
+          }));
           setData(prev => prev.map(row => {
-            const u = updates.find(x => x.id === row.id);
-            return u ? { ...row, price: u.price, '1D': u['1D'], token: u.token ?? row.token } : row;
+            const quote = quotes[row.id];
+            return quote ? mergeIndexQuote(row, quote) : row;
           }));
           setLoading(false);
           setLastUpdated(new Date());
@@ -528,7 +512,7 @@ function UsIndices() {
   const fetchRRGData = useCallback(async (signal) => {
     if (!mountedRef.current) return 0;
     try {
-      const res = await fetchWithAbort(`/api/us/rrg?benchmark=${encodeURIComponent(rrgBenchmark)}`, { signal });
+      const res = await fetchWithAbort(`/api/us/rrg?benchmark=${encodeURIComponent(rrgBenchmark)}&securities=${encodeURIComponent(US_RRG_SECURITIES)}`, { signal });
       const data = await res.json();
       if (mountedRef.current && data.sectors && data.sectors.length > 0) {
         setRrg(data);
@@ -606,7 +590,7 @@ function UsIndices() {
     if (Array.isArray(parsed) && parsed.length > 0) {
       const sorted = parsed.sort((a, b) => new Date(a.date) - new Date(b.date));
       const latestPrice = index.price;
-      const historyObj = calculateHistoricalReturns(sorted, latestPrice);
+      const pricingInputs = historyPricingInputs(sorted);
 
       // Compute SMA50
       let aboveSma50 = null;
@@ -654,7 +638,7 @@ function UsIndices() {
 
       setData(prevData => prevData.map(item =>
         item.id === index.id
-          ? { ...item, ...historyObj, sparkline, aboveSma50, rsi14, adx14, history }
+          ? { ...item, sparkline, aboveSma50, rsi14, adx14, history, pricingInputs, ...returnsAtPrice(pricingInputs, item.price || latestPrice) }
           : item
       ));
     } else {
@@ -723,54 +707,8 @@ function UsIndices() {
     }
   };
 
-  // Trading-day lookbacks. Match the Commodities chart's RANGE_DAYS exactly
-  // (1M = 22, 3M = 66, ...) so the table's "+11.19%" and the chart's
-  // end-of-line "+8.3%" badge can't disagree on the same anchor date.
-  // Calendar-day lookbacks drifted by 1–3 trading days vs the chart's
-  // bar-count slice, which over volatile runs caused visible mismatches.
-  const LOOKBACK_TRADING_DAYS = {
-    '1W': 5, '1M': 22, '3M': 66, '6M': 132, '1Y': 252, '2Y': 504, '3Y': 756,
-  };
-
-  const calculateHistoricalReturns = (series, currentPrice) => {
-    // series is already sorted by date ascending. Last element = latest bar.
-    if (!Array.isArray(series) || series.length === 0) {
-      return { '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null, dist52WHigh: 0 };
-    }
-
-    // Anchor price = `series[length - n]`, matching the chart's slice(-n)[0]
-    // convention. Returns null when the series is shorter than n bars so
-    // we don't fabricate a return from clipped history.
-    const anchorPrice = (n) => {
-      const idx = series.length - n;
-      if (idx < 0) return null;
-      return series[idx].close;
-    };
-
-    const calcPct = (oldPrice) => {
-      if (oldPrice == null || oldPrice === 0) return null;
-      return ((currentPrice - oldPrice) / oldPrice) * 100;
-    };
-
-    // 52-week high = max close over the trailing 252 bars (industry standard).
-    const window52W = series.slice(-LOOKBACK_TRADING_DAYS['1Y']);
-    let maxClose52W = currentPrice;
-    for (let i = 0; i < window52W.length; i++) {
-      if (window52W[i].close > maxClose52W) maxClose52W = window52W[i].close;
-    }
-    const dist52WHigh = maxClose52W > 0 ? ((currentPrice - maxClose52W) / maxClose52W) * 100 : 0;
-
-    return {
-      '1W': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['1W'])),
-      '1M': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['1M'])),
-      '3M': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['3M'])),
-      '6M': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['6M'])),
-      '1Y': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['1Y'])),
-      '2Y': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['2Y'])),
-      '3Y': calcPct(anchorPrice(LOOKBACK_TRADING_DAYS['3Y'])),
-      dist52WHigh,
-    };
-  };
+  const calculateHistoricalReturns = (series, currentPrice) =>
+    returnsAtPrice(historyPricingInputs(series), currentPrice);
 
   const requestSort = (key) => {
     let direction = 'desc';
@@ -988,7 +926,7 @@ function UsIndices() {
     const headers = [
       'Name', 'Category', 'Price', '1D%', '1W%', '1M%', '3M%', '6M%', '1Y%', '2Y%', '3Y%',
       'RS-Ratio', 'RS-Momentum', 'Quadrant', 'RSI14', 'ADX14', 'MomentumScore', '1M-RS',
-      '%52W-High', 'Signal'
+      '%52W-High', 'Signal', 'Quote session', 'Quote time', 'Feed'
     ];
     const fmt = (v) => (v === null || v === undefined) ? '' : (typeof v === 'number' ? v.toFixed(2) : String(v));
     const esc = (v) => {
@@ -1001,7 +939,7 @@ function UsIndices() {
         r.name, r.category, r.price,
         r['1D'], r['1W'], r['1M'], r['3M'], r['6M'], r['1Y'], r['2Y'], r['3Y'],
         r.rrgRatio, r.rrgMomentum, r.rrgQuadrant, r.rsi14, r.adx14, r.momentumScore, r.rs1M,
-        r.dist52WHigh, r.marketSignal?.label || ''
+        r.dist52WHigh, r.marketSignal?.label || '', r.quoteSession, r.quoteAsOf, r.quoteFeed
       ].map(esc).join(','));
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
@@ -1100,7 +1038,7 @@ function UsIndices() {
     <div className="dashboard-layout">
       <header className="header" style={{ marginBottom: '1.5rem', borderBottom: 'none' }}>
         <h1>US Indices Performance</h1>
-        <p>Real-time & Historical performance of market sectors</p>
+        <p>Latest available prices, including extended hours</p>
       </header>
 
       {/* Major Indices — headline cards (always visible, click to drill in) */}
@@ -1108,7 +1046,6 @@ function UsIndices() {
         if (activeTab === 'global') return null;
         const MAJORS = ['SPY', 'QQQ', 'DIA', 'IWM', 'VTI'];
         const cards = MAJORS.map(k => data.find(r => r.id === k)).filter(Boolean);
-        if (cards.length === 0) return null;
         return (
           <section style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
             {cards.map(row => {
@@ -1123,7 +1060,7 @@ function UsIndices() {
                   role="link"
                   tabIndex={0}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } }}
-                  title={`View ${row.name}`}
+                  title={`View ${row.name} · ${quoteLabel(row)} · ${quoteFeedLabel(row.quoteFeed)}`}
                   style={{ flex: '1', minWidth: '200px', padding: '1.25rem', background: 'linear-gradient(145deg, rgba(30,41,59,0.8) 0%, rgba(15,23,42,0.9) 100%)', cursor: 'pointer', outline: 'none' }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
@@ -1133,10 +1070,11 @@ function UsIndices() {
                     </div>
                   </div>
                   <span className="value" style={{ fontSize: '1.75rem' }}>{row.price ? `$${row.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</span>
-                  <span className="label" style={{ marginTop: '0.25rem', marginBottom: 0, textTransform: 'none' }}>{row.id}</span>
+                  <span className="label" style={{ marginTop: '0.25rem', marginBottom: 0, textTransform: 'none' }} title={quoteLabel(row)}>{row.id} · {row.quoteSession === 'after-hours' ? 'After-hours' : row.quoteSession === 'pre-market' ? 'Pre-market' : row.quoteSession === 'regular' ? 'Regular' : 'Close'}</span>
                 </div>
               );
             })}
+            <UsVixCard />
           </section>
         );
       })()}
@@ -1182,7 +1120,7 @@ function UsIndices() {
           {lastUpdated && (
             <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}
               title={lastUpdated.toLocaleString()}>
-              ● Live · {lastUpdated.toLocaleTimeString()}
+              ● Updated · {lastUpdated.toLocaleTimeString()} · {quoteFeedLabel(data.find(row => row.quoteFeed)?.quoteFeed)}
             </span>
           )}
           <div style={{ position: 'relative' }}>
@@ -1229,6 +1167,8 @@ function UsIndices() {
           </button>
         </div>
       </div>
+
+      {activeTab !== 'global' && <p style={{ margin: '0 0 0.75rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Prices, returns and momentum include the latest available pre-market / after-hours trades. 1D compares with the preceding regular close. RRG, breadth, RSI and ADX use daily or weekly bars; composites use daily closes.</p>}
 
       {activeTab !== 'global' && <BreadthStrip breadth={breadth} ndxBreadth={ndxBreadth} rows={data} />}
 
@@ -1690,7 +1630,7 @@ function UsIndices() {
                 Index {renderSortIndicator('name')}
               </th>
               <th onClick={() => requestSort('price')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
-                Price {renderSortIndicator('price')}
+                Latest price {renderSortIndicator('price')}
               </th>
               <th onClick={() => requestSort('1D')} style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-secondary)', background: '#0f0f1e' }}>
                 1D {renderSortIndicator('1D')}
@@ -1786,7 +1726,10 @@ function UsIndices() {
                     <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', background: '#ef4444', color: '#fff', padding: '0.1rem 0.3rem', borderRadius: '4px', fontWeight: 'bold', verticalAlign: 'middle', animation: 'pulse-glow 2s infinite' }}>NEW</span>
                   )}
                 </td>
-                <td style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>${row.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                <td title={`${quoteLabel(row)} · ${quoteFeedLabel(row.quoteFeed)}`} style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>
+                  {row.price > 0 ? `$${row.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+                  <div style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', marginTop: '0.15rem' }}>{quoteLabel(row)}</div>
+                </td>
                 <Cell value={row['1D']} />
                 {!hiddenColumns['1W'] && <Cell value={row['1W']} />}
                 <Cell value={row['1M']} />

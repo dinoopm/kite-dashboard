@@ -112,3 +112,13 @@ describe('headline', () => {
     assert.match(h.text, /vs SPY over 10d/);
   });
 });
+
+
+test('US market severity emissions stay unvalidated and are never scored on an Indian calendar', async () => {
+  const { runSignalScorecard } = require('./scorecard');
+  let contextCalls = 0;
+  const result = await runSignalScorecard({ fetchRows: async () => [{ signal: 'us_risk_severity', date: '2026-10-27', symbol: 'SPY', source: 'recorded', ruleVersion: 'v1' }], context: async () => { contextCalls++; throw Error('Must not use NIFTY'); } });
+  assert.equal(contextCalls, 0);
+  const entry = result.signals.find(s => s.signal === 'us_risk_severity');
+  assert.equal(entry.headline.state, 'unscoreable');
+});

@@ -483,6 +483,17 @@ const PRICE_SIGNALS = [
 // the registry on purpose: a signal the dashboard displays but nobody can score
 // should be visibly unscored, not silently absent from the scorecard.
 const BLOCKED_SIGNALS = [
+  ...[
+    ['us_credit_divergence', 'Credit divergence near equity highs', 252, 'SPY within 3% of its trailing 252-session closing high while HY OAS widens at least 25 bps over 21 sessions. A candidate early warning; the base tier stays unchanged.'],
+    ['us_credit_without_equity', 'Credit stress without equity confirmation', 22, 'HY OAS widening over 21 sessions while VIX remains below 20. Watch: may be sector-specific, not proof of systemic stress.'],
+    ['us_ccc_leadership', 'CCC credit widening leads broad HY', 22, 'Positive CCC OAS widening exceeds 2× positive broad HY OAS widening over the same 21 sessions. Optional cross-check, unavailable when the CCC feed is missing.'],
+  ].map(([name, label, minBars, description]) => ({ name, label, minBars, description, market: 'US', source: 'recorded',
+    blockedReason: 'New, unvalidated credit flag. Trigger/clear transitions and exact input vintages are recorded forward; no return-forecast claim is supported yet. Full point-in-time 2007–present HY OAS history and a resolved forward sample are required. The offline riskSeverity/backtest.js study is separate from the request path, and its results must not be borrowed from an Indian per-stock scorecard.' })),
+  {
+    name: 'us_risk_severity', label: 'US market risk severity', market: 'US', source: 'recorded', minBars: 252,
+    description: 'Daily NEUTRAL / CAUTION / STRESS / CRASH MODE (confirmation) combinations of VIX, 21-session SPY versus TLT price returns, SPY drawdowns and high-yield OAS changes. All three crash checks are required. No match is MIXED; missing inputs are INCOMPLETE.',
+    blockedReason: 'These user-defined market-wide severity thresholds have not been validated as return forecasts. Tier transitions are recorded forward in signal_emissions with versioned input snapshots and availability timestamps. The current symbol-versus-index scorer cannot measure a market-wide SPY rule against itself: it needs a separate US absolute-return/drawdown study using data available at each decision time, including lagged credit releases. An offline study now exists in riskSeverity/backtest.js; full historical point-in-time credit coverage and adequate resolved events are still required. Treat this as descriptive risk context, not a buy/sell signal.',
+  },
   {
     name: 'analyst_target_upside',
     label: 'Analyst target upside',

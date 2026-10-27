@@ -17,6 +17,7 @@ import Crypto from './pages/Crypto'
 import Screener from './pages/Screener'
 import UsIndices from './pages/us/UsIndices'
 import UsMacro from './pages/us/UsMacro'
+import UsVix from './pages/us/UsVix'
 import UsSectorDetail from './pages/us/UsSectorDetail'
 import UsInstrument from './pages/us/UsInstrument'
 import UsScreener from './pages/us/UsScreener'
@@ -313,6 +314,7 @@ function App() {
           <Route path="/screener" element={<Screener />} />
           <Route path="/us" element={<UsIndices />} />
           <Route path="/us/macro" element={<UsMacro />} />
+          <Route path="/us/vix" element={<UsVix />} />
           <Route path="/us/screener" element={<UsScreener />} />
           <Route path="/us/stock-picks" element={<UsStockPicks />} />
           <Route path="/us/basket" element={<UsBasket />} />

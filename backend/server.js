@@ -13,6 +13,7 @@ const yahooFinance = new YahooFinance();
 const cheerio = require('cheerio');
 const axios = require('axios');
 const { createPortfolioRiskService } = require('./portfolioRisk');
+const { loadMarketCapClassifications } = require('./marketCapClassification');
 const { buildAlertsFreshness } = require('./alertsFreshness');
 const { prepareAlertCandles } = require('./alertCandles');
 const { holdingMetrics, buildHoldingSummary } = require('./holdingMetrics');
@@ -1067,6 +1068,7 @@ const getPortfolioRisk = createPortfolioRiskService({
     };
   },
   resolveSector: resolvePortfolioRiskSector,
+  resolveMarketCaps: loadMarketCapClassifications,
   timeoutMs: 8000,
   concurrency: 3,
 });
@@ -5752,24 +5754,18 @@ app.get('/api/institutional/:symbol', async (req, res) => {
 // ranked by a deterministic attention score — see backend/picks/xray.js.
 // Reuses the same cached functions behind the individual endpoints.
 const { portfolioXray } = require('./picks/xray');
-let xrayCache = { data: null, ts: 0 };
-const XRAY_TTL = 10 * 60 * 1000;
-app.get('/api/portfolio/xray', async (req, res) => {
-  if (!mcpClient) return res.status(500).json({ error: 'MCP not connected' });
-  if (xrayCache.data && Date.now() - xrayCache.ts < XRAY_TTL) {
-    return res.json({ ...xrayCache.data, cached: true });
-  }
-  try {
+const { createPortfolioXrayService } = require('./portfolioXrayService');
+const getPortfolioXray = createPortfolioXrayService({
+  isConnected: () => Boolean(mcpClient),
+  loadHoldings: async () => {
     const holdingsResult = await fetchWithCache('get_holdings', 'holdings', {});
-    let holdings = [];
-    if (holdingsResult?.content?.[0]?.text) {
-      const parsed = JSON.parse(holdingsResult.content[0].text);
-      holdings = parsed.data || parsed;
-    }
-    if (!Array.isArray(holdings) || holdings.length === 0) {
-      return res.json({ holdings: [], summary: { total: 0, flagged: 0, clean: 0, worstThree: [] } });
-    }
-
+    if (holdingsResult?.isError) throw new Error('Kite holdings unavailable');
+    const text = holdingsResult?.content?.[0]?.text;
+    if (!text) throw new Error('Kite holdings response is missing');
+    const parsed = JSON.parse(text);
+    return parsed?.data ?? parsed;
+  },
+  analyze: async (holdings) => {
     const redFlagsFor = async (sym) => {
       const hit = redFlagCache[sym];
       if (hit && Date.now() - hit.ts < RED_FLAG_TTL) return hit.data;
@@ -5796,9 +5792,12 @@ app.get('/api/portfolio/xray', async (req, res) => {
       return alert?.tradePlan?.action || null;
     };
 
-    const data = await portfolioXray(holdings, { redFlagsFor, institutionalFor, signalFor });
-    xrayCache = { data, ts: Date.now() };
-    res.json(data);
+    return portfolioXray(holdings, { redFlagsFor, institutionalFor, signalFor });
+  },
+});
+app.get('/api/portfolio/xray', async (req, res) => {
+  try {
+    res.json(await getPortfolioXray());
   } catch (err) {
     console.error('[xray]', err.message);
     res.status(500).json({ error: err.message });
@@ -5992,7 +5991,7 @@ app.get('/api/risk-regime', async (req, res) => {
 // ─── Morning briefing ────────────────────────────────────────────────────────
 // "What changed since yesterday" — market flows + VIX, per-holding analytic
 // deltas (needs holding_state_snapshots), quant-picks churn. See briefing.js.
-const { composeBriefing } = require('./briefing');
+const { createBriefingService } = require('./briefing');
 
 // ─── F&O expiry: the calendar fact, and whether it means anything ────────────
 // The date is deterministic. The folklore attached to it ("expiry week is
@@ -6021,27 +6020,19 @@ app.get('/api/expiry-study', async (req, res) => {
   }
 });
 
-let briefingCache = { data: null, ts: 0 };
-const BRIEFING_TTL = 30 * 60 * 1000;
+const getBriefing = createBriefingService({
+  getQuotes: async (instruments) => {
+    const result = await callWithTimeout({ name: 'get_quotes', arguments: { instruments } }, 15000);
+    const txt = result?.content?.[0]?.text;
+    return txt ? JSON.parse(txt) : {};
+  },
+  getXray: getPortfolioXray,
+  getEvents: getAllEvents,
+  getExpiryStudy: getExpiryStudyCached,
+});
 app.get('/api/briefing', async (req, res) => {
-  if (briefingCache.data && Date.now() - briefingCache.ts < BRIEFING_TTL && briefingCache.data.date === new Date().toISOString().slice(0, 10)) {
-    return res.json({ ...briefingCache.data, cached: true });
-  }
   try {
-    const getQuotes = async (instruments) => {
-      const result = await callWithTimeout({ name: 'get_quotes', arguments: { instruments } }, 15000);
-      const txt = result?.content?.[0]?.text;
-      return txt ? JSON.parse(txt) : {};
-    };
-    // Reuse the x-ray (and its 10-min cache) as the holdings-state source.
-    const getXray = async () => {
-      if (xrayCache.data && Date.now() - xrayCache.ts < XRAY_TTL) return xrayCache.data;
-      const r = await fetch(`http://localhost:${PORT}/api/portfolio/xray`);
-      return r.ok ? r.json() : null;
-    };
-    const data = await composeBriefing({ getQuotes, getXray, getEvents: getAllEvents, getExpiryStudy: getExpiryStudyCached });
-    briefingCache = { data, ts: Date.now() };
-    res.json(data);
+    res.json(await getBriefing());
   } catch (err) {
     console.error('[briefing]', err.message);
     res.status(500).json({ error: err.message });

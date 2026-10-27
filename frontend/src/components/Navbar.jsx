@@ -22,6 +22,7 @@ const MARKET_DATA_LINKS = [
 // Sublinks under the "US" dropdown (Alpaca-powered US market data).
 const US_LINKS = [
   { to: '/us',          label: 'Indices',  hint: 'US indices & sectors performance, RRG, and drilldown.' },
+  { to: '/us/vix',      label: 'US VIX',   hint: 'Cboe VIX index, daily history and latest available quote.' },
   { to: '/us/macro',    label: 'Macro',    hint: 'US 10Y Treasury yield + risk-on/off money-flow read.' },
   { to: '/us/screener', label: 'Screener', hint: 'Screen the S&P 500, Nasdaq 100, a sector, or your own basket.' },
   { to: '/us/stock-picks', label: 'Quant Picks', hint: 'Five-factor ranking of S&P 500 + Nasdaq 100 with a recorded track record vs SPY.' },
@@ -105,7 +106,7 @@ function Navbar({ onDisconnect }) {
               <div style={{ background: 'var(--bg-card, #0f172a)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.4rem 0', boxShadow: '0 8px 32px rgba(0,0,0,0.5)' }}>
                 {US_LINKS.map(l => {
                   const active = l.to === '/us'
-                    ? (onUsPage && !['/us/macro', '/us/screener', '/us/stock-picks', '/us/basket', '/us/virtual'].some(p => location.pathname.startsWith(p)))
+                    ? (onUsPage && !['/us/vix', '/us/macro', '/us/screener', '/us/stock-picks', '/us/basket', '/us/virtual'].some(p => location.pathname.startsWith(p)))
                     : location.pathname.startsWith(l.to);
                   return (
                     <Link

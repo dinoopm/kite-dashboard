@@ -197,6 +197,52 @@ async function record52wHighs({ fromDate = null } = {}) {
   return { saved: await upsertEmissions(rows) };
 }
 
+// Market-wide severity is retained separately from Indian per-stock detectors.
+// Availability is the recording time, never backdated to a lagged OAS date.
+async function recordUsRiskSeverity(snapshot, { db = supabase, now = () => new Date() } = {}) {
+  if (snapshot.state === 'INCOMPLETE') return { skipped: 'incomplete inputs' };
+  const name = `us_risk_severity@${snapshot.ruleVersion}`;
+  const { data, error } = await db.from('signal_emissions').select('snap_date,meta')
+    .eq('signal', name).eq('symbol', 'SPY').order('snap_date', { ascending: false }).limit(1);
+  if (error) throw new Error('Severity recording lookup failed');
+  const previous = data?.[0];
+  if (previous?.meta?.asOf > snapshot.asOf) return { skipped: 'older input date' };
+  if (previous?.meta?.tier === snapshot.state) return { skipped: 'same tier; no transition' };
+  const captured = now().toISOString();
+  const row = versionEmission({ signal: 'us_risk_severity', symbol: 'SPY', snap_date: captured.slice(0, 10), source: 'recorded',
+    meta: { market: 'US', tier: snapshot.state, priorTier: previous?.meta?.tier || null, asOf: snapshot.asOf, capturedAt: captured, costModel: DEFAULT_COST_MODEL } },
+    snapshot.ruleVersion, { metrics: snapshot.metrics, inputs: snapshot.inputs, rules: snapshot.rules, flags: snapshot.flags || [], vintages: snapshot.vintages || [], availableAt: captured });
+  const written = await db.from('signal_emissions').upsert([row], { onConflict: 'signal,snap_date,symbol', ignoreDuplicates: true }).select('signal');
+  if (written.error) throw new Error('Severity transition could not be recorded');
+  return { saved: written.data?.length || 0, capturedAt: captured, dailySnapshot: true };
+}
+
+// These flags do not alter the base tier. Store trigger and clear transitions
+// separately, retaining the canonical registry identity in meta.signal.
+async function recordUsRiskFlags(snapshot, { db = supabase, now = () => new Date() } = {}) {
+  if (snapshot.state === 'INCOMPLETE') return { saved: 0, skipped: 'incomplete inputs' };
+  let saved = 0;
+  for (const flag of snapshot.flags || []) {
+    if (typeof flag.triggered !== 'boolean') continue;
+    const { data, error } = await db.from('signal_emissions').select('meta')
+      .eq('meta->>signal', flag.signal).eq('meta->>ruleVersion', snapshot.ruleVersion)
+      .eq('symbol', 'SPY').order('created_at', { ascending: false }).limit(1);
+    if (error) throw Error('Risk flag recording lookup failed');
+    const previous = data?.[0]?.meta;
+    if (previous?.asOf > snapshot.asOf) continue;
+    if (previous?.triggered === flag.triggered || (!previous && !flag.triggered)) continue;
+    const captured = now().toISOString();
+    const row = versionEmission({ signal: flag.signal, symbol: 'SPY', snap_date: captured.slice(0, 10), source: 'recorded',
+      meta: { market: 'US', triggered: flag.triggered, event: flag.triggered ? 'triggered' : 'cleared', asOf: snapshot.asOf, capturedAt: captured } },
+      snapshot.ruleVersion, { metrics: snapshot.metrics, checks: flag.checks, vintages: snapshot.vintages, rules: snapshot.rules, availableAt: captured });
+    row.signal += flag.triggered ? '/triggered' : '/cleared';
+    const result = await db.from('signal_emissions').upsert([row], { onConflict: 'signal,snap_date,symbol', ignoreDuplicates: true }).select('signal');
+    if (result.error) throw Error('Risk flag transition could not be saved');
+    saved += result.data?.length || 0;
+  }
+  return { saved };
+}
+
 /** Everything, in one idempotent pass. Safe to run daily or over all history. */
 async function recordAll({ fromDate = null } = {}) {
   const price = await recordPriceSignals({ fromDate });
@@ -205,4 +251,4 @@ async function recordAll({ fromDate = null } = {}) {
   return { price, picks, highs, fromDate, recordedAt: new Date().toISOString() };
 }
 
-module.exports = { recordAll, recordPriceSignals, recordPickSignals, record52wHighs, loadCandles, PRICE_RULE_VERSION };
+module.exports = { recordUsRiskFlags, recordUsRiskSeverity, recordAll, recordPriceSignals, recordPickSignals, record52wHighs, loadCandles, PRICE_RULE_VERSION };

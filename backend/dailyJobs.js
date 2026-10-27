@@ -279,6 +279,11 @@ async function runDailyJobs({ force = false, privateOnly = false } = {}) {
 
   if (privateOnly) return out;
 
+  // Independent of page views; transitions are versioned and insert-only.
+  try { out.usRiskSeverity = (await require('./usRiskSeverity').getAndRecordUsRiskSeverity()).recording; }
+  catch (err) { out.usRiskSeverity = { error: err.message }; }
+
+
   // Macro: ingest the official series on EVERY tick, then record today's regime
   // BEFORE the outcome exists — the same standard as the picks snapshot, and
   // the only reason the panel will ever be more than a data display.

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 
 // Risk-On / Risk-Off gauge (/api/risk-regime): are stocks or bonds winning
 // the money right now? Three deterministic signals — 10Y yield direction,
@@ -14,7 +14,6 @@ const dot = (score) => (score > 0 ? '#34d399' : score < 0 ? '#f87171' : 'var(--t
 
 export default function RiskRegimePanel() {
   const [d, setD] = useState(null)
-  const navigate = useNavigate()
 
   useEffect(() => {
     let on = true
@@ -55,7 +54,7 @@ export default function RiskRegimePanel() {
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.7rem', paddingTop: '0.6rem', borderTop: '1px solid var(--border)' }}>
         <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>🇮🇳 {d.indiaNote}</span>
-        <span onClick={() => navigate('/market-data/events')} style={{ marginLeft: 'auto', fontSize: '0.72rem', color: 'var(--accent)', fontWeight: 600, cursor: 'pointer' }}>macro calendar →</span>
+        <Link to="/us/macro" style={{ marginLeft: 'auto', fontSize: '0.72rem', color: 'var(--accent)', fontWeight: 600, textDecoration: 'none' }}>US Macro →</Link>
       </div>
     </div>
   )

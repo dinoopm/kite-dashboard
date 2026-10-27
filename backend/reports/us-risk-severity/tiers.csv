@@ -1,0 +1,7 @@
+tier,days,baseRatePct,medianLeadSessions,medianLeadCalendarDays,leadEvents,resolvedReadings,censoredReadings,falsePositives,falsePositiveRatePct
+"NEUTRAL",,,,,,,,,
+"CAUTION",,,,,,,,,
+"STRESS",,,,,,,,,
+"CRASH MODE",,,,,,,,,
+"MIXED",,,,,,,,,
+"INCOMPLETE",,,,,,,,,

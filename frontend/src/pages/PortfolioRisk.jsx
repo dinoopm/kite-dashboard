@@ -9,8 +9,23 @@ import {
   normalizeOptionalLimit,
 } from '../lib/portfolioRisk'
 import './PortfolioRisk.css'
+import MarketCapRisk from '../components/MarketCapRisk'
+import { withMarketCapRisk } from '../lib/marketCapRisk'
+import { loadMarketCapReference } from '../lib/marketCapReference'
+import { sortRiskPositions } from '../lib/sortRiskPositions'
+import { calculatePositionTrim } from '../lib/positionTrim'
 
 const PREFERENCES_KEY = 'kite-portfolio-risk-preferences:v1'
+const POSITION_COLUMNS = [
+  { key: 'symbol', label: 'Holding' },
+  { key: 'sector', label: 'Sector' },
+  { key: 'marketCapCategory', label: 'Market cap' },
+  { key: 'averageMarketCapCr', label: 'Company size (₹ Cr)', numeric: true },
+  { key: 'quantity', label: 'Quantity', numeric: true },
+  { key: 'currentValue', label: 'Current value', numeric: true },
+  { key: 'weightPct', label: 'Allocation', numeric: true },
+  { key: 'status', label: 'Status', numeric: true },
+]
 
 function readPreferences() {
   try {
@@ -18,11 +33,15 @@ function readPreferences() {
     return {
       stockLimit: parsed.stockLimit == null ? '' : String(parsed.stockLimit),
       sectorLimit: parsed.sectorLimit == null ? '' : String(parsed.sectorLimit),
+      smallCapLimit: parsed.smallCapLimit == null ? '' : String(parsed.smallCapLimit),
+      trimProceeds: parsed.trimProceeds === 'reinvest' ? 'reinvest' : 'cash',
     }
   } catch {
-    return { stockLimit: '', sectorLimit: '' }
+    return { stockLimit: '', sectorLimit: '', smallCapLimit: '', trimProceeds: 'cash' }
   }
 }
+
+const displayCategory = value => !value || value === 'Unknown' ? 'Others' : value
 
 function formatCurrency(value) {
   return `₹${Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
@@ -84,6 +103,7 @@ function PortfolioRisk() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
+  const [sort, setSort] = useState({ key: 'weightPct', direction: 'desc' })
   const [preferences, setPreferences] = useState(readPreferences)
   const [scenarioTarget, setScenarioTarget] = useState('portfolio')
   const [declinePct, setDeclinePct] = useState('10')
@@ -102,8 +122,11 @@ function PortfolioRisk() {
         signal: controller.signal,
         timeoutMs: 20_000,
       })
-      const payload = await response.json().catch(() => ({}))
+      let payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || 'Failed to load portfolio risk data')
+      if (payload.marketCapitalization?.status !== 'available' && payload.positions?.length) {
+        try { payload = withMarketCapRisk(payload, await loadMarketCapReference()) } catch { /* Keep stock/sector analysis usable if public reference is unavailable. */ }
+      }
       if (!controller.signal.aborted) setData(payload)
     } catch (err) {
       if (err.name === 'AbortError') return
@@ -128,8 +151,9 @@ function PortfolioRisk() {
   useEffect(() => {
     const stockLimit = normalizeOptionalLimit(preferences.stockLimit)
     const sectorLimit = normalizeOptionalLimit(preferences.sectorLimit)
+    const smallCapLimit = normalizeOptionalLimit(preferences.smallCapLimit)
     try {
-      userPreferences.setItem(PREFERENCES_KEY, JSON.stringify({ stockLimit, sectorLimit }))
+      userPreferences.setItem(PREFERENCES_KEY, JSON.stringify({ stockLimit, sectorLimit, smallCapLimit, trimProceeds: preferences.trimProceeds }))
     } catch {
       // Preferences remain usable for this session when storage is unavailable.
     }
@@ -137,7 +161,9 @@ function PortfolioRisk() {
 
   useEffect(() => {
     if (!data || scenarioTarget === 'portfolio') return
-    const exists = scenarioTarget.startsWith('sector:')
+    const exists = scenarioTarget.startsWith('market-cap:')
+      ? data.marketCapitalization?.groups?.some(item => `market-cap:${item.category}` === scenarioTarget)
+      : scenarioTarget.startsWith('sector:')
       ? data.sectors?.some(item => `sector:${item.sector}` === scenarioTarget)
       : data.positions?.some(item => `holding:${item.key}` === scenarioTarget)
     if (!exists) setScenarioTarget('portfolio')
@@ -147,11 +173,11 @@ function PortfolioRisk() {
   const sectorLimit = normalizeOptionalLimit(preferences.sectorLimit)
   const filteredPositions = useMemo(() => {
     const query = search.trim().toLowerCase()
-    if (!query) return data?.positions || []
-    return (data?.positions || []).filter(item =>
-      item.symbol.toLowerCase().includes(query) || item.sector.toLowerCase().includes(query)
-    )
-  }, [data, search])
+    const positions = query ? (data?.positions || []).filter(item =>
+      item.symbol.toLowerCase().includes(query) || displayCategory(item.sector).toLowerCase().includes(query) || displayCategory(item.marketCapCategory).toLowerCase().includes(query)
+    ) : data?.positions || []
+    return sortRiskPositions(positions, sort.key, sort.direction, stockLimit)
+  }, [data, search, sort, stockLimit])
 
   const scenario = useMemo(() => calculateRiskScenario({
     coveredValue: data?.summary?.coveredValue,
@@ -193,7 +219,7 @@ function PortfolioRisk() {
       <div className="risk-heading">
         <div>
           <h1>Portfolio Risk</h1>
-          <p>Concentration and hypothetical downside across your equity holdings.</p>
+          <p>Stock, sector and company-size concentration across your equity holdings.</p>
         </div>
         {data?.holdingsFetchedAt && (
           <span>Holdings fetched at {new Date(data.holdingsFetchedAt).toLocaleString('en-IN')}</span>
@@ -220,7 +246,7 @@ function PortfolioRisk() {
             <div className="risk-banner" role="status">
               <strong>Partial coverage.</strong>{' '}
               {data.coverage.unpricedHoldingCount > 0 && `${data.coverage.unpricedHoldingCount} holding(s) have no valid price and are excluded from covered value. `}
-              Sector classification covers {formatPct(data.coverage.classificationCoveragePct)} of covered value; the remainder is shown as Unknown.
+              Sector classification covers {formatPct(data.coverage.classificationCoveragePct)} of covered value; the remainder is shown as Others.
             </div>
           )}
 
@@ -231,6 +257,8 @@ function PortfolioRisk() {
             <SummaryCard label="Largest classified sector" value={largestSector?.sector || '—'} detail={largestSector ? `${formatPct(largestSector.weightPct)} · ${formatCurrency(largestSector.currentValue)}` : 'No classified exposure'} />
           </section>
 
+          <MarketCapRisk data={data} smallCapLimit={normalizeOptionalLimit(preferences.smallCapLimit)} onScenario={category => { setScenarioTarget(`market-cap:${category}`); document.getElementById('scenario-target')?.focus() }} />
+
           <section className="glass-panel risk-limits-panel">
             <div>
               <h2>Concentration limits</h2>
@@ -239,6 +267,8 @@ function PortfolioRisk() {
             <div className="risk-limit-fields">
               <LimitInput id="stock-limit" label="Maximum stock allocation" value={preferences.stockLimit} onChange={value => setPreferences(current => ({ ...current, stockLimit: value }))} />
               <LimitInput id="sector-limit" label="Maximum sector allocation" value={preferences.sectorLimit} onChange={value => setPreferences(current => ({ ...current, sectorLimit: value }))} />
+              <LimitInput id="small-cap-limit" label="Maximum small-cap allocation" value={preferences.smallCapLimit} onChange={value => setPreferences(current => ({ ...current, smallCapLimit: value }))} />
+              <label className="risk-trim-mode" htmlFor="risk-trim-proceeds"><span>Sale proceeds</span><select id="risk-trim-proceeds" value={preferences.trimProceeds || 'cash'} onChange={event => setPreferences(current => ({ ...current, trimProceeds: event.target.value }))}><option value="cash">Keep as cash</option><option value="reinvest">Reinvest in other equities</option></select></label>
             </div>
           </section>
 
@@ -254,7 +284,7 @@ function PortfolioRisk() {
                   return (
                     <div className="sector-exposure-row" key={sector.sector}>
                       <div className="sector-exposure-label">
-                        <strong>{sector.sector}</strong>
+                        <strong>{displayCategory(sector.sector)}</strong>
                         <span>{sector.holdingCount} holding{sector.holdingCount === 1 ? '' : 's'} · {formatCurrency(sector.currentValue)}</span>
                       </div>
                       <div className="sector-exposure-value">
@@ -278,8 +308,11 @@ function PortfolioRisk() {
               <label htmlFor="scenario-target">Apply decline to</label>
               <select id="scenario-target" value={scenarioTarget} onChange={event => setScenarioTarget(event.target.value)}>
                 <option value="portfolio">Whole portfolio</option>
+                <optgroup label="Market-cap categories">
+                  {(data.marketCapitalization?.groups || []).filter(item => item.currentValue > 0).map(item => <option key={item.category} value={`market-cap:${item.category}`}>{displayCategory(item.category)}</option>)}
+                </optgroup>
                 <optgroup label="Sectors">
-                  {data.sectors.map(item => <option key={item.sector} value={`sector:${item.sector}`}>{item.sector}</option>)}
+                  {data.sectors.map(item => <option key={item.sector} value={`sector:${item.sector}`}>{displayCategory(item.sector)}</option>)}
                 </optgroup>
                 <optgroup label="Holdings">
                   {data.positions.map(item => <option key={item.key} value={`holding:${item.key}`}>{item.symbol}</option>)}
@@ -301,27 +334,34 @@ function PortfolioRisk() {
 
           <section className="glass-panel risk-holdings-panel">
             <div className="risk-section-heading risk-holdings-heading">
-              <div><h2>Position concentration</h2><p>Sorted by allocation across the complete covered portfolio.</p></div>
+              <div><h2>Position concentration</h2><p>Click a column heading to sort. Allocations always use the complete covered portfolio.</p></div>
               <label htmlFor="risk-search" className="visually-labeled-input">
                 <span>Filter holdings</span>
-                <input id="risk-search" type="search" placeholder="Symbol or sector" value={search} onChange={event => setSearch(event.target.value)} />
+                <input id="risk-search" type="search" placeholder="Symbol, sector or market cap" value={search} onChange={event => setSearch(event.target.value)} />
               </label>
             </div>
+            <p className="risk-trim-method">{preferences.trimProceeds !== 'reinvest' ? 'Sell estimates keep proceeds as cash, so the covered equity total also falls.' : 'Sell estimates assume all proceeds are reinvested in other equities, keeping the covered equity total unchanged.'} Each row is a separate estimate; refresh after any sale. Quantities round up to whole shares where possible, using each holding’s valuation price. Confirm live price and sellable quantity before placing an order.</p>
             <div className="risk-table-wrap">
               <table className="interactive-table risk-table">
-                <thead><tr><th>Holding</th><th>Sector</th><th>Quantity</th><th>Current value</th><th>Allocation</th><th>Status</th></tr></thead>
+                <thead><tr>{POSITION_COLUMNS.map(column => {
+                  const active = sort.key === column.key
+                  return <th key={column.key} scope="col" aria-sort={active ? sort.direction === 'asc' ? 'ascending' : 'descending' : 'none'}><button type="button" className={`risk-sort-button ${active ? 'active' : ''}`} onClick={() => setSort(current => ({ key: column.key, direction: current.key === column.key ? current.direction === 'asc' ? 'desc' : 'asc' : column.numeric ? 'desc' : 'asc' }))}>{column.label} <span aria-hidden="true">{active ? sort.direction === 'asc' ? '↑' : '↓' : '↕'}</span></button></th>
+                })}</tr></thead>
                 <tbody>
                   {filteredPositions.map(position => {
                     const breached = exceedsLimit(position.weightPct, stockLimit)
+                    const trim = calculatePositionTrim({ currentValue: position.currentValue, coveredValue: data.summary.coveredValue, quantity: position.quantity, limit: stockLimit, proceeds: preferences.trimProceeds })
                     return (
                       <tr key={position.key}>
                         <td>{position.instrumentToken ? <Link to={`/instrument/${position.instrumentToken}?symbol=${encodeURIComponent(position.symbol)}`}>{position.symbol}</Link> : <strong>{position.symbol}</strong>}<small>{position.exchange}</small></td>
-                        <td>{position.sector}</td>
+                        <td>{displayCategory(position.sector)}</td>
+                        <td><strong>{displayCategory(position.marketCapCategory)}</strong>{position.marketCapRank && <small className="risk-cap-position-note">AMFI rank {position.marketCapRank}</small>}</td>
+                        <td title="Six-month average company market capitalization from the AMFI classification list">{Number.isFinite(position.averageMarketCapCr) ? position.averageMarketCapCr.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '—'}</td>
                         <td>{position.quantity.toLocaleString('en-IN', { maximumFractionDigits: 4 })}</td>
                         <td>{formatCurrency(position.currentValue)}</td>
                         <td><strong>{formatPct(position.weightPct)}</strong></td>
                         <td>{breached
-                          ? <span className="risk-badge">Above stock limit</span>
+                          ? <div className="risk-trim-result"><span className="risk-badge">Above stock limit</span>{trim ? <><strong>Sell ≈ {trim.quantityToSell.toLocaleString('en-IN', { maximumFractionDigits: 4 })} shares</strong><span>Estimated value {formatCurrency(trim.estimatedProceeds)}</span><small>Allocation after sale: {formatPct(trim.remainingWeightPct)} · target {formatPct(trim.targetPct)}</small></> : <small>Sale estimate unavailable</small>}</div>
                           : <span className="risk-within-limit">{stockLimit === null ? 'No limit set' : 'Within limit'}</span>}</td>
                       </tr>
                     )

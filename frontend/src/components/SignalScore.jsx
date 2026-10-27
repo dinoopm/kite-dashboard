@@ -48,7 +48,14 @@ const NO_RECORD = {
  *   picks scorecard, which carries us_picks_top25/top10 and nothing else. A US
  *   signal absent from it still renders the explicitly-empty badge.
  */
-export default function SignalScore({ signal, label, source, style, market = 'IN' }) {
+export default function SignalScore(props) {
+  // A source-specific blocked registry entry may be supplied directly by the
+  // feature endpoint. It must not borrow another market's track record.
+  if (props.entry) return <Badge tone={TONE[props.entry.headline.state] || TONE['no-data']} label={props.label} headline={props.entry.headline} detail={props.entry.headline.detail} style={props.style} />
+  return <FetchedSignalScore {...props} />
+}
+
+function FetchedSignalScore({ signal, label, source, style, market = 'IN' }) {
   const { entry, error, loading } = useSignalScore(signal, { source, market })
 
   // Off the Indian market, only a signal the US scorecard actually carries has

@@ -47,3 +47,6 @@ backend/data/india-macro/
 
 # Per-browser Kite MCP credentials; never copy or commit these.
 backend/data/kite-sessions/
+
+# Local public-market validation artifacts and source archives (never credentials).
+backend/data/us-risk-severity/
