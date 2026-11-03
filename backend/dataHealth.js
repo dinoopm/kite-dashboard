@@ -63,6 +63,10 @@ const ACKNOWLEDGED_GAPS = {
     dates: ['2026-07-16', '2026-07-17'],
     reason: 'Daily recording fired lazily off a page view and set its done-flag before the write landed (it runs on a timer in dailyJobs.js now). A snapshot reconstructed after the fact is not the same evidence, so these two cannot be recovered.',
   },
+  volume_gainers: {
+    dates: ['2026-11-02'],
+    reason: 'NSE switched the live-analysis payload from numbers to display strings ("84.53 L", "10.06 Cr", "51.83 K") between the 10-30 and 11-02 runs; Postgres rejected them at the upsert and the scraper wrote nothing. Fixed in scraper/nseNumber.js. The endpoint only ever serves the latest session, so 11-02 cannot be re-scraped.',
+  },
 };
 
 /** Split found gaps into ones worth an alarm and ones already accounted for. */

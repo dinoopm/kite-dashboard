@@ -3,6 +3,9 @@ const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
+const { withRetry } = require('./withRetry');
+const { parseNseNumber, toShares, toLakhs } = require('./nseNumber');
+
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 const INDEX_KEYS = ['NIFTY', 'BANKNIFTY', 'NIFTYNEXT50', 'SecGtr20', 'SecLwr20', 'FOSec', 'allSec'];
@@ -34,15 +37,20 @@ function extractRecords(json, category) {
                 series: d.series || null,
                 index_name: indexName,
                 category,
-                open_price: d.open_price ?? null,
-                high_price: d.high_price ?? null,
-                low_price: d.low_price ?? null,
-                ltp: d.ltp ?? null,
-                prev_price: d.prev_price ?? null,
-                net_change: d.net_price ?? null,
-                pct_change: d.perChange ?? null,
-                trade_quantity: d.trade_quantity ?? null,
-                turnover: d.turnover ?? null
+                // Since 2026-11-02 NSE sends quantity and turnover as display
+                // strings ("109.95 L", "2,759.40 Cr"); see nseNumber.js for the
+                // units each column holds. The rest still arrive as numbers and
+                // pass straight through, but are read the same way so the next
+                // format change fails naming the value, not deep in Postgres.
+                open_price: parseNseNumber(d.open_price),
+                high_price: parseNseNumber(d.high_price),
+                low_price: parseNseNumber(d.low_price),
+                ltp: parseNseNumber(d.ltp),
+                prev_price: parseNseNumber(d.prev_price),
+                net_change: parseNseNumber(d.net_price),
+                pct_change: parseNseNumber(d.perChange),
+                trade_quantity: toShares(d.trade_quantity),
+                turnover: toLakhs(d.turnover)
             });
         }
     }
@@ -50,47 +58,52 @@ function extractRecords(json, category) {
     return { records, tradeDate };
 }
 
-async function run() {
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+
+/**
+ * One attempt: a fresh browser, the page, and the two intercepted payloads.
+ *
+ * domcontentloaded plus a poll on the XHR rather than networkidle2 — the
+ * September fix to volume_gainers, applied here too: NSE's pages long-poll, so
+ * "network idle" is a coin flip on a slow runner, and the payloads are the only
+ * thing worth waiting for. Throws when neither arrives, so the retry wrapper can
+ * try again with a clean session instead of this step exiting green over an
+ * empty day.
+ */
+async function captureOnce(attempt) {
     let browser;
     try {
-        console.log("[TopGL] Launching headless browser...");
-        browser = await puppeteer.launch({
-            headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-
+        console.log(`[TopGL] Attempt ${attempt}: launching headless browser...`);
+        browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox', '--disable-setuid-sandbox'] });
         const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+        await page.setUserAgent(UA);
 
         let gainersJson = null;
         let losersJson = null;
-
         page.on('response', async (response) => {
             const url = response.url();
             if (url.includes('/api/live-analysis-variations') && response.status() === 200) {
                 try {
                     const json = await response.json();
-                    if (url.includes('index=gainers')) {
-                        gainersJson = json;
-                        console.log('[TopGL] Intercepted gainers data');
-                    } else if (url.includes('index=loosers')) {
-                        losersJson = json;
-                        console.log('[TopGL] Intercepted losers data');
-                    }
+                    if (url.includes('index=gainers')) { gainersJson = json; console.log('[TopGL] Intercepted gainers data'); }
+                    else if (url.includes('index=loosers')) { losersJson = json; console.log('[TopGL] Intercepted losers data'); }
                 } catch (e) {
                     console.error('[TopGL] Failed to parse response:', e.message);
                 }
             }
         });
 
-        console.log("[TopGL] Loading top gainers/losers page...");
-        await page.goto('https://www.nseindia.com/market-data/top-gainers-losers', {
-            waitUntil: 'networkidle2',
-            timeout: 60000
+        console.log('[TopGL] Loading top gainers/losers page...');
+        const resp = await page.goto('https://www.nseindia.com/market-data/top-gainers-losers', {
+            waitUntil: 'domcontentloaded',
+            timeout: 60000,
         });
-        await new Promise(r => setTimeout(r, 3000));
+        if (resp && resp.status() >= 400) throw new Error(`page answered HTTP ${resp.status()}`);
 
-        // If losers weren't loaded by default tab, click to trigger
+        const until = async (pred, ms) => { const end = Date.now() + ms; while (!pred() && Date.now() < end) await new Promise(r => setTimeout(r, 500)); };
+        await until(() => gainersJson, 30000);
+
+        // The losers tab is not always loaded by default; click it if needed.
         if (!losersJson) {
             console.log('[TopGL] Clicking Losers tab...');
             await page.evaluate(() => {
@@ -98,16 +111,19 @@ async function run() {
                 const tab = els.find(el => el.textContent.trim().toLowerCase().includes('loser'));
                 if (tab) tab.click();
             });
-            await new Promise(r => setTimeout(r, 3000));
+            await until(() => losersJson, 15000);
         }
 
-        await browser.close();
-        browser = null;
+        if (!gainersJson && !losersJson) throw new Error('page loaded but neither the gainers nor the losers payload arrived');
+        return { gainersJson, losersJson };
+    } finally {
+        if (browser) await browser.close().catch(() => {});
+    }
+}
 
-        if (!gainersJson && !losersJson) {
-            console.log('[TopGL] No data intercepted.');
-            return;
-        }
+async function run() {
+    try {
+        const { gainersJson, losersJson } = await withRetry('[TopGL]', 3, captureOnce);
 
         const { records: gainerRecords, tradeDate: gDate } = gainersJson ? extractRecords(gainersJson, 'GAINER') : { records: [], tradeDate: null };
         const { records: loserRecords, tradeDate: lDate } = losersJson ? extractRecords(losersJson, 'LOSER') : { records: [], tradeDate: null };
@@ -133,12 +149,9 @@ async function run() {
         }
 
         console.log(`✅ Success: Synced ${allRecords.length} records for ${tradeDate}.`);
-
     } catch (err) {
         console.error('❌ Sync Failed:', err.message);
         process.exit(1);
-    } finally {
-        if (browser) await browser.close();
     }
 }
 
