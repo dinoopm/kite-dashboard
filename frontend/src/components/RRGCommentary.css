@@ -1,0 +1,430 @@
+/* ─── Rotation commentary (under the RRG) ────────────────────────────────── */
+
+.rrgc {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Header */
+.rrgc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-bottom: 0.9rem;
+}
+.rrgc-title {
+  margin: 0 0 0.2rem;
+  font-size: 1.02rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.rrgc-lede {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+.rrgc-lede strong { color: var(--text-primary); font-weight: 600; }
+.rrgc-controls { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+/* Segmented control */
+.rrgc-seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.025);
+}
+.rrgc-seg button {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.3rem 0.65rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+.rrgc-seg button:hover { color: var(--text-primary); }
+.rrgc-seg button.is-active {
+  background: rgba(56, 189, 248, 0.16);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.35);
+}
+.rrgc-seg button:focus-visible,
+.rrgc-icon-btn:focus-visible,
+.rrgc-plot-btn:focus-visible,
+.rrgc-name-link:focus-visible,
+.rrgc-inline-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Partial-week caveat */
+.rrgc-note {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.9rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  background: rgba(234, 179, 8, 0.06);
+  border: 1px solid rgba(234, 179, 8, 0.2);
+}
+.rrgc-note-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #eab308;
+  box-shadow: 0 0 0 3px rgba(234, 179, 8, 0.18);
+  animation: rrgc-pulse 2s ease-in-out infinite;
+}
+
+/* At-a-glance strip */
+.rrgc-glance {
+  display: grid;
+  /* Distribution bar gets the extra width; the four tiles share the rest.
+     Collapses to two-up, then one-up, on narrow screens. */
+  grid-template-columns: minmax(220px, 1.5fr) repeat(4, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 1.1rem;
+}
+.rrgc-tile {
+  min-width: 0;
+  padding: 0.7rem 0.8rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.rrgc-tile-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 0.45rem;
+}
+.rrgc-tile-value {
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.rrgc-tile-of { font-size: 0.9rem; font-weight: 500; color: var(--text-secondary); }
+.rrgc-tile-name { font-size: 0.92rem; font-weight: 700; margin-bottom: 0.2rem; }
+.rrgc-tile-note {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.rrgc-dist-bar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+}
+.rrgc-dist-bar span { flex-basis: 0; min-width: 6px; opacity: 0.85; }
+.rrgc-dist-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.85rem;
+  margin-top: 0.5rem;
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+.rrgc-dist-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.rrgc-dist-legend span.is-zero { opacity: 0.45; }
+.rrgc-dist-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.rrgc-dist-legend b { color: var(--text-primary); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.rrgc-name-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 255, 255, 0.18);
+  text-underline-offset: 3px;
+}
+.rrgc-name-link:hover { text-decoration-color: var(--accent); }
+.rrgc-fresh-list { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.82rem; font-weight: 600; }
+.rrgc-fresh-item { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.rrgc-fresh-to { font-size: 0.74rem; font-weight: 700; }
+
+/* Groups (By quadrant) */
+.rrgc-body { display: flex; flex-direction: column; gap: 1.1rem; }
+.rrgc-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  margin: 0 0 0.55rem;
+  padding-left: 0.6rem;
+  border-left: 3px solid var(--q);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+.rrgc-group-name { font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.74rem; }
+.rrgc-group-count {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+  font-variant-numeric: tabular-nums;
+}
+.rrgc-group-meaning { color: var(--text-secondary); }
+
+/* Cards */
+.rrgc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 0.7rem;
+}
+.rrgc-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.8rem 0.85rem 0.8rem 0.95rem;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.18s, box-shadow 0.18s, opacity 0.2s, transform 0.18s;
+  /* backwards, not both: a held end-state transform would override :hover. */
+  animation: rrgc-in 0.32s ease-out backwards;
+  animation-delay: calc(var(--i, 0) * 28ms);
+}
+.rrgc-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--q);
+  opacity: 0.75;
+}
+.rrgc-card:hover { border-color: rgba(255, 255, 255, 0.16); transform: translateY(-1px); }
+.rrgc-card.is-focused {
+  border-color: var(--c);
+  box-shadow: 0 0 0 1px var(--c), 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+.rrgc-card.is-dimmed { opacity: 0.5; }
+.rrgc-card.is-unplotted { cursor: default; }
+.rrgc-card.is-unplotted .rrgc-glyph { opacity: 0.75; }
+
+.rrgc-card-head { display: flex; gap: 0.75rem; align-items: flex-start; }
+.rrgc-glyph {
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.rrgc-card-title { flex: 1; min-width: 0; }
+.rrgc-name { display: flex; align-items: center; gap: 0.45rem; font-size: 0.95rem; font-weight: 700; color: var(--text-primary); }
+.rrgc-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rrgc-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+.rrgc-sub {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin: 0.05rem 0 0 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rrgc-badges { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.45rem; }
+.rrgc-quadrant {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid;
+}
+.rrgc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+}
+.rrgc-chip svg { flex-shrink: 0; }
+.rrgc-chip-dim { color: var(--text-secondary); font-weight: 500; margin-left: 0.1rem; }
+.rrgc-chip.is-fresh { background: rgba(56, 189, 248, 0.12); border-color: rgba(56, 189, 248, 0.35); }
+
+.rrgc-icon-btn {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.rrgc-icon-btn:hover { color: var(--text-primary); border-color: rgba(255, 255, 255, 0.2); }
+.rrgc-icon-btn[aria-pressed='true'] { color: var(--c); border-color: var(--c); background: rgba(255, 255, 255, 0.06); }
+.rrgc-plot-btn {
+  flex-shrink: 0;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.3rem 0.55rem;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.rrgc-plot-btn:hover { color: var(--text-primary); border-color: var(--accent); }
+
+.rrgc-headline {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.rrgc-stats {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.rrgc-stats-cap {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  opacity: 0.8;
+  margin-bottom: 0.1rem;
+}
+.rrgc-stat { display: grid; grid-template-columns: 5.2rem 1fr; align-items: baseline; gap: 0.5rem; }
+.rrgc-stat dt { font-size: 0.7rem; color: var(--text-secondary); font-weight: 600; }
+.rrgc-stat dd {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+.rrgc-stat-from { color: var(--text-secondary); }
+.rrgc-stat-arrow { color: var(--text-secondary); opacity: 0.6; font-size: 0.72rem; }
+.rrgc-stat-to { color: var(--text-primary); font-weight: 700; }
+.rrgc-delta { margin-left: auto; font-size: 0.72rem; font-weight: 600; color: var(--text-secondary); }
+.rrgc-delta.is-up { color: #86efac; }
+.rrgc-delta.is-down { color: #fca5a5; }
+
+.rrgc-facts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.rrgc-facts li {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+.rrgc-fact-icon {
+  flex-shrink: 0;
+  width: 1rem;
+  text-align: center;
+  color: var(--text-primary);
+  opacity: 0.7;
+}
+.rrgc-facts li[data-kind='crossing'] { color: var(--text-primary); }
+.rrgc-facts li[data-kind='crossing'] .rrgc-fact-icon { color: var(--accent); opacity: 1; }
+
+.rrgc-empty {
+  padding: 1.25rem;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+}
+.rrgc-inline-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.rrgc-foot {
+  margin: 1.1rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+.rrgc-foot strong { color: var(--text-primary); font-weight: 600; }
+
+@keyframes rrgc-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes rrgc-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(234, 179, 8, 0.18); }
+  50% { box-shadow: 0 0 0 5px rgba(234, 179, 8, 0.05); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rrgc-card, .rrgc-note-dot { animation: none; }
+  .rrgc-card:hover { transform: none; }
+}
+@media (max-width: 900px) {
+  .rrgc-glance { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rrgc-tile-wide { grid-column: 1 / -1; }
+}
+@media (max-width: 420px) {
+  .rrgc-head { align-items: flex-start; }
+  .rrgc-tile { padding: 0.6rem 0.65rem; }
+  .rrgc-tile-name { font-size: 0.84rem; }
+}

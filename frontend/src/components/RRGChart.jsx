@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import RRGCommentary from './RRGCommentary';
+import { buildRotationCommentary } from '../lib/rrgCommentary';
 
 const RRG_COLORS = [
   '#00bcd4', '#ff6384', '#36a2eb', '#ffce56', '#4bc0c0',
@@ -73,6 +75,16 @@ export default function RRGChart({
   const plotH = CHART_H - PAD.top - PAD.bottom;
   const [quadrantFilter, setQuadrantFilter] = useState(null);
   const [hasInitializedHidden, setHasInitializedHidden] = useState(false);
+  // Shared with the commentary: hovering a card (or a dot) highlights that
+  // trail; pinning keeps the highlight while you read. Escape clears the pin.
+  const [hoverKey, setHoverKey] = useState(null);
+  const [pinnedKey, setPinnedKey] = useState(null);
+  useEffect(() => {
+    if (!pinnedKey) return;
+    const onKey = (e) => { if (e.key === 'Escape') setPinnedKey(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pinnedKey]);
 
   useEffect(() => {
     if (rrg && rrg.sectors && rrg.sectors.length > 0 && !hasInitializedHidden) {
@@ -130,7 +142,32 @@ export default function RRGChart({
     };
   }, [rrg, isSectorVisible, getVisibleSeries]);
 
-  const scaleX = (v) => PAD.left + ((v - axisBounds.minX) / (axisBounds.maxX - axisBounds.minX)) * plotW;
+  const benchmarkLabel = rrgBenchmark
+    ? rrgBenchmark.split(':')[1] || rrgBenchmark
+    : 'NIFTY 50';
+
+  // Commentary reads the same tail window the trails show (tail length +
+  // scrub position), but not the animation frame — mid-animation the words
+  // would rewrite themselves every 800ms.
+  const commentary = useMemo(() => (
+    rrg?.sectors?.length
+      ? buildRotationCommentary(rrg.sectors, { tailLength: rrgTailLength, scrubEnd: rrgScrubEnd, benchmark: benchmarkLabel })
+      : null
+  ), [rrg, rrgTailLength, rrgScrubEnd, benchmarkLabel]);
+
+  const plottedKeys = useMemo(
+    () => new Set((rrg?.sectors || []).filter(isSectorVisible).map(s => s.key)),
+    [rrg, isSectorVisible],
+  );
+  const sectorColor = useMemo(() => {
+    const m = {};
+    (rrg?.sectors || []).forEach((s, i) => { m[s.key] = RRG_COLORS[i % RRG_COLORS.length]; });
+    return m;
+  }, [rrg]);
+  // A pinned sector that has since been hidden must not dim everything else.
+  const focusKey = [hoverKey, pinnedKey].find(k => k && plottedKeys.has(k)) ?? null;
+
+  const scaleX =(v) => PAD.left + ((v - axisBounds.minX) / (axisBounds.maxX - axisBounds.minX)) * plotW;
   const scaleY = (v) => PAD.top + plotH - ((v - axisBounds.minY) / (axisBounds.maxY - axisBounds.minY)) * plotH;
 
   const totalWeeks = rrg ? Math.max(...rrg.sectors.map(s => s.series?.length ?? 0), 0) : 0;
@@ -295,9 +332,29 @@ export default function RRGChart({
     return adjustedY;
   };
 
-  const benchmarkLabel = rrgBenchmark
-    ? rrgBenchmark.split(':')[1] || rrgBenchmark
-    : 'NIFTY 50';
+  const togglePin = (key) => setPinnedKey(prev => (prev === key ? null : key));
+  const scrollToChart = () => rrgContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  // The card's target button: pin it and bring the chart into view so the
+  // highlighted trail is actually on screen. Unpinning stays put.
+  const locateSector = (key) => {
+    const pinning = pinnedKey !== key;
+    setPinnedKey(pinning ? key : null);
+    if (pinning) scrollToChart();
+  };
+  // Plotting from a card while a quadrant filter is on must not reveal all
+  // 28 sectors: keep the filtered set, add this one, then drop the filter.
+  const plotSector = (key) => {
+    if (quadrantFilter) {
+      const h = {};
+      for (const s of rrg.sectors) if (s.quadrant !== quadrantFilter && s.key !== key) h[s.key] = true;
+      setRrgHidden(h);
+      setQuadrantFilter(null);
+    } else {
+      setRrgHidden(prev => { const next = { ...prev }; delete next[key]; return next; });
+    }
+    setPinnedKey(key);
+    scrollToChart();
+  };
 
   return (
     <section className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1rem' }}>
@@ -373,7 +430,19 @@ export default function RRGChart({
             );
           })}
         </div>
-        <div style={{ display: 'flex', gap: '0.4rem' }}>
+        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+          {pinnedKey && plottedKeys.has(pinnedKey) && (() => {
+            const s = rrg.sectors.find(x => x.key === pinnedKey);
+            const color = sectorColor[pinnedKey];
+            return (
+              <button onClick={() => setPinnedKey(null)} title="Stop highlighting (Esc)"
+                style={{ ...btnStyle(true, color), display: 'inline-flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-primary)' }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: color }} />
+                Highlighting {s ? shortNameFn(s.name) : pinnedKey}
+                <span aria-hidden="true" style={{ opacity: 0.7 }}>✕</span>
+              </button>
+            );
+          })()}
           <button onClick={showAll} style={btnStyle(false)} title="Show all sectors">Show All</button>
           <button onClick={hideAll} style={btnStyle(false)} title="Hide all sectors">Hide All</button>
         </div>
@@ -442,7 +511,7 @@ export default function RRGChart({
               const labelY = getAdjustedLabelY(latest.x, latest.y);
 
               return (
-                <g key={sector.key}>
+                <g key={sector.key} style={{ opacity: focusKey && focusKey !== sector.key ? 0.12 : 1, transition: 'opacity 0.2s ease' }}>
                   <path d={pathD} fill="none" stroke={color} strokeWidth="2.5" opacity="0.85" strokeLinejoin="round" strokeLinecap="round" />
                   {points.map((p, i) => {
                     const isLatest = i === points.length - 1;
@@ -453,6 +522,7 @@ export default function RRGChart({
                         stroke={color} strokeWidth={isLatest ? 2.5 : 2}
                         style={{ cursor: 'pointer', transition: 'all 0.3s ease' }}
                         onMouseEnter={(e) => {
+                          setHoverKey(sector.key);
                           const rect = rrgContainerRef.current?.getBoundingClientRect();
                           setRrgTooltip({
                             name: sector.name, subtitle: subtitleFn(sector),
@@ -461,7 +531,7 @@ export default function RRGChart({
                             color, x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0)
                           });
                         }}
-                        onMouseLeave={() => setRrgTooltip(null)}
+                        onMouseLeave={() => { setRrgTooltip(null); setHoverKey(null); }}
                         onClick={(e) => { e.stopPropagation(); navigate(getNavHref(sector)); }}
                       />
                     );
@@ -583,6 +653,25 @@ export default function RRGChart({
           })}
         </div>
       </div>
+
+      {commentary && (
+        <RRGCommentary
+          reads={commentary.reads}
+          plottedKeys={plottedKeys}
+          colorFor={(key) => sectorColor[key]}
+          labelFor={(read) => shortNameFn(read.name)}
+          subtitleFor={(read) => subtitleFn(rrg.sectors.find(s => s.key === read.key) || read)}
+          benchmarkLabel={benchmarkLabel}
+          tailLength={rrgTailLength}
+          quadrantColors={QUADRANT_COLORS}
+          hoverKey={hoverKey}
+          pinnedKey={pinnedKey}
+          onHover={setHoverKey}
+          onTogglePin={togglePin}
+          onLocate={locateSector}
+          onPlot={plotSector}
+        />
+      )}
     </section>
   );
 }
