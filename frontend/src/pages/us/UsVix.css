@@ -75,3 +75,29 @@
 .severity-vintage-table th,.severity-vintage-table td { padding: .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 .severity-vintage-table small { display: block; color: var(--text-secondary); }
 @media (max-width: 850px) { .severity-flags { grid-template-columns: 1fr; } }
+
+/* Freshness strip: every block's as-of date in one line, amber only where a
+   block trails by more than its source's normal lag. */
+.us-vix-freshness { display: flex; flex-wrap: wrap; gap: .4rem 1.4rem; font-size: .75rem; color: var(--text-secondary); margin: -.5rem 0 1.1rem; }
+.us-vix-freshness strong { color: var(--text-primary); font-weight: 600; margin-right: .25rem; }
+.us-vix-freshness .stale, .us-vix-freshness .stale strong { color: #fbbf24; }
+
+/* A CNN reading days old is greyed and dated in the headline, not footnoted. */
+.cnn-stale-badge { display: inline-block; font-size: .72rem; font-weight: 700; color: #fbbf24; border: 1px solid #fbbf2466; border-radius: 4px; padding: .1rem .45rem; margin-right: .5rem; }
+.cnn-meter.cnn-meter-stale { opacity: .3; filter: grayscale(.6); }
+
+/* What the same rule says at the live quote — provisional, never recorded. */
+.severity-provisional { font-size: .82rem; line-height: 1.55; border-left: 3px solid #fbbf24; background: #fbbf2410; padding: .55rem .8rem; margin: .5rem 0 .75rem; border-radius: 0 6px 6px 0; }
+.severity-validation-note { font-size: .72rem; color: var(--text-secondary); line-height: 1.5; margin: -.4rem 0 .9rem; }
+
+/* A stale CNN reading collapses to one line; the reading stays behind a click. */
+.cnn-fear-greed.cnn-collapsed { padding: .75rem 1.25rem; }
+.cnn-collapsed summary { cursor: pointer; font-size: .8rem; color: var(--text-secondary); line-height: 1.5; }
+.cnn-collapsed summary strong { color: var(--text-primary); font-weight: 600; }
+.cnn-collapsed-body { margin-top: 1rem; }
+
+/* MIXED days: where the reading sits between tiers. Outlined, never filled —
+   the filled card stays reserved for a tier the rule actually assigned. */
+.severity-nearest { font-size: .8rem; line-height: 1.55; color: var(--text-secondary); margin: .25rem 0 .75rem; }
+.severity-tag.severity-tag-nearest { background: transparent; border: 1px dashed; }
+.severity-checks-met { display: block; font-size: .68rem; color: var(--text-secondary); margin: .35rem 0 .1rem; }

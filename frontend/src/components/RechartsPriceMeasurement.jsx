@@ -42,5 +42,20 @@ export default function RechartsPriceMeasurement({ model, data, base = null, int
         <PriceMeasurementOverlay measurement={measurement} />
       </div>
     </foreignObject>}
+    {/* Grab handles on a finished measurement. Drawn after the overlay so they
+        sit on top of it; pointer capture keeps the drag alive when the cursor
+        outruns the 10px handle, which it does on any quick drag. */}
+    {state.start && state.end && !state.active && from && valid(to) && [['start', from], ['end', to]].map(([which, p]) => (
+      <circle key={which} data-testid={`price-measurement-handle-${which}`}
+        cx={plot.x + p.x} cy={plot.y + p.y} r={10}
+        fill="transparent" stroke="rgba(255,255,255,0.4)" strokeWidth={1.5}
+        style={{ cursor: state.dragging === which ? 'grabbing' : 'grab', pointerEvents: 'all', touchAction: 'none' }}
+        onPointerDown={event => { event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture?.(event.pointerId); model.setDragging(which); }}
+        onPointerMove={event => { if (state.dragging !== which) return; event.stopPropagation(); const point = pointAt(event); if (point) model.move(which, point); }}
+        onPointerUp={event => { event.currentTarget.releasePointerCapture?.(event.pointerId); model.setDragging(null); }}
+        onPointerCancel={() => model.setDragging(null)}>
+        <title>Drag to move the {which === 'start' ? 'start' : 'end'} point</title>
+      </circle>
+    ))}
   </g></ZIndexLayer>;
 }

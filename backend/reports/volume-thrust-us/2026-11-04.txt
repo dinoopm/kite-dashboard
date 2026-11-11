@@ -1,0 +1,134 @@
+fetching 503 symbols…
+  25/503 (0 failed)  50/503 (0 failed)  75/503 (0 failed)  100/503 (0 failed)  125/503 (0 failed)  150/503 (0 failed)  175/503 (0 failed)  200/503 (0 failed)  225/503 (0 failed)  250/503 (0 failed)  275/503 (0 failed)  300/503 (0 failed)  325/503 (0 failed)  350/503 (0 failed)  375/503 (0 failed)  400/503 (0 failed)  425/503 (0 failed)  450/503 (0 failed)  475/503 (0 failed)  500/503 (0 failed)
+502 symbols usable, 2014-01-02 → 2026-11-04, benchmark ^GSPC
+
+1.5× volume, 5-session window
+  cross       19281 firings   10d: +0.06% median excess (t=4.57, n=19127)
+  confirmed    6379 firings   10d: +0.13% median excess (t=3.69, n=6326)
+  quiet       12902 firings   10d: +0.03% median excess (t=2.92, n=12801)
+  thrust      65968 firings   10d: -0.10% median excess, not distinguishable from noise (t=0.79, n=65571)
+  lift 5d    no measurable difference (+0.04pp, t=0.56) — the filter would discard firings for nothing
+  lift 10d   no measurable difference (+0.14pp, t=1.54) — the filter would discard firings for nothing
+  lift 22d   no measurable difference (+0.04pp, t=0.34) — the filter would discard firings for nothing
+
+2× volume, 0-session window
+  cross       19281 firings   10d: +0.06% median excess (t=4.57, n=19127)
+  confirmed     759 firings   10d: +0.07% median excess, not distinguishable from noise (t=1.39, n=748)
+  quiet       18522 firings   10d: +0.06% median excess (t=4.36, n=18379)
+  thrust      25363 firings   10d: -0.18% median excess, not distinguishable from noise (t=-0.18, n=25209)
+  lift 5d    no measurable difference (+0.04pp, t=0.19) — the filter would discard firings for nothing
+  lift 10d   no measurable difference (+0.20pp, t=0.73) — the filter would discard firings for nothing
+  lift 22d   no measurable difference (+0.15pp, t=0.4) — the filter would discard firings for nothing
+
+2× volume, 3-session window
+  cross       19281 firings   10d: +0.06% median excess (t=4.57, n=19127)
+  confirmed    2319 firings   10d: +0.05% median excess, not distinguishable from noise (t=1.98, n=2293)
+  quiet       16962 firings   10d: +0.07% median excess (t=4.12, n=16834)
+  thrust      25363 firings   10d: -0.18% median excess, not distinguishable from noise (t=-0.18, n=25209)
+  lift 5d    no measurable difference (-0.02pp, t=-0.23) — the filter would discard firings for nothing
+  lift 10d   no measurable difference (+0.09pp, t=0.65) — the filter would discard firings for nothing
+  lift 22d   no measurable difference (+0.19pp, t=0.99) — the filter would discard firings for nothing
+
+2× volume, 5-session window   ← the shipped setting
+  cross       19281 firings   10d: +0.06% median excess (t=4.57, n=19127)
+  confirmed    3054 firings   10d: +0.12% median excess (t=2.47, n=3023)
+  quiet       16227 firings   10d: +0.06% median excess (t=3.88, n=16104)
+  thrust      25363 firings   10d: -0.18% median excess, not distinguishable from noise (t=-0.18, n=25209)
+  lift 5d    no measurable difference (-0.02pp, t=-0.27) — the filter would discard firings for nothing
+  lift 10d   no measurable difference (+0.12pp, t=0.95) — the filter would discard firings for nothing
+  lift 22d   no measurable difference (+0.12pp, t=0.68) — the filter would discard firings for nothing
+
+2× volume, 10-session window
+  cross       19281 firings   10d: +0.06% median excess (t=4.57, n=19127)
+  confirmed    4437 firings   10d: +0.08% median excess (t=2.64, n=4400)
+  quiet       14844 firings   10d: +0.06% median excess (t=3.74, n=14727)
+  thrust      25363 firings   10d: -0.18% median excess, not distinguishable from noise (t=-0.18, n=25209)
+  lift 5d    no measurable difference (-0.04pp, t=-0.51) — the filter would discard firings for nothing
+  lift 10d   no measurable difference (+0.08pp, t=0.76) — the filter would discard firings for nothing
+  lift 22d   no measurable difference (+0.04pp, t=0.31) — the filter would discard firings for nothing
+
+2.5× volume, 5-session window
+  cross       19281 firings   10d: +0.06% median excess (t=4.57, n=19127)
+  confirmed    1709 firings   10d: +0.04% median excess, not distinguishable from noise (t=1.91, n=1698)
+  quiet       17572 firings   10d: +0.07% median excess (t=4.16, n=17429)
+  thrust      12208 firings   10d: -0.18% median excess, not distinguishable from noise (t=-0.24, n=12142)
+  lift 5d    no measurable difference (-0.07pp, t=-0.63) — the filter would discard firings for nothing
+  lift 10d   no measurable difference (+0.14pp, t=0.82) — the filter would discard firings for nothing
+  lift 22d   no measurable difference (+0.33pp, t=1.4) — the filter would discard firings for nothing
+
+3× volume, 5-session window
+  cross       19281 firings   10d: +0.06% median excess (t=4.57, n=19127)
+  confirmed    1088 firings   10d: +0.07% median excess, not distinguishable from noise (t=1.84, n=1085)
+  quiet       18193 firings   10d: +0.06% median excess (t=4.22, n=18042)
+  thrust       6759 firings   10d: -0.23% median excess, not distinguishable from noise (t=-0.11, n=6737)
+  lift 5d    no measurable difference (-0.11pp, t=-0.77) — the filter would discard firings for nothing
+  lift 10d   no measurable difference (+0.21pp, t=0.98) — the filter would discard firings for nothing
+  lift 22d   no measurable difference (+0.51pp, t=1.77) — the filter would discard firings for nothing
+
+RSI gate on the cross (at 2× volume, 5-session window)
+The cross rule already gates RSI > 50; these are tighter cuts of it.
+24 tests below — expect one or two to clear |t|>2 by chance. Look for a run of
+neighbouring gates agreeing, not a single starred cell.
+
+  all crosses — baseline (RSI>50): 19281 firings, 10d: +0.06% median excess (t=4.57, n=19127)
+    RSI > 55   kept 15654 / dropped  3627
+             kept 10d:    +0.04% median excess (t=3.81, n=15515)
+             dropped 10d: +0.16% median excess (t=2.6, n=3612)
+             gate 5d   no measurable difference (+0.01pp, t=0.16) — the gate would discard firings for nothing
+             gate 10d  no measurable difference (-0.08pp, t=-0.72) — the gate would discard firings for nothing
+             gate 22d  no measurable difference (-0.27pp, t=-1.72) — the gate would discard firings for nothing
+    RSI > 60   kept  9523 / dropped  9758
+             kept 10d:    +0.07% median excess (t=3.11, n=9426)
+             dropped 10d: +0.05% median excess (t=3.35, n=9701)
+             gate 5d   no measurable difference (-0.06pp, t=-1.06) — the gate would discard firings for nothing
+             gate 10d  no measurable difference (-0.02pp, t=-0.23) — the gate would discard firings for nothing
+             gate 22d  no measurable difference (-0.02pp, t=-0.13) — the gate would discard firings for nothing
+    RSI > 65   kept  4032 / dropped 15249
+             kept 10d:    -0.01% median excess, not distinguishable from noise (t=1.73, n=3977)
+             dropped 10d: +0.08% median excess (t=4.25, n=15150)
+             gate 5d   no measurable difference (-0.02pp, t=-0.28) — the gate would discard firings for nothing
+             gate 10d  no measurable difference (-0.04pp, t=-0.39) — the gate would discard firings for nothing
+             gate 22d  no measurable difference (-0.26pp, t=-1.76) — the gate would discard firings for nothing
+    RSI > 70   kept  1094 / dropped 18187
+             kept 10d:    -0.10% median excess, not distinguishable from noise (t=1.34, n=1068)
+             dropped 10d: +0.07% median excess (t=4.37, n=18059)
+             gate 5d   no measurable difference (-0.05pp, t=-0.33) — the gate would discard firings for nothing
+             gate 10d  no measurable difference (+0.08pp, t=0.4) — the gate would discard firings for nothing
+             gate 22d  no measurable difference (+0.12pp, t=0.43) — the gate would discard firings for nothing
+
+  volume-confirmed crosses only — baseline (RSI>50): 3054 firings, 10d: +0.12% median excess (t=2.47, n=3023)
+    RSI > 55   kept  2783 / dropped   271
+             kept 10d:    +0.07% median excess (t=2.14, n=2753)
+             dropped 10d: +0.38% median excess, not distinguishable from noise (t=1.44, n=270)
+             gate 5d   no measurable difference (-0.05pp, t=-0.16) — the gate would discard firings for nothing
+             gate 10d  no measurable difference (-0.30pp, t=-0.73) — the gate would discard firings for nothing
+             gate 22d  no measurable difference (-0.58pp, t=-1.11) — the gate would discard firings for nothing
+    RSI > 60   kept  2184 / dropped   870
+             kept 10d:    +0.01% median excess, not distinguishable from noise (t=1.35, n=2160)
+             dropped 10d: +0.34% median excess (t=2.42, n=863)
+             gate 5d   no measurable difference (-0.01pp, t=-0.05) — the gate would discard firings for nothing
+             gate 10d  no measurable difference (-0.37pp, t=-1.39) — the gate would discard firings for nothing
+             gate 22d  no measurable difference (+0.06pp, t=0.16) — the gate would discard firings for nothing
+    RSI > 65   kept  1416 / dropped  1638
+             kept 10d:    -0.05% median excess, not distinguishable from noise (t=1.11, n=1397)
+             dropped 10d: +0.29% median excess (t=2.34, n=1626)
+             gate 5d   no measurable difference (-0.02pp, t=-0.09) — the gate would discard firings for nothing
+             gate 10d  no measurable difference (-0.18pp, t=-0.77) — the gate would discard firings for nothing
+             gate 22d  no measurable difference (-0.17pp, t=-0.53) — the gate would discard firings for nothing
+    RSI > 70   kept   631 / dropped  2423
+             kept 10d:    -0.19% median excess, not distinguishable from noise (t=0.81, n=618)
+             dropped 10d: +0.21% median excess (t=2.39, n=2405)
+             gate 5d   no measurable difference (+0.01pp, t=0.05) — the gate would discard firings for nothing
+             gate 10d  no measurable difference (-0.06pp, t=-0.2) — the gate would discard firings for nothing
+             gate 22d  no measurable difference (+0.03pp, t=0.06) — the gate would discard firings for nothing
+
+· Survivorship bias: the universe is today's index members, so companies delisted or dropped along the way never appear. Every long-horizon US backtest is flattered by this, including this one.
+· Firings cluster in time — heavy volume is largely a market-wide event, so many symbols confirm in the same week — and that hits the confirmed half harder than the quiet half. n overstates the independent evidence on both sides, and more so on the confirmed side.
+· Volume here is consolidated Yahoo volume, not the partial-venue feed. A study run on IEX-only volume would measure roughly 2-3% of the tape and mean nothing.
+· Entry at the firing day close; costs, slippage and liquidity are not modeled. Volume-confirmed entries are, by construction, entries on days when spreads and impact are worst.
+· Excess is over the index. Over a decade-long bull market raw return flatters everything, which is why the verdicts use excess.
+· The grid is reported in full on purpose. An effect that appears at one setting and vanishes at its neighbours is a property of the setting, not of the market.
+· RSI gates are nested, so each one is compared against the firings it discards rather than against another gate. Read the confirmedOnly column for the shipped preset: a gate that helps on all crosses may add nothing once volume confirmation has already selected the same firings.
+· MULTIPLE COMPARISONS. The RSI sweep adds 4 gates x 2 populations x 3 horizons = 24 more two-sample tests on top of the volume grid. At the |t|>2 bar roughly one in twenty lands there by chance, so one or two "findings" per run are expected even when nothing is there — a harness run on random walks, where by construction no effect exists, produced a t=-2.2. Do not read a single starred cell as a result. What counts is a run of neighbouring gates pointing the same way, which is the shape a real effect has and a coincidence does not.
+· Raising the RSI gate shrinks n monotonically, so the tightest gates lose significance partly because they are smaller, not only because they are worse. Compare medians across gates, not just the t-stats.
+· A US result does not transfer automatically to NSE. It is evidence about the RULE, not about Indian stocks; signals/scorecard.js is what will eventually answer that, once ma_cross_volume has resolved firings there.

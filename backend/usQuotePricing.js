@@ -48,4 +48,44 @@ function quoteFromSnapshot(snapshot, { extended = false, feed = null, now = Date
     quote_session: session, quote_as_of: asOf, feed,
   };
 }
-module.exports = { quoteFromSnapshot };
+// The detail-page header keeps the regular close as its headline and shows an
+// out-of-hours print beside it, so this answers "what has it done since the
+// close?", measured from the last regular close in both sessions. That differs
+// from quoteFromSnapshot's after-hours change, which is the full-day one.
+function extendedSession(snapshot, options = {}) {
+  const quote = quoteFromSnapshot(snapshot, { ...options, extended: true });
+  if (quote.quote_session !== 'pre-market' && quote.quote_session !== 'after-hours') return null;
+  const base = price(snapshot?.dailyBar?.c);
+  if (!base) return null;
+  const change = quote.last_price - base;
+  return { session: quote.quote_session, price: quote.last_price, change, changePct: (change / base) * 100, base, asOf: quote.quote_as_of, feed: quote.feed };
+}
+// Yahoo carries the out-of-hours print as it happens, where Alpaca's free
+// snapshot runs 15 minutes behind. marketState says whether there is an
+// out-of-hours session at all; the timestamps say which print is current,
+// because Yahoo leaves the morning's pre-market fields on the quote all day.
+function yahooExtendedSession(quote, { now = Date.now() } = {}) {
+  if (!quote || quote.marketState === 'REGULAR') return null;
+  const base = price(quote.regularMarketPrice);
+  const closedAt = +new Date(quote.regularMarketTime);
+  if (!base || !(closedAt > 0)) return null;
+  const latest = [
+    { session: 'pre-market', p: quote.preMarketPrice, t: quote.preMarketTime },
+    { session: 'after-hours', p: quote.postMarketPrice, t: quote.postMarketTime },
+  ].map(c => ({ ...c, ms: +new Date(c.t) }))
+    .filter(c => price(c.p) && c.ms > closedAt && c.ms <= now)
+    .sort((a, b) => b.ms - a.ms)[0];
+  if (!latest) return null;
+  const change = latest.p - base;
+  return { session: latest.session, price: latest.p, change, changePct: (change / base) * 100, base, asOf: new Date(latest.ms).toISOString(), feed: 'yahoo' };
+}
+// A thinly traded name can have a newer print on one feed than the other, so
+// neither source is simply preferred: the later trade is the current price.
+// Compared in whole seconds because Yahoo stamps seconds and Alpaca nanoseconds,
+// and the same trade on both feeds has to tie rather than favour the delayed one.
+function newestExtended(a, b) {
+  if (!a || !b) return a ?? b ?? null;
+  const second = x => Math.floor(Date.parse(x.asOf) / 1000);
+  return second(b) > second(a) ? b : a;
+}
+module.exports = { quoteFromSnapshot, extendedSession, yahooExtendedSession, newestExtended };

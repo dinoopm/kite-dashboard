@@ -4,7 +4,11 @@ import { SEVERITY_COLORS, severitySegments } from '../lib/severityTimeline';
 export default function VixRiskTimeline({ data }) {
   const plot = usePlotArea(), scale = useXAxisScale();
   if (!plot || !scale || !data.length) return null;
-  const bands = severitySegments(data).flatMap(segment => {
+  // MIXED is left unshaded. The rule matches no tier on about 60% of sessions,
+  // so painting MIXED grey filled most of the chart with slivers and buried
+  // the four tiers that are actually defined. Its absence of colour now means
+  // "no tier", and the tooltip still names it on every day.
+  const bands = severitySegments(data).filter(segment => segment.state !== 'MIXED').flatMap(segment => {
     const first = Number(scale(data[segment.first].date)), last = Number(scale(data[segment.last].date));
     const left = segment.first === 0 ? plot.x : (Number(scale(data[segment.first - 1].date)) + first) / 2;
     const right = segment.last === data.length - 1 ? plot.x + plot.width : (last + Number(scale(data[segment.last + 1].date))) / 2;

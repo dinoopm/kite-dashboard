@@ -1746,7 +1746,7 @@ function Instrument() {
                   />
                   <YAxis domain={['auto', 'auto']} stroke="var(--text-secondary)" tick={{ fill: 'var(--text-secondary)' }} tickFormatter={comparing ? value => `${Number(value).toFixed(1)}%` : undefined} />
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                  <Tooltip active={priceMeasurement.state.active ? false : undefined}
+                  <Tooltip active={priceMeasurement.state.active || priceMeasurement.state.dragging ? false : undefined}
                     contentStyle={{ backgroundColor: 'var(--bg-dark)', borderColor: 'var(--border)', color: 'var(--text-primary)' }}
                     formatter={comparing ? (value, name) => [`${Number(value).toFixed(2)}%`, name] : undefined}
                   />

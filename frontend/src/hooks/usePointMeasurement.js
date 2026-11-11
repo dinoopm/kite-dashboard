@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-const EMPTY = { active: false, start: null, end: null, preview: null };
+import { moveEndpoint } from '../lib/measurementEdit';
+const EMPTY = { active: false, start: null, end: null, preview: null, dragging: null };
 
 export default function usePointMeasurement(context) {
   const [saved, setSaved] = useState({ context, ...EMPTY });
@@ -14,6 +15,10 @@ export default function usePointMeasurement(context) {
   });
   const preview = point => setSaved(previous => previous.context === context && previous.active && previous.start && point
     ? { ...previous, preview: point } : previous);
+  // A finished measurement stays editable: either end can be dragged. The rule
+  // for what may move lives in lib/measurementEdit, shared with the Signals tab.
+  const move = (which, point) => setSaved(previous => (previous.context === context ? moveEndpoint(previous, which, point) : previous));
+  const setDragging = which => setSaved(previous => (previous.context === context && previous.dragging !== which ? { ...previous, dragging: which } : previous));
   useEffect(() => {
     if (!state.active && !state.start) return;
     const onKey = event => {
@@ -24,5 +29,5 @@ export default function usePointMeasurement(context) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [state.active, state.start, clear]);
-  return { state, toggle, clear, select, preview };
+  return { state, toggle, clear, select, preview, move, setDragging };
 }

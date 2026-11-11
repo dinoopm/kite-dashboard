@@ -1,7 +1,8 @@
 // Sector breadth analyser — presentational. Reads the object from
 // computeSectorBreadth() and shows an overall verdict, a row of dimension tiles
-// (advance/decline, new highs vs lows, RSI distribution, SMA20, SMA200), and the
+// (advance/decline, new highs vs lows, RSI distribution, SMA50, SMA200), and the
 // detailed above/below name lists. Pure presentation: no fetching, no state.
+import { Link } from 'react-router-dom';
 import { STRONG_MIN, MIXED_MIN } from '../lib/sectorBreadth';
 
 const GREEN = '#10b981', AMBER = '#eab308', RED = '#ef4444';
@@ -14,7 +15,7 @@ const TIPS = {
   ad: 'How many of the sector’s stocks are up today vs down. Broad green = the whole sector is moving, not just a few names.',
   nhl: 'Stocks closing at a new multi-month high vs those below their 1-month high. More new highs = leadership broadening.',
   rsi: 'Distribution of 14-day RSI. Many overbought (≥70) = stretched/late; many oversold (≤30) = washed out.',
-  sma20: 'Share of the sector trading above its own 20-day average — the short-term pulse.',
+  sma50: 'Share of the sector trading above its own 50-day average — the intermediate trend. Stocks with under 50 sessions of history are left out.',
   sma200: 'Share trading above its 200-day average — the big-picture trend/regime.',
 };
 
@@ -36,8 +37,22 @@ function Tile({ label, value, valueColor, sub, tip }) {
   );
 }
 
+// One stock in an above/below list: a link to its page when the market config
+// can build one and the stock has a token, plain text otherwise.
+function StockName({ stock, color, instrumentHref }) {
+  const style = { display: 'block', fontSize: '0.72rem', color, padding: '0.15rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: 'none' };
+  if (!instrumentHref || !stock.token) return <div style={style}>{stock.name}</div>;
+  return (
+    <Link to={instrumentHref(stock)} title={`Open ${stock.symbol || stock.name}`} style={style}
+      onMouseOver={e => { e.currentTarget.style.textDecoration = 'underline'; }}
+      onMouseOut={e => { e.currentTarget.style.textDecoration = 'none'; }}>
+      {stock.name}
+    </Link>
+  );
+}
+
 // SMA above/below detail card (moved here from the sector pages so both share it).
-function MaBreadthCard({ title, subtitle, pct, aboveNames, belowNames }) {
+function MaBreadthCard({ title, subtitle, pct, above, below, instrumentHref }) {
   const color = zone(pct);
   const bg = pct >= 60 ? '#10b98118' : pct >= 40 ? '#eab30818' : '#ef444418';
   return (
@@ -57,26 +72,22 @@ function MaBreadthCard({ title, subtitle, pct, aboveNames, belowNames }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
         <div>
           <div style={{ fontSize: '0.65rem', fontWeight: 700, color: GREEN, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.4rem' }}>
-            Above ({aboveNames.length})
+            Above ({above.length})
           </div>
-          {aboveNames.map(n => (
-            <div key={n} style={{ fontSize: '0.72rem', color: 'var(--text-primary)', padding: '0.15rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n}</div>
-          ))}
+          {above.map(s => <StockName key={s.token || s.name} stock={s} color="var(--text-primary)" instrumentHref={instrumentHref} />)}
         </div>
         <div>
           <div style={{ fontSize: '0.65rem', fontWeight: 700, color: RED, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.4rem' }}>
-            Below ({belowNames.length})
+            Below ({below.length})
           </div>
-          {belowNames.map(n => (
-            <div key={n} style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', padding: '0.15rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n}</div>
-          ))}
+          {below.map(s => <StockName key={s.token || s.name} stock={s} color="var(--text-secondary)" instrumentHref={instrumentHref} />)}
         </div>
       </div>
     </div>
   );
 }
 
-export default function SectorBreadthPanel({ breadth }) {
+export default function SectorBreadthPanel({ breadth, loading = true, emptyMessage = 'Not enough price history to calculate sector breadth.', instrumentHref = null }) {
   return (
     <div style={{ marginBottom: '1rem' }}>
       <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.6rem' }}>
@@ -84,7 +95,9 @@ export default function SectorBreadthPanel({ breadth }) {
       </div>
 
       {!breadth ? (
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Loading SMA data…</p>
+        <p role="status" style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+          {loading ? 'Loading SMA data…' : emptyMessage}
+        </p>
       ) : (
         <>
           {/* Overall verdict */}
@@ -145,11 +158,11 @@ export default function SectorBreadthPanel({ breadth }) {
               );
             })()}
             <Tile
-              label="Above SMA-20"
-              value={`${Math.round(breadth.sma.pct20)}%`}
-              valueColor={zone(breadth.sma.pct20)}
-              sub={`${breadth.sma.above20names.length} of ${breadth.loadedCount}`}
-              tip={TIPS.sma20}
+              label="Above SMA-50"
+              value={`${Math.round(breadth.sma.pct50)}%`}
+              valueColor={zone(breadth.sma.pct50)}
+              sub={`${breadth.sma.above50names.length} of ${breadth.sma.count50}`}
+              tip={TIPS.sma50}
             />
             <Tile
               label="Above SMA-200"
@@ -163,16 +176,18 @@ export default function SectorBreadthPanel({ breadth }) {
           {/* SMA above/below detail cards */}
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             <MaBreadthCard
-              title="SMA-20" subtitle="Short-term trend"
-              pct={breadth.sma.pct20}
-              aboveNames={breadth.sma.above20names}
-              belowNames={breadth.sma.below20names}
+              title="SMA-50" subtitle="Intermediate trend"
+              pct={breadth.sma.pct50}
+              above={breadth.sma.above50stocks}
+              below={breadth.sma.below50stocks}
+              instrumentHref={instrumentHref}
             />
             <MaBreadthCard
               title="SMA-200" subtitle="Long-term trend"
               pct={breadth.sma.pct200}
-              aboveNames={breadth.sma.above200names}
-              belowNames={breadth.sma.below200names}
+              above={breadth.sma.above200stocks}
+              below={breadth.sma.below200stocks}
+              instrumentHref={instrumentHref}
             />
           </div>
         </>

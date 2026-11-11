@@ -5,6 +5,7 @@ import RRGChart from '../components/RRGChart';
 import { fetchWithAbort } from '../hooks/useFetchWithAbort';
 import { W_1W, W_1M, W_3M, rsiMultiplierFor, rsi14At, computeScoreMap } from '../lib/sectorAnalytics';
 import { adx14 as computeAdx14 } from '../lib/indicators';
+import { loadSectorComposite } from '../lib/sectorComposite';
 
 // ─── RRG Color Palette ─────────────────────────────────────────
 const RRG_COLORS = [
@@ -106,6 +107,8 @@ const INDICES = [
   { key: "NSE:HINDZINC", name: "HINDUSTAN ZINC", category: "commodity" },
   { key: "NSE:HINDCOPPER", name: "HINDUSTAN COPPER", category: "commodity" },
 ];
+
+const SYNTHETIC_KEYS = new Set(INDICES.filter(index => index.synthetic).map(index => index.key));
 
 // Empty placeholder row so unloaded-tab indices still render in the table.
 const emptyRowFor = (entry) => ({
@@ -295,6 +298,8 @@ function SectorIndices() {
   // If we painted a cached snapshot, don't block the page on the first fetch.
   const [loading, setLoading] = useState(() => !hasIndicesSnapshot());
   const [error, setError] = useState(null);
+  const [compositeStates, setCompositeStates] = useState({});
+  const [compositeAttempt, setCompositeAttempt] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('sector');
   // Tabs whose quote/history fetches have been kicked off. Broad Market is
@@ -506,31 +511,45 @@ function SectorIndices() {
       return { ...historyObj, sparkline, aboveSma50, rsi14, adx14, history };
     };
 
+    let running = false;
     const loadComposites = async () => {
-      for (const idx of synthetic) {
-        try {
-          // Cold cache means the backend fetches ~50 constituent histories
-          // sequentially (250ms-spaced to respect Kite's rate limit), which
-          // overruns fetchWithAbort's 60s default and leaves the row stuck on
-          // its ₹0 placeholder. Give it a wide window; warm loads return in ms.
-          const res = await fetchWithAbort(`/api/sector-composite/${encodeURIComponent(idx.key)}`, { signal, timeoutMs: 180_000 });
-          const cdata = await res.json();
-          if (signal.aborted || !mountedRef.current) return;
-          const sorted = Array.isArray(cdata.series) ? cdata.series : [];
-          if (sorted.length === 0) continue;
-          const latestPrice = cdata.lastClose ?? sorted[sorted.length - 1].close;
-          const prev = cdata.prevClose;
-          const pct1D = (prev && prev > 0) ? ((latestPrice - prev) / prev) * 100 : null;
-          const enriched = enrichFromSeries(sorted, latestPrice);
-          setData(prevData => prevData.map(item => item.id === idx.key
-            ? { ...item, ...enriched, price: latestPrice, '1D': pct1D, token: 'synthetic' }
-            : item));
-        } catch (e) {
-          if (e.name === 'AbortError' || signal.aborted) return;
-          if (e.name === 'RateLimitedError') return;
-          console.warn('composite load failed for', idx.key, e.message);
+      if (running || signal.aborted) return;
+      running = true;
+      try {
+        for (const idx of synthetic) {
+          if (signal.aborted) return;
+          setCompositeStates(prev => ({ ...prev, [idx.key]: { loading: true } }));
+          try {
+            const cdata = await loadSectorComposite(idx.key, {
+              fetcher: fetchWithAbort, signal,
+              onProgress: progress => {
+                if (!signal.aborted && mountedRef.current) {
+                  setCompositeStates(prev => ({ ...prev, [idx.key]: { loading: true, ...progress } }));
+                }
+              },
+            });
+            if (signal.aborted || !mountedRef.current) return;
+            const sorted = Array.isArray(cdata.series) ? cdata.series : [];
+            if (sorted.length === 0) continue;
+            const latestPrice = cdata.lastClose ?? sorted[sorted.length - 1].close;
+            const prev = cdata.prevClose;
+            const pct1D = (prev && prev > 0) ? ((latestPrice - prev) / prev) * 100 : null;
+            const enriched = enrichFromSeries(sorted, latestPrice);
+            setData(prevData => prevData.map(item => item.id === idx.key
+              ? { ...item, ...enriched, price: latestPrice, '1D': pct1D, token: 'synthetic' }
+              : item));
+            setCompositeStates(prev => ({ ...prev, [idx.key]: {
+              loading: false, used: cdata.constituentsUsed, total: cdata.constituentsTotal,
+            } }));
+          } catch (e) {
+            if (e.name === 'AbortError' || signal.aborted) return;
+            setCompositeStates(prev => ({ ...prev, [idx.key]: {
+              loading: false, error: e.name === 'RateLimitedError' ? 'Market data is busy. Please retry shortly.' : e.message,
+            } }));
+            console.warn('composite load failed for', idx.key, e.message);
+          }
         }
-      }
+      } finally { running = false; }
     };
 
     loadComposites();
@@ -539,7 +558,7 @@ function SectorIndices() {
     }, RRG_REFRESH_MS);
     return () => { controller.abort(); clearInterval(t); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadedTabs]);
+  }, [loadedTabs, compositeAttempt]);
 
   // ─── RRG Data Fetch ─────────────────────────────────────────
   const fetchRRGData = useCallback(async (signal) => {
@@ -1787,11 +1806,34 @@ function SectorIndices() {
               >
                 <td style={{ textAlign: 'left', padding: '0.5rem', fontWeight: 'bold' }}>
                   {row.name}
+                  {SYNTHETIC_KEYS.has(row.id) && (
+                    <div style={{ marginTop: '0.3rem', color: 'var(--text-secondary)', fontSize: '0.65rem', fontWeight: 400, lineHeight: 1.5 }}>
+                      <div title="Equal-weighted constituent returns, rebased to 1,000">Equal-weight composite · base 1,000</div>
+                      {compositeStates[row.id]?.loading && (
+                        <span role="status">
+                          {compositeStates[row.id].phase === 'composite' ? 'Calculating…'
+                            : compositeStates[row.id].total ? `Loading ${compositeStates[row.id].completed}/${compositeStates[row.id].total} stocks…`
+                              : 'Preparing history…'}
+                        </span>
+                      )}
+                      {compositeStates[row.id]?.error && (
+                        <div role="alert" style={{ maxWidth: '240px', whiteSpace: 'normal', color: '#fbbf24' }}>
+                          {compositeStates[row.id].error}
+                          <button type="button" onClick={event => { event.stopPropagation(); setCompositeAttempt(attempt => attempt + 1); }} onKeyDown={event => event.stopPropagation()} style={{ marginLeft: '0.5rem', padding: '0.1rem 0.4rem', border: '1px solid var(--border)', borderRadius: '4px', background: 'transparent', color: 'var(--accent)', cursor: 'pointer', fontSize: 'inherit' }}>Retry</button>
+                        </div>
+                      )}
+                      {compositeStates[row.id]?.used > 0 && (
+                        <span>{compositeStates[row.id].used}/{compositeStates[row.id].total} stocks</span>
+                      )}
+                    </div>
+                  )}
                   {row.marketSignal && row.marketSignal.isNew && (
                     <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', background: '#ef4444', color: '#fff', padding: '0.1rem 0.3rem', borderRadius: '4px', fontWeight: 'bold', verticalAlign: 'middle', animation: 'pulse-glow 2s infinite' }}>NEW</span>
                   )}
                 </td>
-                <td style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>₹{row.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                <td style={{ padding: '0.5rem', color: 'var(--text-primary)' }}>
+                  {row.price > 0 ? `${SYNTHETIC_KEYS.has(row.id) ? '' : '₹'}${row.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : '—'}
+                </td>
                 <Cell value={row['1D']} />
                 {!hiddenColumns['1W'] && <Cell value={row['1W']} />}
                 <Cell value={row['1M']} />
@@ -1813,7 +1855,7 @@ function SectorIndices() {
                 <Cell value={row.dist52WHigh} isHeatmapCell={false} />
                 {!hiddenColumns['3Y'] && <Cell value={row['3Y']} />}
                 <td style={{ padding: '0.5rem', textAlign: 'right' }}>
-                  {row.rsi14 === null ? (
+                  {row.rsi14 === null && compositeStates[row.id]?.error ? '—' : row.rsi14 === null ? (
                     <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
                   ) : (
                     <span style={{
@@ -1858,7 +1900,7 @@ function SectorIndices() {
                 <td style={{ padding: '0.5rem', textAlign: 'right', position: 'relative' }}
                     onMouseEnter={() => row.momentumBreakdown && setMomentumPopover(row.id)}
                     onMouseLeave={() => setMomentumPopover(null)}>
-                  {row.momentumScore == null ? (
+                  {row.momentumScore == null && compositeStates[row.id]?.error ? '—' : row.momentumScore == null ? (
                     <div className="loader" style={{ width: '16px', height: '16px', margin: '0 auto', borderWidth: '2px' }}></div>
                   ) : (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.3rem', cursor: 'help' }}>
@@ -1962,7 +2004,7 @@ function SectorIndices() {
                 </td>
                 {activeTab === 'sector' && (
                   <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
-                    {row.marketSignal && (
+                    {(!SYNTHETIC_KEYS.has(row.id) || row.price > 0) && row.marketSignal && (
                       <span
                         onClick={(e) => { e.stopPropagation(); setActiveSignalModal(row); }}
                         title="Click to see algorithmic breakdown"

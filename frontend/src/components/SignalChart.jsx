@@ -743,7 +743,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
           📏 Measure price
         </button>
         {(measurement.active || measurement.start) && <button type="button" onClick={() => measurementRef.current?.clear()} style={{ border: 'none', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.75rem' }}>Clear measurement</button>}
-        <span role="status">{measurement.active ? (measurement.start ? 'Click the end point · Esc to cancel' : 'Click the start point · Esc to cancel') : measurement.end ? 'Measure price to start again · Esc to clear' : 'Select two points to measure price and % change'}</span>
+        <span role="status">{measurement.active ? (measurement.start ? 'Click the end point · Esc to cancel' : 'Click the start point · Esc to cancel') : measurement.end ? 'Drag either end to adjust · Measure price to start again · Esc to clear' : 'Select two points to measure price and % change'}</span>
       </div>
 
       {/* What the Buy markers are actually worth — the two halves side by side,

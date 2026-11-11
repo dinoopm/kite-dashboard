@@ -27,6 +27,8 @@ import useUsIndexComparison from '../../hooks/useUsIndexComparison';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 import { percentageChange } from '../../lib/indexComparison';
 import { US_COMPARISON_INDICES, usBarsUrl } from '../../lib/usIndexComparison';
+import { intradayBase, extendedQuoteLine } from '../../lib/usSession';
+import { growthBlock, epsNote, netMarginNote } from '../../lib/pnlChecks';
 
 // US ETF/equity detail: company name, snapshot, price chart with MA overlays,
 // RSI panel, a technical-signal strip, period stats, and a full indicator grid —
@@ -606,7 +608,10 @@ function PnL({ sym }) {
                 {rows.map((r, i) => {
                   const ratioDead = !!m.pct && noSalesYear(r);
                   const growthDead = !!m.growth && growthUnmeasurable(i, m.key);
-                  const g = m.growth && !growthDead ? yoy(i, m.key) : null;
+                  // Growth the filings show is not like for like: across a
+                  // restatement, or through an EPS that disagrees with them.
+                  const block = m.growth && !growthDead ? growthBlock(rows, i, m.key) : null;
+                  const g = m.growth && !growthDead && !block ? yoy(i, m.key) : null;
                   return (
                     <td key={i} style={{ textAlign: 'right', padding: '0.5rem 0.8rem', fontWeight: m.bold ? 700 : 500, fontVariantNumeric: 'tabular-nums' }}
                       title={ratioDead ? nmTitle(r) : growthDead ? nmTitle(rows[i - 1]) : undefined}>
@@ -616,7 +621,14 @@ function PnL({ sym }) {
                       {m.key === 'netIncome' && r.belowTheLine != null && (
                         <span style={{ color: GREY }} title={residualTitle(r)}> †</span>
                       )}
+                      {m.key === 'eps' && r.epsCheck && (
+                        <span style={{ color: AMBER, cursor: 'help' }} title={epsNote(r)}> !</span>
+                      )}
+                      {m.key === 'netMargin' && !ratioDead && r.netMarginBasis === 'continuing' && (
+                        <span style={{ color: GREY, cursor: 'help' }} title={netMarginNote(r)}> §</span>
+                      )}
                       {growthDead && <div style={{ fontSize: '0.68rem', fontWeight: 600, color: GREY, cursor: 'help' }}>n/m</div>}
+                      {block && <div style={{ fontSize: '0.68rem', fontWeight: 600, color: GREY, cursor: 'help' }} title={block.title}>{block.kind === 'basis' ? 'not comparable ‡' : 'not shown !'}</div>}
                       {g != null && <div style={{ fontSize: '0.68rem', fontWeight: 600, color: g >= 0 ? GREEN : RED }}>{g >= 0 ? '+' : ''}{g.toFixed(1)}%</div>}
                     </td>
                   );
@@ -632,6 +644,25 @@ function PnL({ sym }) {
           Both figures are as filed: equity-method income, discontinued operations and minority interests sit
           between those lines and are not shown here, so the three rows cannot be made to add up.
           Difference: {rows.filter(r => r.belowTheLine != null).map(r => `${r.label} ${r.belowTheLine >= 0 ? '+' : ''}${fmtBig(r.belowTheLine)}`).join(', ')}.
+        </p>
+      )}
+      {rows.some(r => r.basisBreak) && (
+        <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.5rem' }}>
+          ‡ Not comparable: {rows.filter(r => r.basisBreak).map(r => `${r.basisBreak.restated} was restated in the company's filing of ${r.basisBreak.restatedFiled} and ${r.basisBreak.unrestated} was not`).join('; ')}.
+          Growth in {[...new Set(rows.flatMap(r => r.basisBreak?.fields || []))].map(f => ({ revenue: 'revenue', operatingIncome: 'operating income', netIncome: 'net income' })[f] || f).join(' and ')} between them
+          would measure the restatement (usually a business spun off or sold), not the company, so it is withheld. Each figure is as filed.
+        </p>
+      )}
+      {rows.some(r => r.netMarginBasis === 'continuing') && (
+        <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.5rem' }}>
+          § Net margin in {rows.filter(r => r.netMarginBasis === 'continuing').map(r => r.label).join(', ')} uses profit from continuing operations.
+          Revenue in those periods excludes a discontinued business while net income still includes its profit, so net income over revenue would overstate the margin.
+        </p>
+      )}
+      {rows.some(r => r.epsCheck) && (
+        <p style={{ fontSize: '0.7rem', color: AMBER, marginTop: '0.5rem' }}>
+          ! EPS disagrees with the company's filing in {rows.filter(r => r.epsCheck).map(r => `${r.label} (Yahoo $${r.eps.toFixed(2)}; filing $${r.epsCheck.expected.toFixed(2)} after share-count adjustment)`).join(', ')}.
+          Growth through it is not shown. The filing is the primary source.
         </p>
       )}
       {period === 'quarterly' && rows.some(r => r.fiscalLabel) && (
@@ -654,7 +685,7 @@ function PnL({ sym }) {
         </p>
       )}
       <p style={{ fontSize: '0.7rem', color: GREY, marginTop: '0.75rem', fontStyle: 'italic' }}>
-        Income statement via Yahoo Finance{rows.some(r => r.source === 'SEC') ? ', latest period from the company\'s SEC filing' : ''}{d.cached ? ' · cached' : ''}. Values in {d.currency}; growth is period-over-period.
+        Income statement via Yahoo Finance{rows.some(r => r.source === 'SEC') ? ', latest period from the company\'s SEC filing' : ''}{d.cached ? ' · cached' : ''}. Values in {d.currency}; growth is period-over-period.{d.secChecked ? ' Checked against the company\'s SEC filings.' : ''}
       </p>
     </div>
   );
@@ -1140,7 +1171,7 @@ export default function UsInstrument() {
   const [showBreakouts, setShowBreakouts] = useState(true);
   const [showSR, setShowSR] = useState(true);
   const [showSignals, setShowSignals] = useState(false); // 10/50 MA-crossover Buy/Sell markers (off by default)
-  const [showExtended, setShowExtended] = useState(false); // pre/post-market bars on the 1D chart (off by default)
+  const [showExtended, setShowExtended] = useState(true); // pre/post-market bars on the 1D chart (on by default)
 
   const loadSnap = useCallback(async () => {
     try { const r = await fetch(`/api/us/snapshot/${sym}`); const j = await r.json(); if (r.ok) setSnap(j); } catch { /* */ }
@@ -1166,6 +1197,12 @@ export default function UsInstrument() {
   }, [sym]);
 
   useEffect(() => { loadSnap(); }, [loadSnap]);
+  // The header was fetched once on load, so an out-of-hours price would sit
+  // there frozen. The backend caches this for 30s; a hidden tab needs nothing.
+  useEffect(() => {
+    const id = setInterval(() => { if (!document.hidden) loadSnap(); }, 60_000);
+    return () => clearInterval(id);
+  }, [loadSnap]);
   useEffect(() => {
     const controller = new AbortController();
     loadBars(controller.signal);
@@ -1175,6 +1212,7 @@ export default function UsInstrument() {
   useEffect(() => { loadVcp(); }, [loadVcp]);
 
   const q = snap?.quote || {};
+  const extendedLine = extendedQuoteLine(q.extended);
   const companyName = snap?.name || snap?.meta?.label || sym;
   const intraday = range === '1D';
   const indexComparison = useUsIndexComparison(bars, range, sym, showExtended);
@@ -1223,11 +1261,11 @@ export default function UsInstrument() {
     const last = bars[bars.length - 1].close;
     // For the 1D (intraday) view, measure the return from the previous close;
     // other ranges compare first→last bar.
-    const base = intraday && q.prevClose != null ? q.prevClose : bars[0].close;
+    const base = (intraday ? intradayBase(bars, q) : null) ?? bars[0].close;
     const ret = base ? ((last - base) / base) * 100 : null;
     const retAbs = last - base;
     return { high, low, ret, retAbs };
-  }, [bars, intraday, q.prevClose]);
+  }, [bars, intraday, q.last, q.prevClose, q.barDate]);
 
   // Extended bars bracket the regular session on BOTH sides (pre-market before,
   // post-market after), so mark the two boundaries — the regular open and close
@@ -1329,7 +1367,20 @@ export default function UsInstrument() {
           <span style={{ color: pctColor(q.changePct), fontWeight: 600, fontSize: '1.1rem' }}>
             {q.change != null ? `${q.change >= 0 ? '+' : ''}$${fmtPrice(q.change)}` : '—'} ({fmtPct(q.changePct)})
           </span>
+          {extendedLine && <span style={{ color: GREY, fontSize: '0.8rem' }}>at close{q.barDate ? ` · ${fmtDate(q.barDate)}` : ''}</span>}
         </div>
+        {extendedLine && (
+          <div data-testid="us-extended-quote" style={{ display: 'flex', alignItems: 'baseline', gap: '0.6rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+            <span style={{ color: '#a855f7', fontWeight: 600, fontSize: '0.85rem' }}>{extendedLine.label}</span>
+            <span style={{ fontWeight: 700, fontSize: '1.1rem' }}>${fmtPrice(q.extended.price)}</span>
+            <span style={{ color: pctColor(q.extended.changePct), fontWeight: 600 }}>
+              {q.extended.change >= 0 ? '+' : '-'}${fmtPrice(Math.abs(q.extended.change))} ({fmtPct(q.extended.changePct)})
+            </span>
+            <span style={{ color: GREY, fontSize: '0.8rem' }}>
+              {extendedLine.when}{extendedLine.note ? ` · ${extendedLine.note}` : ''} · vs ${fmtPrice(q.extended.base)} close
+            </span>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.75rem', fontSize: '0.8rem', color: GREY, flexWrap: 'wrap' }}>
           <span>Open ${fmtPrice(q.open)}</span><span>High ${fmtPrice(q.high)}</span><span>Low ${fmtPrice(q.low)}</span>
           <span>Prev close ${fmtPrice(q.prevClose)}</span>
@@ -1529,7 +1580,7 @@ export default function UsInstrument() {
           }}>▲▼ Signals (10/50)</button>
           {intraday && (
             <button onClick={() => setShowExtended(v => !v)}
-              title="Include pre-market and after-hours prints on the 1D chart. Period stats stay on the regular session."
+              title="Pre-market and after-hours prints are on the 1D chart and in its Period stats. Click for the regular session only."
               style={{
               padding: '0.35rem 0.8rem', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem',
               background: showExtended ? 'rgba(168,85,247,0.14)' : 'transparent',
@@ -1608,7 +1659,7 @@ export default function UsInstrument() {
                         so the shared date axis is printed once. */}
                     <XAxis dataKey="date" tickFormatter={fmtAxis} tick={hasTradedVolume(priceChartData) ? false : { fill: GREY, fontSize: 11 }} height={hasTradedVolume(priceChartData) ? 1 : undefined} minTickGap={40} />
                     <YAxis domain={['auto', 'auto']} tick={{ fill: GREY, fontSize: 11 }} width={60} tickFormatter={(v) => comparing ? `${Number(v).toFixed(1)}%` : v.toFixed(0)} />
-                    <Tooltip active={priceMeasurement.state.active ? false : undefined} contentStyle={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '8px' }}
+                    <Tooltip active={priceMeasurement.state.active || priceMeasurement.state.dragging ? false : undefined} contentStyle={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: '8px' }}
                       labelFormatter={(d) => new Date(d).toLocaleString('en-US')}
                       formatter={(v, name) => [comparing ? `${Number(v).toFixed(2)}%` : `$${fmtPrice(v)}`, name]} />
                     <Legend />
@@ -1683,7 +1734,7 @@ export default function UsInstrument() {
               </div>
               {/* Same data and same left/right margins as the chart above, so a
                   bar lines up with its own bar of price. */}
-              <VolumePane data={priceChartData} margin={{ top: 0, right: showSR ? 74 : 10, left: 0, bottom: 0 }} fmtAxisDate={fmtAxis} />
+              <VolumePane data={priceChartData} margin={{ top: 0, right: showSR ? 74 : 10, left: 0, bottom: 0 }} fmtAxisDate={fmtAxis} market="US" />
             </>
           )}
       </div>

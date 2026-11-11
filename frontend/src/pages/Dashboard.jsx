@@ -6,6 +6,8 @@ import { fmtDate } from '../lib/formatDate'
 import MacroWidget from '../components/MacroWidget'
 import RiskRegimePanel from '../components/RiskRegimePanel'
 import EyeIcon from '../components/EyeIcon'
+import TradingDayStrip from '../components/TradingDayStrip'
+import useTradingDayHistory from '../hooks/useTradingDayHistory'
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -18,6 +20,7 @@ function Dashboard() {
     fiiDii: null,
     usMarkets: null
   });
+  const tradingHistory = useTradingDayHistory(data.indices, data.usMarkets?.indices);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   // Privacy toggle — hide invested amounts and P&L (persisted across sessions).
@@ -294,6 +297,10 @@ function Dashboard() {
                 <span className={`label ${isPositive ? 'positive' : 'negative'}`} style={{ marginTop: '0.25rem', marginBottom: 0, textTransform: 'none' }}>
                   {isPositive ? '+' : ''}{change.toFixed(2)} pts
                 </span>
+                <TradingDayStrip
+                  candles={tradingHistory[`india:${quote.instrument_token}`]}
+                  loading={Boolean(quote.instrument_token) && tradingHistory[`india:${quote.instrument_token}`] === undefined}
+                />
               </div>
             );
           })}
@@ -343,6 +350,10 @@ function Dashboard() {
                   <span className={`label ${isPositive ? 'positive' : 'negative'}`} style={{ marginTop: '0.25rem', marginBottom: 0, textTransform: 'none' }}>
                     {item.symbol} · {isPositive ? '+' : ''}{q.change != null ? `$${q.change.toFixed(2)}` : '$0.00'}
                   </span>
+                  <TradingDayStrip
+                    candles={tradingHistory[`us:${item.symbol}`]}
+                    loading={tradingHistory[`us:${item.symbol}`] === undefined}
+                  />
                 </div>
               );
             })}

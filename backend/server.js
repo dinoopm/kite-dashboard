@@ -13,6 +13,8 @@ const yahooFinance = new YahooFinance();
 const cheerio = require('cheerio');
 const axios = require('axios');
 const { createPortfolioRiskService } = require('./portfolioRisk');
+const { isUnknownTool, unknownToolMessage } = require('./mcpTools');
+const { buildTranslator, adaptResult, sampleOf } = require('./kiteTools');
 const { loadMarketCapClassifications } = require('./marketCapClassification');
 const { buildAlertsFreshness } = require('./alertsFreshness');
 const { prepareAlertCandles } = require('./alertCandles');
@@ -410,6 +412,58 @@ async function warmCache(retries = 3) {
 // ─── MCP Connection ────────────────────────────────────────────
 let isReconnecting = false;
 
+// Kite's hosted MCP replaced its per-call tools with grouped ones on
+// 2026-11-10 (see kiteTools.js). Every call this file makes still uses the old
+// names; they are rewritten here, at the one place calls leave the process.
+// The tool list is read once per client, after sign-in, and saved (tool
+// definitions only, no account data) so a translation that misses can be
+// checked against the server's actual schema.
+const KITE_TOOL_LIST_FILE = path.join(__dirname, 'data/kite-sessions/kite-mcp-tools.json');
+function translateLegacyKiteCalls(client) {
+  const rawCall = client.callTool.bind(client);
+  let translator = null;
+  const load = () => (translator ||= Promise.race([
+    client.listTools(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('tool list timed out')), 10000)),
+  ]).then(({ tools }) => {
+    saveKiteToolList(tools, rawCall);
+    return buildTranslator(tools);
+  }).catch(err => { translator = null; throw err; }));
+  client.callTool = async (call, ...rest) => {
+    const translate = await load().catch(() => null);
+    const sent = translate ? translate(call) : call;
+    const result = await rawCall(sent, ...rest);
+    if (sent === call) return result;
+    recordKiteSample(sampleOf(call, sent, result));
+    // Grouped replies come in pages and wrappers; give the caller the old shape.
+    return adaptResult(call, result, from => rawCall({ ...sent, arguments: { ...sent.arguments, from, limit: 500 } }, ...rest));
+  };
+}
+// The last few raw replies per old call name (see sampleOf in kiteTools.js:
+// market data as text, account replies as field names only). Writes are
+// chained so two replies landing together cannot interleave the file.
+const KITE_SAMPLE_FILE = path.join(__dirname, 'data/kite-sessions/kite-mcp-samples.json');
+const kiteSamples = {};
+let kiteSampleWrite = Promise.resolve();
+function recordKiteSample(sample) {
+  if (!sample?.call) return;
+  kiteSamples[sample.call] = [...(kiteSamples[sample.call] || []), sample].slice(-3);
+  kiteSampleWrite = kiteSampleWrite
+    .then(() => require('fs').promises.mkdir(path.dirname(KITE_SAMPLE_FILE), { recursive: true }))
+    .then(() => require('fs').promises.writeFile(KITE_SAMPLE_FILE, JSON.stringify(kiteSamples, null, 2)))
+    .catch(() => { /* diagnostic only */ });
+}
+async function saveKiteToolList(tools, rawCall) {
+  try {
+    // The help tool explains the groups in the server's own words; best-effort.
+    const help = await rawCall({ name: 'help', arguments: {} })
+      .then(r => r?.content?.map(c => c.text).filter(Boolean).join('\n') || null)
+      .catch(err => `help failed: ${err.message}`);
+    await require('fs').promises.mkdir(path.dirname(KITE_TOOL_LIST_FILE), { recursive: true });
+    await require('fs').promises.writeFile(KITE_TOOL_LIST_FILE, JSON.stringify({ savedAt: new Date().toISOString(), tools, help }, null, 2));
+  } catch { /* diagnostic only */ }
+}
+
 async function connectToKiteMcp() {
   console.log("Connecting to Kite MCP server...");
   mcpTransport = new StdioClientTransport({
@@ -422,6 +476,7 @@ async function connectToKiteMcp() {
     { name: "kite-dashboard-client", version: "1.0.0" },
     { capabilities: {} }
   );
+  translateLegacyKiteCalls(mcpClient);
 
   try {
     await mcpClient.connect(mcpTransport);
@@ -849,6 +904,12 @@ app.post('/api/login', async (req, res) => {
       const result = await callWithTimeout({ name: "login", arguments: {} }, 30000);
       res.json(result);
     } catch (err) {
+      // Kite's OAuth server has no login tool: mcp-remote opens Kite's own
+      // authorize page in the browser while connecting, so there is no link to
+      // hand back. Say what to do instead of reporting an unknown tool.
+      if (isUnknownTool(err)) {
+        return res.json({ content: [{ type: 'text', text: 'Kite now signs in on its own page, which opens in your browser. Approve access there, then click Check authorization.' }] });
+      }
       // If it timed out, the MCP connection is likely stale — auto-reconnect and retry once
       if (err.message.includes('Timed out') || err.message.includes('timed out')) {
         console.log("⚡ Login timed out, auto-reconnecting MCP and retrying...");
@@ -1087,6 +1148,14 @@ app.get('/api/profile', async (req, res) => {
   } catch (err) {
     const rateLimit = detectRateLimit(err);
     if (rateLimit) res.set('Retry-After', String(rateLimit.retryAfter));
+    // A renamed or withdrawn tool is only fixable by knowing what the server
+    // offers now, so ask it and say so. See mcpTools.js.
+    if (isUnknownTool(err)) {
+      const names = await mcpClient.listTools().then(r => (r?.tools || []).map(t => t.name)).catch(() => null);
+      const message = unknownToolMessage(err, names);
+      console.error(`❌ ${message}`);
+      return res.status(502).json({ error: message });
+    }
     res.status(rateLimit ? 429 : err.statusCode || 502).json({ error: err.message });
   }
 });

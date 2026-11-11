@@ -15,7 +15,7 @@
 // "delayed_sip" (full-volume, 15-min-delayed; plain "sip" is blocked for recent
 // data on the free tier). Paid SIP accounts can override both via env.
 const express = require('express');
-const { quoteFromSnapshot } = require('./usQuotePricing');
+const { quoteFromSnapshot, extendedSession, yahooExtendedSession, newestExtended } = require('./usQuotePricing');
 const axios = require('axios');
 const YahooFinance = require('yahoo-finance2').default;
 const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
@@ -202,6 +202,9 @@ function summariseSnapshot(snap) {
     low: daily.l ?? null,
     volume: daily.v ?? null,
     asOf: snap.latestTrade?.t || daily.t || null,
+    // Which session these figures describe. Before the open the daily bar is
+    // still yesterday's, so prevClose is two sessions behind today's prints.
+    barDate: daily.t ? etDateKey(daily.t) : null,
   };
 }
 
@@ -235,8 +238,22 @@ router.get('/fear-greed', async (req, res) => {
   catch { res.status(502).json({ error: 'CNN Fear & Greed is unavailable.' }); }
 });
 router.get('/risk-severity', async (req, res) => {
-  try { res.json(await require('./usRiskSeverity').getAndRecordUsRiskSeverity()); }
+  // Context (input holding the date back, recorded tenure, tier shares,
+  // validation status) is added by riskSeverity/view.js, never inside
+  // usRiskSeverity.js: that file is hashed into the rule version, and editing
+  // it would restart the recorded track record.
+  try { res.json(await require('./riskSeverity/view').withContext(await require('./usRiskSeverity').getAndRecordUsRiskSeverity())); }
   catch { res.status(502).json({ error: 'Market risk severity is unavailable.' }); }
+});
+// The same rule with only VIX swapped for the live quote the page is showing.
+// Read-only and never recorded: every other input is older than the quote.
+router.get('/risk-severity/provisional', async (req, res) => {
+  const vix = Number(req.query.vix);
+  if (!Number.isFinite(vix) || vix <= 0 || vix > 200) return res.status(400).json({ error: 'vix must be a positive number' });
+  try {
+    const severity = await require('./usRiskSeverity').getUsRiskSeverity();
+    res.json({ asOf: severity.asOf, state: severity.state, provisional: require('./riskSeverity/view').provisional(severity, vix) });
+  } catch { res.status(502).json({ error: 'Market risk severity is unavailable.' }); }
 });
 router.get('/vix', async (req, res) => {
   try { res.json(await getUsVix()); }
@@ -271,19 +288,47 @@ router.get('/overview', async (req, res) => {
   }
 });
 
+// Live out-of-hours prints, keyed by the symbols asked for. A Yahoo failure or
+// slow answer costs only the fresher price (Alpaca's delayed one stands in),
+// never the caller, so it is bounded and never throws. Cached because pages
+// poll. Yahoo spells share classes BRK-B where the app has BRK.B.
+const YAHOO_EXTENDED_TTL = 30_000;
+const yahooExtendedCache = {}; // symbol -> { data, ts }
+async function fetchYahooExtended(symbols) {
+  const fresh = (s) => {
+    const hit = yahooExtendedCache[s];
+    return hit && Date.now() - hit.ts < YAHOO_EXTENDED_TTL ? hit : null;
+  };
+  const appSymbol = new Map(symbols.filter(s => !fresh(s)).map(s => [s.replace(/\./g, '-'), s]));
+  const wanted = [...appSymbol.keys()];
+  const chunks = [];
+  for (let i = 0; i < wanted.length; i += 100) chunks.push(wanted.slice(i, i + 100));
+  await Promise.all(chunks.map(async (chunk) => {
+    try {
+      const quotes = await yf.quote(chunk, {}, { validateResult: false, fetchOptions: { signal: AbortSignal.timeout(4000) } });
+      for (const quote of Array.isArray(quotes) ? quotes : [quotes]) {
+        const symbol = appSymbol.get(quote?.symbol);
+        if (symbol) yahooExtendedCache[symbol] = { data: yahooExtendedSession(quote), ts: Date.now() };
+      }
+    } catch { /* the delayed print stands in */ }
+  }));
+  return Object.fromEntries(symbols.map(s => [s, fresh(s)?.data ?? null]));
+}
+
 // Single-symbol snapshot (detail page header).
 router.get('/snapshot/:symbol', async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
-    const [data, name] = await Promise.all([
+    const [data, name, yahooExtended] = await Promise.all([
       alpacaGet(`/stocks/${encodeURIComponent(symbol)}/snapshot`, { feed: SNAPSHOT_FEED }, 30_000),
       fetchAssetName(symbol),
+      fetchYahooExtended([symbol]),
     ]);
     res.json({
       symbol,
       name: name || null,
       meta: META_BY_SYMBOL[symbol] || { symbol, label: symbol },
-      quote: summariseSnapshot(data),
+      quote: { ...summariseSnapshot(data), extended: newestExtended(yahooExtended[symbol], extendedSession(data, { feed: SNAPSHOT_FEED })) },
     });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message, configured: !err.notConfigured });
@@ -516,15 +561,28 @@ const dailyBarsCache = {};     // symbol -> { data, ts }
 const dailyBarsInflight = {};  // symbol -> Promise
 const DAILY_BARS_TTL = 60 * 60 * 1000; // 1h
 
-async function fetchDailyBars(symbol, years = 4) {
-  const sym = symbol.toUpperCase();
+// One series per symbol, always this long, trimmed for each caller. The cache
+// used to keep whatever window the first caller asked for, so the 1-year
+// red-flags check silently shortened every 4-year reader for the next hour:
+// a basket showed one stock's 1Y, 2Y and 3Y returns as the same number.
+const DAILY_BARS_YEARS = 4;
+
+async function fetchDailyBars(symbol, years = DAILY_BARS_YEARS) {
+  const bars = await loadDailyBars(symbol.toUpperCase());
+  if (years >= DAILY_BARS_YEARS) return bars;
+  const cutoff = new Date();
+  cutoff.setFullYear(cutoff.getFullYear() - years);
+  return bars.filter(b => new Date(b.date) >= cutoff);
+}
+
+async function loadDailyBars(sym) {
   const hit = dailyBarsCache[sym];
   if (hit && Date.now() - hit.ts < DAILY_BARS_TTL) return hit.data;
   if (dailyBarsInflight[sym]) return dailyBarsInflight[sym];
 
   dailyBarsInflight[sym] = (async () => {
     const start = new Date();
-    start.setFullYear(start.getFullYear() - years);
+    start.setFullYear(start.getFullYear() - DAILY_BARS_YEARS);
     let allBars = [];
     let pageToken = null;
     do {
@@ -586,6 +644,11 @@ router.post('/quotes', async (req, res) => {
     const instruments = Array.isArray(req.body?.instruments) ? req.body.instruments : [];
     const symbols = instruments.map(s => String(s).toUpperCase());
     if (symbols.length === 0) return res.json({ content: [{ type: 'text', text: '{}' }] });
+    // Asked for separately from `extended`, which folds the out-of-hours price
+    // into last_price. A table that keeps the regular close and 1D as its own
+    // columns wants the print beside them instead.
+    const wantOutOfHours = req.body?.outOfHours === true;
+    const yahooExtended = wantOutOfHours ? fetchYahooExtended(symbols) : null;
     // Chunked because the S&P 500 drill-down asks for 500 symbols at once, and
     // a query string that long is where the snapshots endpoint starts refusing
     // or truncating — which would show as a table of zero prices rather than as
@@ -597,12 +660,14 @@ router.post('/quotes', async (req, res) => {
       const part = await alpacaGet('/stocks/snapshots', { symbols: chunk.join(','), feed: SNAPSHOT_FEED }, 60_000);
       Object.assign(data, part || {});
     }
+    const yahoo = await yahooExtended;
     const out = {};
     for (const sym of symbols) {
       const snap = data?.[sym];
       out[sym] = {
         instrument_token: sym,
         ...quoteFromSnapshot(snap, { extended: req.body?.extended === true, feed: SNAPSHOT_FEED }),
+        ...(wantOutOfHours ? { out_of_hours: newestExtended(yahoo[sym], extendedSession(snap, { feed: SNAPSHOT_FEED })) } : {}),
       };
     }
     res.json({ content: [{ type: 'text', text: JSON.stringify(out) }], feed: SNAPSHOT_FEED });
@@ -857,6 +922,9 @@ router.get('/sector-constituents/:symbol', async (req, res) => {
     }
     // Everything else (and the live fallback) → curated list with names.
     const list = US_CONSTITUENTS[sym];
+    if (!list && LIVE_HOLDINGS_FUNDS.has(sym)) {
+      return res.status(502).json({ error: `Holdings for ${labelFor(sym)} are temporarily unavailable. Please retry.` });
+    }
     if (!list) return res.status(404).json({ error: `No constituents defined for ${sym}` });
     const names = await Promise.all(list.map(s => fetchAssetName(s).catch(() => null)));
     res.json({
@@ -1625,6 +1693,7 @@ router.post('/holdings-fundamentals', async (req, res) => {
 // `partial` so the UI can mark the column instead of quietly implying the
 // company earned nothing.
 const { fiscalYearEndMonth, quarterLabel, belowTheLine } = require('./fiscalPeriod');
+const { annotateStatement, netMarginFor } = require('./statementChecks');
 
 const pnlCache = {}; // sym -> { data, ts }
 const PNL_TTL = 6 * 60 * 60 * 1000; // 6h — statements rarely change intraday
@@ -1701,6 +1770,8 @@ const SEC_TAGS = {
   tax: ['IncomeTaxExpenseBenefit'],
   netIncome: ['NetIncomeLoss', 'ProfitLoss'],
   eps: ['EarningsPerShareDiluted', 'EarningsPerShareBasicAndDiluted'],
+  discontinued: ['IncomeLossFromDiscontinuedOperationsNetOfTaxAttributableToReportingEntity',
+    'IncomeLossFromDiscontinuedOperationsNetOfTax'],
 };
 
 // A quarter is ~91 days and a year ~365. The window matters: the same tag holds
@@ -1773,7 +1844,7 @@ function secStatementRows(facts, isQuarter) {
       eps: get('eps'),
       grossMargin: pct(grossProfit, revenue),
       operatingMargin: pct(operatingIncome, revenue),
-      netMargin: pct(netIncome, revenue),
+      ...netMarginFor({ revenue, netIncome, discontinued: get('discontinued') }),
       source: 'SEC',
     });
   }
@@ -1838,9 +1909,14 @@ router.get('/pnl/:symbol', async (req, res) => {
         tax: r.taxProvision ?? null,
         netIncome,
         eps: r.dilutedEPS ?? r.basicEPS ?? null,
+        // Split-adjusted like the EPS beside it; statementChecks scales the
+        // filed EPS by this to compare like with like.
+        dilutedShares: r.dilutedAverageShares ?? null,
         grossMargin: pct(grossProfit, revenue),
         operatingMargin: pct(operatingIncome, revenue),
-        netMargin: pct(netIncome, revenue),
+        ...netMarginFor({ revenue, netIncome,
+          continuingNetIncome: r.netIncomeFromContinuingOperationNetMinorityInterest ?? null,
+          discontinued: r.netIncomeDiscontinuousOperations ?? null }),
       };
     };
     const fetchTS = async (type) => {
@@ -1873,7 +1949,7 @@ router.get('/pnl/:symbol', async (req, res) => {
         const r = await fetch(`https://data.sec.gov/api/xbrl/companyfacts/CIK${cik}.json`, { headers: SEC_UA });
         if (!r.ok) return { annual: [], quarterly: [] };
         const facts = await r.json();
-        return { annual: secStatementRows(facts, false), quarterly: secStatementRows(facts, true) };
+        return { annual: secStatementRows(facts, false), quarterly: secStatementRows(facts, true), gaap: facts?.facts?.['us-gaap'] || null };
       } catch { return { annual: [], quarterly: [] }; }
     };
     const [annualTS, quarterlyTS, sec, legacy] = await Promise.all([
@@ -1884,6 +1960,10 @@ router.get('/pnl/:symbol', async (req, res) => {
     // (a Q4 the filings can't supply as a three-month figure).
     const annual = mergeStatementRows(mergeStatementRows(annualTS, sec.annual), legacy.annual);
     const quarterly = mergeStatementRows(mergeStatementRows(quarterlyTS, sec.quarterly), legacy.quarterly);
+    // Where growth crosses a restatement, and where Yahoo's EPS disagrees with
+    // the filing. Marks only; no figure is replaced. See statementChecks.js.
+    annotateStatement(annual, sec.gaap, false);
+    annotateStatement(quarterly, sec.gaap, true);
 
     // Relabelled AFTER the merge, because the company's fiscal calendar is read
     // from its own annual statement dates and those arrive with the data. A
@@ -1904,7 +1984,7 @@ router.get('/pnl/:symbol', async (req, res) => {
     // residual is stated rather than left looking like an error.
     for (const r of [...annual, ...quarterly]) r.belowTheLine = belowTheLine(r);
 
-    const data = { symbol: sym, currency: 'USD', annual, quarterly, fiscalYearEndMonth: fyEndMonth };
+    const data = { symbol: sym, currency: 'USD', annual, quarterly, fiscalYearEndMonth: fyEndMonth, secChecked: Boolean(sec.gaap) };
     pnlCache[sym] = { data, ts: Date.now() };
     res.json(data);
   } catch (err) {
@@ -2587,4 +2667,6 @@ module.exports = {
   TNX_RANGES, TNX_DEFAULT_RANGE, tnxRangeConfig,
   // Exported for the income-statement merge tests — see /pnl/:symbol.
   mapLegacyStatementRow, mergeStatementRows, secStatementRows,
+  // Exported for the cache-window test — see fetchDailyBars.
+  fetchDailyBars,
 };

@@ -85,6 +85,9 @@ export default function SectorDetailPage({ market }) {
   const [sectorRsi14, setSectorRsi14] = useState(null);
   const [benchmarkReturns, setBenchmarkReturns] = useState(null);
   const [constituents, setConstituents] = useState([]);
+  const [constituentsError, setConstituentsError] = useState(null);
+  const [stockError, setStockError] = useState(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   // Which keys the ROTATION GRAPH plots, when that is deliberately not the
   // constituent list. A broad index drills into all 500 of its members for the
   // table, but 500 dots is not a rotation graph, so the API hands back the
@@ -149,6 +152,16 @@ export default function SectorDetailPage({ market }) {
     const { signal } = controller;
 
     async function load() {
+      setLoading(true);
+      setError(null);
+      setConstituentsError(null);
+      setStockError(null);
+      setConstituents([]);
+      setStockData([]);
+      setHistLoadedCount(0);
+      setRrg(null);
+      setRrgLoading(true);
+      rrgRefreshedAfterLoad.current = false;
       try {
         // Fetch sector + benchmark quotes
         const qRes = await fetchWithAbort(`${API}/api${market.apiPrefix}/quotes`, {
@@ -211,13 +224,16 @@ export default function SectorDetailPage({ market }) {
         }
 
         // Constituents
-        if (constRes.status === 'fulfilled' && constRes.value?.constituents) {
+        if (constRes.status === 'fulfilled' && Array.isArray(constRes.value?.constituents)) {
           setConstituents(constRes.value.constituents);
           setRrgKeys(constRes.value.rrgKeys || []);
           setExcluded(constRes.value.excluded || []);
           if (constRes.value.sector?.name) setFetchedName(constRes.value.sector.name);
-        } else if (constRes.status === 'fulfilled' && constRes.value?.error) {
-          console.warn('sector-constituents:', constRes.value.error);
+          if (!constRes.value.constituents.length) setRrgLoading(false);
+        } else {
+          console.warn('sector-constituents:', constRes.status === 'fulfilled' ? constRes.value?.error : constRes.reason?.message);
+          setConstituentsError('The sector’s holdings could not be loaded. Please try again.');
+          setRrgLoading(false);
         }
 
         setLoading(false);
@@ -229,7 +245,7 @@ export default function SectorDetailPage({ market }) {
 
     load();
     return () => controller.abort();
-  }, [sectorKey, market]);
+  }, [sectorKey, market, loadAttempt]);
 
   // What the RRG is actually plotting. Normally the constituents themselves —
   // but a broad index drills into all 500 members for the table while the
@@ -268,6 +284,7 @@ export default function SectorDetailPage({ market }) {
           signal
         });
         qRaw = await qRes.json();
+        if (!qRes.ok || qRaw.error || qRaw.isError) throw new Error('Stock quotes unavailable');
       } catch (e) {
         if (e.name === 'AbortError' || signal.aborted) return;
         throw e;
@@ -286,7 +303,7 @@ export default function SectorDetailPage({ market }) {
           symbol: c.symbol, name: c.name, key: c.key, token: c.token,
           price, '1D': change1D,
           '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null,
-          rsi14: null, sma20: null, sma200: null, aboveSma20: null, aboveSma200: null,
+          rsi14: null, sma20: null, sma50: null, sma200: null, aboveSma20: null, aboveSma50: null, aboveSma200: null,
           breakout: null, weeklyHighs: null, pastRawMomentum: null, histLoaded: false,
         };
       });
@@ -303,6 +320,7 @@ export default function SectorDetailPage({ market }) {
         const rsi14 = computeRsi14(sorted);
         const closes = sorted.map(cc => cc.close);
         const sma20 = computeSMA(closes, 20);
+        const sma50 = computeSMA(closes, 50);
         const sma200 = computeSMA(closes, 200);
         const lastClose = closes[closes.length - 1];
         const prevDayClose = sorted[sorted.length - 2]?.close;
@@ -328,7 +346,7 @@ export default function SectorDetailPage({ market }) {
           }
         }
         return {
-          returns, price, prevDayClose, rsi14, sma20, sma200, lastClose,
+          returns, price, prevDayClose, rsi14, sma20, sma50, sma200, lastClose,
           breakout: breakoutRank(sorted), weeklyHighs, pastRawMomentum,
         };
       };
@@ -340,7 +358,7 @@ export default function SectorDetailPage({ market }) {
           // 1D from the history series so the row isn't a blank dash / flat
           // 0.00%. 1D uses the last two daily closes, matching how 1W–3Y are
           // derived. A real live price keeps its real-time price and 1D.
-          ? { ...s, ...p.returns, price: s.price || p.price, '1D': (!s.price && p.prevDayClose) ? ((p.price - p.prevDayClose) / p.prevDayClose) * 100 : s['1D'], rsi14: p.rsi14, sma20: p.sma20, sma200: p.sma200, aboveSma20: p.sma20 != null ? p.lastClose >= p.sma20 : null, aboveSma200: p.sma200 != null ? p.lastClose >= p.sma200 : null, breakout: p.breakout, weeklyHighs: p.weeklyHighs, pastRawMomentum: p.pastRawMomentum, histLoaded: true }
+          ? { ...s, ...p.returns, price: s.price || p.price, '1D': (!s.price && p.prevDayClose) ? ((p.price - p.prevDayClose) / p.prevDayClose) * 100 : s['1D'], rsi14: p.rsi14, sma20: p.sma20, sma50: p.sma50, sma200: p.sma200, aboveSma20: p.sma20 != null ? p.lastClose >= p.sma20 : null, aboveSma50: p.sma50 != null ? p.lastClose >= p.sma50 : null, aboveSma200: p.sma200 != null ? p.lastClose >= p.sma200 : null, breakout: p.breakout, weeklyHighs: p.weeklyHighs, pastRawMomentum: p.pastRawMomentum, histLoaded: true }
           : s
       ));
 
@@ -427,7 +445,11 @@ export default function SectorDetailPage({ market }) {
       }
     }
 
-    loadStocks();
+    loadStocks().catch(err => {
+      if (signal.aborted) return;
+      console.warn('Stock data failed:', err.message);
+      setStockError('Stock prices could not be loaded. Please try again.');
+    });
     return () => controller.abort();
   }, [constituents, market]);
 
@@ -657,14 +679,23 @@ export default function SectorDetailPage({ market }) {
       {sectorHistory.length > 0 && <SectorAdxChart bars={sectorHistory} />}
 
       {/* Sector breadth analyser */}
-      <SectorBreadthPanel breadth={sectorBreadth} />
+      <SectorBreadthPanel
+        breadth={sectorBreadth}
+        instrumentHref={market.instrumentHref}
+        loading={!constituentsError && !stockError && histLoadedCount < loadableCount}
+        emptyMessage={constituentsError || stockError
+          ? 'Sector breadth is unavailable until the stock data loads.'
+          : constituents.length === 0
+            ? 'No constituent stocks are available for this sector.'
+            : 'Not enough price history to calculate sector breadth.'}
+      />
     </div>
   );
 
   const renderStocks = () => {
     const totalStocks = loadableCount;
     const pct = totalStocks > 0 ? Math.round((histLoadedCount / totalStocks) * 100) : 0;
-    const stillLoading = histLoadedCount < totalStocks;
+    const stillLoading = !stockError && histLoadedCount < totalStocks;
     return (
     <div className="glass-panel" style={{ padding: '1rem' }}>
       <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -1257,6 +1288,12 @@ export default function SectorDetailPage({ market }) {
       </div>
 
       {/* Tab content */}
+      {(constituentsError || stockError) && (
+        <div role="alert" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginTop: '1rem', padding: '0.8rem 1rem', border: '1px solid rgba(234,179,8,0.25)', borderRadius: '10px', background: 'rgba(234,179,8,0.06)', color: '#eab308', fontSize: '0.85rem' }}>
+          <span>{constituentsError || stockError}</span>
+          <button type="button" onClick={() => setLoadAttempt(attempt => attempt + 1)} style={{ flexShrink: 0, padding: '0.4rem 0.8rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-panel)', color: 'var(--text-primary)', cursor: 'pointer' }}>Retry</button>
+        </div>
+      )}
       <div style={{ paddingTop: '1rem' }}>
         {activeTab === 'overview' && renderOverview()}
         {activeTab === 'rrg' && (

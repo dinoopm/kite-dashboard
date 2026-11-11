@@ -3,8 +3,17 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 import TechnicalAlertsPanel from '../../components/alerts/TechnicalAlertsPanel';
 import { breakoutRank, breakoutLabel } from '../../lib/breakout';
+import { extendedColumn, extendedQuoteLine } from '../../lib/usSession';
 
 const API = import.meta.env.VITE_API_URL || '';
+
+// The out-of-hours print sits beside Price, not in it: Price and 1D stay the
+// regular session, so they still line up with the history columns next to them.
+const extFields = (q) => ({ ext: q?.out_of_hours ?? null, extPct: q?.out_of_hours?.changePct ?? null });
+const extTitle = (ext) => {
+  const line = extendedQuoteLine(ext);
+  return `${line.label} · ${line.when}${line.note ? ` · ${line.note}` : ''} · vs $${ext.base.toFixed(2)} close`;
+};
 
 // ── Per-stock calc helpers (replicated from SectorDetail; the originals are
 //    not exported). Keep behaviour identical so the table reads the same. ──
@@ -121,6 +130,9 @@ const EXPORT_COLUMNS = [
   { label: 'Name', get: s => s.name },
   { label: 'Symbol', get: s => s.symbol },
   { label: 'Price', get: s => s.price || '' },
+  { label: 'Extended session', get: s => s.ext?.session ?? '' },
+  { label: 'Extended price', get: s => s.ext?.price ?? '' },
+  { label: 'Extended %', get: s => (s.extPct == null ? '' : s.extPct.toFixed(2)) },
   ...RET_COLS.map(c => ({ label: `${c} %`, get: s => (s[c] == null ? '' : s[c].toFixed(2)) })),
   { label: 'RSI', get: s => s.rsi14 ?? '' },
   { label: 'SMA20', get: s => (s.aboveSma20 == null ? '' : s.aboveSma20 ? 'Above' : 'Below') },
@@ -209,7 +221,7 @@ export default function UsBasketDetail() {
         try {
           const qRes = await fetchWithAbort(`${API}/api/us/quotes`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ instruments }), signal,
+            body: JSON.stringify({ instruments, outOfHours: true }), signal,
           });
           const qRaw = await qRes.json();
           quotes = qRaw?.content?.[0]?.text ? JSON.parse(qRaw.content[0].text) : {};
@@ -223,7 +235,7 @@ export default function UsBasketDetail() {
         const prevClose = q?.ohlc?.close ?? price;
         const change1D = prevClose ? ((price - prevClose) / prevClose) * 100 : 0;
         return {
-          ...c, price, '1D': change1D,
+          ...c, price, '1D': change1D, ...extFields(q),
           '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null,
           rsi14: null, aboveSma20: null, aboveSma200: null, breakout: null, histLoaded: false,
         };
@@ -286,7 +298,7 @@ export default function UsBasketDetail() {
       try {
         const qRes = await fetchWithAbort(`${API}/api/us/quotes`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments }), signal,
+          body: JSON.stringify({ instruments, outOfHours: true }), signal,
         });
         const qRaw = await qRes.json();
         const quotes = qRaw?.content?.[0]?.text ? JSON.parse(qRaw.content[0].text) : {};
@@ -296,7 +308,7 @@ export default function UsBasketDetail() {
           const price = q?.last_price;
           if (price == null) return s;
           const prevClose = q?.ohlc?.close;
-          return { ...s, price, '1D': prevClose ? ((price - prevClose) / prevClose) * 100 : s['1D'] };
+          return { ...s, price, '1D': prevClose ? ((price - prevClose) / prevClose) * 100 : s['1D'], ...extFields(q) };
         }));
       } catch { /* transient poll failure — keep the last values */ }
     };
@@ -403,6 +415,7 @@ export default function UsBasketDetail() {
   }, [activeTab, loadAlerts]);
 
   const total = constituents?.length || 0;
+  const extColumn = extendedColumn(stockData);
   const th = { padding: '0.6rem 0.4rem', color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.7rem', letterSpacing: '0.4px', textTransform: 'uppercase', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#1e293b', zIndex: 2 };
   const td = { padding: '0.7rem 0.4rem', borderBottom: '1px solid rgba(255,255,255,0.04)', whiteSpace: 'nowrap' };
 
@@ -566,6 +579,7 @@ export default function UsBasketDetail() {
               <tr>
                 {sortableTh('Name', 'name', 'left', { width: '150px' })}
                 {sortableTh('Price', 'price', 'right')}
+                {extColumn && sortableTh(extColumn.label, 'extPct', 'right')}
                 {RET_COLS.map(c => sortableTh(c, c, 'right'))}
                 {sortableTh('RSI', 'rsi14', 'right')}
                 {sortableTh('SMA 20', 'aboveSma20', 'center')}
@@ -586,6 +600,14 @@ export default function UsBasketDetail() {
                   <td style={{ ...td, textAlign: 'right', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
                     {s.price ? `$${s.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : '—'}
                   </td>
+                  {extColumn && (s.ext?.session === extColumn.session ? (
+                    <td title={extTitle(s.ext)} style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                      <div style={{ color: 'var(--text-primary)' }}>${s.ext.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}</div>
+                      <div style={{ fontSize: '0.7rem', color: pctColor(s.ext.changePct) }}>{fmtPct(s.ext.changePct)}</div>
+                    </td>
+                  ) : (
+                    <td style={{ ...td, textAlign: 'right', color: 'var(--text-secondary)' }}>—</td>
+                  ))}
                   {RET_COLS.map(c => (
                     <td key={c} style={{ ...td, textAlign: 'right', color: pctColor(s[c]), fontVariantNumeric: 'tabular-nums' }}>
                       {fmtPct(s[c])}

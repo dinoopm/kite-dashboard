@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   parseDefiance, parseFirstTrust, parseGlobalXCsv, splitCsvLine, cleanSymbol, ISSUER_SOURCES,
+  parseGlobalXPage, parseStockAnalysisPage, getEtfHoldings,
 } = require('./etfHoldings');
 
 // Fixtures are trimmed real responses, captured 2026-08-13. The parsers are
@@ -120,6 +121,92 @@ describe('cleanSymbol', () => {
     assert.equal(cleanSymbol('U-U CN'), null);   // explicitly dropped
     assert.equal(cleanSymbol('336260 KS'), null); // unmapped, has a space
     assert.equal(cleanSymbol('BRK.B'), 'BRK.B');
+  });
+
+  test('supports the new exchange tags without inventing US symbols', () => {
+    assert.equal(cleanSymbol('@TSX-CCO'), 'CCJ');
+    assert.equal(cleanSymbol('@TSX-NXE'), 'NXE');
+    assert.equal(cleanSymbol('@TSX-DML'), 'DNN');
+    assert.equal(cleanSymbol('@TSX-EFR'), 'UUUU');
+    assert.equal(cleanSymbol('@TSX-MGA'), null);
+    assert.equal(cleanSymbol('@LON-KAP'), null);
+    assert.equal(cleanSymbol('=n/a'), null);
+    assert.equal(cleanSymbol('N/A'), null);
+  });
+});
+
+// Shape captured from Global X's redesigned page on 2026-11-01. The public
+// table shows only three holdings, but the streamed component has all rows.
+const embeddedHoldings = [
+  { ticker: 'CCO CN', name: 'CAMECO CORP' },
+  { ticker: 'U-U CN', name: 'SPROTT PHYSICAL URANIUM TR' },
+  { ticker: 'NXE CN', name: 'NEXGEN ENERGY LTD' },
+  { ticker: 'OKLO', name: 'OKLO INC' },
+  { ticker: 'DML CN', name: 'DENISON MINES CORP' },
+  { ticker: '', name: 'CASH' },
+];
+const streamRecord = `96:${JSON.stringify(['$', 'div', null, { children: { holdings: embeddedHoldings } }])}\n`;
+const GLOBALX_PAGE = `<table><tr><td>CCO CN</td></tr></table>
+<script>self.__next_f.push([0])</script>
+<script>self.__next_f.push(${JSON.stringify([1, streamRecord.slice(0, 100)])})</script>
+<script>self.__next_f.push(${JSON.stringify([1, streamRecord.slice(100)])})</script>`;
+const STOCKANALYSIS_PAGE = `<script>data:[
+{no:1,s:"$CCJ",n:"Cameco Corporation",holdingWeight:23.61},
+{no:2,s:"@TSX-NXE",n:"NexGen Energy Ltd.",holdingWeight:6.3},
+{no:3,n:"Centrus Energy Corp.",s:"$LEU",holdingWeight:1.2},
+{no:4,s:"@TSX-MGA",n:"Mega Uranium",holdingWeight:.1},
+{no:5,s:"=n/a",n:"Cash",holdingWeight:.1}]
+</script>`;
+
+describe('redesigned holdings sources', () => {
+  test('reads the full embedded issuer list across stream chunks', () => {
+    assert.deepEqual(parseGlobalXPage(GLOBALX_PAGE), [
+      { symbol: 'CCJ', name: 'CAMECO CORP' },
+      { symbol: 'NXE', name: 'NEXGEN ENERGY LTD' },
+      { symbol: 'OKLO', name: 'OKLO INC' },
+      { symbol: 'DNN', name: 'DENISON MINES CORP' },
+    ]);
+  });
+
+  test('ignores unrelated and malformed issuer scripts', () => {
+    assert.deepEqual(parseGlobalXPage('<script>throw new Error("Do not execute page scripts")</script><script>self.__next_f.push([invalid])</script>'), []);
+  });
+
+  test('supports both fallback field orders and known foreign aliases', () => {
+    assert.deepEqual(parseStockAnalysisPage(STOCKANALYSIS_PAGE), [
+      { symbol: 'CCJ', name: 'Cameco Corporation' },
+      { symbol: 'NXE', name: 'NexGen Energy Ltd.' },
+      { symbol: 'LEU', name: 'Centrus Energy Corp.' },
+    ]);
+  });
+
+  test('decodes quoted company names and deduplicates tickers', () => {
+    const row = `{no:1,s:"$TEST",n:${JSON.stringify('A "Quoted" Company')}}`;
+    assert.deepEqual(parseStockAnalysisPage(`${row}${row}`), [{ symbol: 'TEST', name: 'A "Quoted" Company' }]);
+  });
+
+  test('fetches modern issuer holdings and retains fallback-only names', async t => {
+    const urls = [];
+    t.mock.method(global, 'fetch', async url => {
+      urls.push(url);
+      if (url.includes('globalxetfs.com')) return new Response(GLOBALX_PAGE);
+      if (url.includes('/api/')) return new Response('', { status: 404 });
+      return new Response(STOCKANALYSIS_PAGE);
+    });
+    const rows = await getEtfHoldings('URA');
+    assert.deepEqual(rows.map(row => row.symbol), ['CCJ', 'NXE', 'OKLO', 'DNN', 'LEU']);
+    assert.equal(rows[0].name, 'CAMECO CORP');
+    assert.equal(urls.length, 3);
+  });
+
+  test('the fallback remains usable when the issuer is unavailable', async t => {
+    t.mock.method(global, 'fetch', async url => {
+      if (url.includes('globalxetfs.com')) return new Response('', { status: 503 });
+      if (url.includes('/api/')) return new Response('', { status: 404 });
+      return new Response(STOCKANALYSIS_PAGE);
+    });
+    const rows = await getEtfHoldings('HYDR');
+    assert.deepEqual(rows.map(row => row.symbol), ['CCJ', 'NXE', 'LEU']);
   });
 });
 

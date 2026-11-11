@@ -20,6 +20,9 @@ const cheerio = require('cheerio');
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
 const TTL = 24 * 60 * 60 * 1000;
+const fetchSource = (url) => fetch(url, {
+  headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(12_000),
+});
 const cache = {};    // sym -> { data, ts }
 const inflight = {}; // sym -> Promise
 
@@ -39,6 +42,10 @@ const FOREIGN_US_MAP = {
   'TSX/ABX': 'B',    // Barrick Mining
   'TSX/IMG': 'IAG',  // IAMGOLD
   'TSX/ELD': 'EGO',  // Eldorado Gold
+  'TSX/CCO': 'CCJ',  // Cameco
+  'TSX/NXE': 'NXE',  // NexGen Energy
+  'TSX/EFR': 'UUUU', // Energy Fuels
+  'TSX/DML': 'DNN',  // Denison Mines
   'TSX/LUG': null,   // Lundin Gold — OTC only (LUGDF)
   'TSX/DPM': null,   // DPM Metals — OTC only (DPMLF)
   'TSX/EDV': null,   // Endeavour Mining — OTC only (EDVMF)
@@ -74,7 +81,16 @@ const FOREIGN_US_MAP = {
 // Normalize to a ticker Alpaca can price: letters with an optional dot class
 // (BRK.B). Cash/derivative rows fail the test → dropped.
 const cleanSymbol = (raw) => {
+  if (typeof raw !== 'string') return null;
   let s = (raw || '').replace(/^[$!]/, '').trim().toUpperCase();
+  if (s.startsWith('=') || s === 'N/A') return null;
+  // The new StockAnalysis payload uses @TSX-NXE instead of !tsx/NXE.
+  // Resolve only confirmed aliases; an unrecognized foreign ticker must not
+  // accidentally become a different company with the same US ticker.
+  if (s.startsWith('@')) {
+    const key = s.slice(1).replace('-', '/');
+    return key in FOREIGN_US_MAP ? FOREIGN_US_MAP[key] : null;
+  }
   if (s in FOREIGN_US_MAP) return FOREIGN_US_MAP[s];
   if (s.includes('/')) s = s.split('/').pop(); // "TSX/AEM" -> "AEM"
   return /^[A-Z]{1,6}(\.[A-Z])?$/.test(s) ? s : null;
@@ -83,7 +99,7 @@ const cleanSymbol = (raw) => {
 // ─── SPDR / State Street: full holdings from the daily xlsx ──────────────────
 async function fetchSSGA(sym) {
   const url = `https://www.ssga.com/us/en/intermediary/etfs/library-content/products/fund-data/etfs/us/holdings-daily-us-en-${sym.toLowerCase()}.xlsx`;
-  const resp = await fetch(url, { headers: { 'User-Agent': UA } });
+  const resp = await fetchSource(url);
   if (!resp.ok) throw new Error(`SSGA ${sym} ${resp.status}`);
   const files = fflate.unzipSync(new Uint8Array(await resp.arrayBuffer()));
   const dec = new TextDecoder();
@@ -207,6 +223,63 @@ function parseGlobalXCsv(text) {
   return out;
 }
 
+// Global X's new page publishes all holdings in JSON React stream records.
+// The visible table contains only three rows. Read the embedded data as JSON,
+// without evaluating any script from the page, and retain our US alias rules.
+function parseGlobalXPage(html) {
+  const $ = cheerio.load(html);
+  const chunks = [];
+  $('script').each((_, script) => {
+    const match = ($(script).html() || '').match(/^\s*self\.__next_f\.push\((\[[\s\S]*\])\)\s*;?\s*$/);
+    if (!match) return;
+    try {
+      const chunk = JSON.parse(match[1])[1];
+      if (typeof chunk === 'string') chunks.push(chunk);
+    } catch { /* An unrelated or incomplete stream entry is not holdings data. */ }
+  });
+
+  const out = [];
+  const seen = new Set();
+  const visit = (value) => {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value.holdings)) {
+      for (const row of value.holdings) {
+        const symbol = cleanSymbol(row?.ticker);
+        if (!symbol || seen.has(symbol)) continue;
+        seen.add(symbol);
+        out.push({ symbol, name: (row.name || symbol).trim() });
+      }
+      return;
+    }
+    for (const child of Object.values(value)) visit(child);
+  };
+  for (const record of chunks.join('').split('\n')) {
+    if (!record.includes('"holdings":')) continue;
+    try { visit(JSON.parse(record.slice(record.indexOf(':') + 1))); }
+    catch { /* Stream control records are not JSON holdings records. */ }
+  }
+  return out;
+}
+
+function parseStockAnalysisPage(html) {
+  const out = [];
+  const seen = new Set();
+  // Field order is not a contract: the source changed n,s into s,n. Match
+  // each holding row first, then read the named string fields independently.
+  for (const match of html.matchAll(/\{no:\d+,[^{}]*\}/g)) {
+    const name = match[0].match(/(?:^|,)n:("(?:\\.|[^"\\])*")/);
+    const ticker = match[0].match(/(?:^|,)s:("(?:\\.|[^"\\])*")/);
+    if (!name || !ticker) continue;
+    try {
+      const symbol = cleanSymbol(JSON.parse(ticker[1]));
+      if (!symbol || seen.has(symbol)) continue;
+      seen.add(symbol);
+      out.push({ symbol, name: JSON.parse(name[1]).trim() || symbol });
+    } catch { /* Ignore malformed rows rather than guessing a ticker. */ }
+  }
+  return out;
+}
+
 // Fields are quoted only when they contain a comma ("20,013,978.00"), so a
 // split on commas alone corrupts every row after the first quoted number.
 function splitCsvLine(line) {
@@ -238,14 +311,18 @@ const ISSUER_SOURCES = {
 
 async function fetchIssuer(sym) {
   const src = ISSUER_SOURCES[sym];
-  const resp = await fetch(src.url, { headers: { 'User-Agent': UA }, redirect: 'follow' });
+  const resp = await fetchSource(src.url);
   if (!resp.ok) throw new Error(`issuer ${sym} ${resp.status}`);
   let body = await resp.text();
 
   if (src.csvFrom) {
     const m = body.match(new RegExp(`https?://[^"'\\\\\\s]*${src.csvFrom}_full-holdings_\\d+\\.csv`, 'i'));
-    if (!m) throw new Error(`issuer ${sym}: no holdings CSV link`);
-    const csv = await fetch(m[0], { headers: { 'User-Agent': UA } });
+    if (!m) {
+      const embedded = parseGlobalXPage(body);
+      if (embedded.length) return embedded;
+      throw new Error(`issuer ${sym}: no holdings CSV or embedded list`);
+    }
+    const csv = await fetchSource(m[0]);
     if (!csv.ok) throw new Error(`issuer ${sym} csv ${csv.status}`);
     body = await csv.text();
   }
@@ -270,17 +347,17 @@ async function fetchStockAnalysis(sym) {
     out.push({ symbol, name: (rawName || symbol).trim() });
   };
 
-  const resp = await fetch(`https://stockanalysis.com/api/symbol/e/${sym}/holdings`, { headers: { 'User-Agent': UA } });
+  const resp = await fetchSource(`https://stockanalysis.com/api/symbol/e/${sym}/holdings`);
   if (resp.ok) {
     const j = await resp.json().catch(() => null);
     for (const h of j?.data?.holdings || []) push(h.s, h.n);
   }
 
   if (!out.length) {
-    const page = await fetch(`https://stockanalysis.com/etf/${sym.toLowerCase()}/holdings/`, { headers: { 'User-Agent': UA } });
+    const page = await fetchSource(`https://stockanalysis.com/etf/${sym.toLowerCase()}/holdings/`);
     if (!page.ok) throw new Error(`StockAnalysis ${sym} page ${page.status}`);
     const html = await page.text();
-    for (const m of html.matchAll(/\{no:\d+,n:"([^"]*)",s:"([^"]*)"/g)) push(m[2], m[1]);
+    for (const row of parseStockAnalysisPage(html)) push(row.symbol, row.name);
   }
 
   if (!out.length) throw new Error(`StockAnalysis ${sym}: no holdings`);
@@ -362,5 +439,6 @@ module.exports = {
   getEtfHoldings,
   // Exported for tests: the parsers are pure, so they are checked against
   // trimmed real responses rather than by hitting five fund websites.
-  parseDefiance, parseFirstTrust, parseGlobalXCsv, splitCsvLine, cleanSymbol, ISSUER_SOURCES,
+  parseDefiance, parseFirstTrust, parseGlobalXCsv, parseGlobalXPage, parseStockAnalysisPage,
+  splitCsvLine, cleanSymbol, ISSUER_SOURCES,
 };

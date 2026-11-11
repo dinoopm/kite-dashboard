@@ -223,6 +223,21 @@ describe('secStatementRows', () => {
     assert.ok(Math.abs(q2.netMargin - 54.86) < 0.01, `net margin was ${q2.netMargin}`);
   });
 
+  // Honeywell FY2025: revenue excludes Solstice, net income still includes its
+  // $304M, so the margin has to be taken on the continuing part.
+  test('net margin uses continuing profit when the filing reports discontinued operations', () => {
+    const fy25 = (val) => ({ units: { USD: [{ start: '2025-01-01', end: '2025-12-31', val, form: '10-K', filed: '2026-02-17' }] } });
+    const facts = { facts: { 'us-gaap': {
+      RevenueFromContractWithCustomerExcludingAssessedTax: fy25(37442e6),
+      NetIncomeLoss: fy25(4729e6),
+      IncomeLossFromDiscontinuedOperationsNetOfTax: fy25(304e6),
+    } } };
+    const fy = secStatementRows(facts, false)[0];
+    assert.equal(fy.netIncome, 4729e6);
+    assert.equal(fy.netMarginBasis, 'continuing');
+    assert.ok(Math.abs(fy.netMargin - 11.818) < 0.01, `net margin was ${fy.netMargin}`);
+  });
+
   // A full row, unlike the quoteSummary fallback — so it must not be marked.
   test('is a complete row, not a partial one', () => {
     assert.ok(!rows().find(r => r.endDate === '2026-06-30').partial);

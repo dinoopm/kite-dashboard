@@ -1,4 +1,5 @@
 import { measurementDate } from '../lib/priceMeasurement';
+import { badgePlacement } from '../lib/measurementBadge';
 
 const number = value => value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signed = value => `${value >= 0 ? '+' : '−'}${number(Math.abs(value))}`;
@@ -9,8 +10,12 @@ export default function PriceMeasurementOverlay({ measurement }) {
   const { from, to, width, height } = geometry;
   const color = (result?.change ?? 0) >= 0 ? '#34d399' : '#fb7185';
   const badgeWidth = Math.min(280, width - 16);
-  const left = Math.max(8, Math.min(((from.x + (to?.x ?? from.x)) / 2) - badgeWidth / 2, width - badgeWidth - 8));
-  const top = Math.max(8, Math.min(Math.min(from.y, to?.y ?? from.y) - 105, height - 110));
+  // Kept off the selection it describes: above, below, beside, or — when the
+  // selection fills the plot — the corner hiding least of it. It used to aim
+  // above and clamp to the top edge when there was no room, which put it
+  // straight over any measurement reaching a peak. See lib/measurementBadge.
+  // Height is the rendered badge's (four lines and padding), with a little spare.
+  const { left, top } = badgePlacement({ from, to, width, height, badgeWidth, badgeHeight: 100 });
   const target = end || preview;
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 4, pointerEvents: 'none', overflow: 'hidden' }}>

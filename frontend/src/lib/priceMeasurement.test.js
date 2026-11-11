@@ -19,17 +19,18 @@ function setup() {
   const handlers = {}, events = new Map(), frames = new Map();
   let latest, pan = 0, zoom = 1, id = 0;
   const win = { addEventListener: (k, f) => events.set(k, f), removeEventListener: k => events.delete(k), requestAnimationFrame: f => { frames.set(++id, f); return id; }, cancelAnimationFrame: n => frames.delete(n) };
-  const el = { ownerDocument: { defaultView: win }, style: { cursor: 'default' }, clientHeight: 480, addEventListener: (k, f) => events.set(k, f), removeEventListener: k => events.delete(k) };
-  const ts = { width: () => 800, height: () => 30, timeToCoordinate: t => (t.day - 1) * 20 + pan, subscribeVisibleLogicalRangeChange: f => { handlers.range = f; }, unsubscribeVisibleLogicalRangeChange: () => delete handlers.range, subscribeSizeChange: f => { handlers.size = f; }, unsubscribeSizeChange: () => delete handlers.size };
+  const el = { ownerDocument: { defaultView: win }, style: { cursor: 'default' }, clientHeight: 480, addEventListener: (k, f) => events.set(k, f), removeEventListener: k => events.delete(k), getBoundingClientRect: () => ({ left: 0, top: 0 }) };
+  const ts = { width: () => 800, height: () => 30, timeToCoordinate: t => (t.day - 1) * 20 + pan, coordinateToTime: x => ({ year: 2026, month: 10, day: Math.round((x - pan) / 20) + 1 }), coordinateToLogical: x => (x - pan) / 20, subscribeVisibleLogicalRangeChange: f => { handlers.range = f; }, unsubscribeVisibleLogicalRangeChange: () => delete handlers.range, subscribeSizeChange: f => { handlers.size = f; }, unsubscribeSizeChange: () => delete handlers.size };
   const applied = [];
   const options = { handleScroll: { pressedMouseMove: true, mouseWheel: false }, handleScale: { mouseWheel: true, axisPressedMouseMove: { time: true, price: true } } };
-  const chart = { timeScale: () => ts, options: () => options, applyOptions: x => applied.push(x), subscribeClick: f => { handlers.click = f; }, unsubscribeClick: () => delete handlers.click, subscribeCrosshairMove: f => { handlers.move = f; }, unsubscribeCrosshairMove: () => delete handlers.move };
+  const chart = { timeScale: () => ts, priceScale: () => ({ width: () => 0 }), options: () => options, applyOptions: x => applied.push(x), subscribeClick: f => { handlers.click = f; }, unsubscribeClick: () => delete handlers.click, subscribeCrosshairMove: f => { handlers.move = f; }, unsubscribeCrosshairMove: () => delete handlers.move };
   const series = { coordinateToPrice: y => (450 - y) / zoom, priceToCoordinate: price => 450 - price * zoom };
   const controller = createPriceMeasurement(chart, series, el, state => { latest = state; });
   const click = (price, day) => handlers.click({ time: { year: 2026, month: 10, day }, logical: day, point: { x: day * 20, y: 450 - price * zoom } });
   const move = (price, day) => handlers.move({ time: { year: 2026, month: 10, day }, logical: day, point: { x: day * 20, y: 450 - price * zoom } });
   const flush = () => { for (const f of frames.values()) f(); frames.clear(); };
-  return { controller, handlers, events, applied, click, move, flush, latest: () => latest, el, options, frames, transform(x, scale) { pan = x; zoom = scale; handlers.range(); flush(); } };
+  const pointer = (type, x, y) => events.get(type)({ clientX: x, clientY: y, pointerId: 1, preventDefault() {}, stopPropagation() {} });
+  return { controller, handlers, events, applied, click, move, flush, pointer, latest: () => latest, el, options, frames, transform(x, scale) { pan = x; zoom = scale; handlers.range(); flush(); } };
 }
 test('two clicks preview then freeze the result and restore the original chart interaction settings', () => {
   const m = setup();
@@ -67,4 +68,55 @@ test('axes and missing times are ignored, and clear/Escape and disposal clean up
   m.controller.dispose();
   assert.equal(m.events.size, 0); assert.equal(Object.keys(m.handlers).length, 0); assert.equal(m.frames.size, 0);
   assert.deepEqual(m.applied.at(-1), m.options);
+});
+
+// A finished measurement used to be frozen. Either end can now be dragged, and
+// the chart's own panning is paused only for the drag.
+test('a finished measurement can be stretched by dragging either end, and the chart pans again afterwards', () => {
+  const m = setup(); m.controller.toggle(); m.click(100, 1); m.click(125, 5);
+  // The end sits at x = (5 - 1) * 20 = 80, y = 450 - 125 = 325.
+  m.pointer('pointerdown', 82, 323);
+  assert.equal(m.latest().dragging, 'end');
+  assert.deepEqual(m.applied.at(-1), { handleScroll: false, handleScale: false });
+  m.pointer('pointermove', 180, 300);
+  assert.equal(m.latest().end.price, 150);
+  assert.equal(m.latest().result.percent, 50, 'the reading follows the drag');
+  assert.equal(m.latest().start.price, 100, 'the other end stays put');
+  m.pointer('pointerup', 180, 300);
+  assert.equal(m.latest().dragging, null);
+  assert.deepEqual(m.applied.at(-1), m.options, 'panning is restored on release');
+  m.controller.dispose();
+});
+test('the start point drags too', () => {
+  const m = setup(); m.controller.toggle(); m.click(100, 1); m.click(125, 5);
+  m.pointer('pointerdown', 1, 351);
+  assert.equal(m.latest().dragging, 'start');
+  m.pointer('pointermove', 40, 350);
+  assert.equal(m.latest().start.price, 100);
+  assert.equal(m.latest().result.percent, 25);
+  m.pointer('pointerup', 40, 350);
+  m.controller.dispose();
+});
+test('grabbing the chart away from both ends leaves panning alone', () => {
+  const m = setup(); m.controller.toggle(); m.click(100, 1); m.click(125, 5);
+  const before = m.applied.length;
+  m.pointer('pointerdown', 300, 100);
+  assert.equal(m.latest().dragging ?? null, null);
+  assert.equal(m.applied.length, before, 'no options changed, so the chart pans as usual');
+  m.controller.dispose();
+});
+test('a drag outside the price pane keeps the last good position', () => {
+  const m = setup(); m.controller.toggle(); m.click(100, 1); m.click(125, 5);
+  m.pointer('pointerdown', 80, 325);
+  m.pointer('pointermove', 180, 300);
+  m.pointer('pointermove', 900, 300);
+  assert.equal(m.latest().end.price, 150);
+  m.pointer('pointerup', 900, 300);
+  m.controller.dispose();
+});
+test('nothing is draggable while a measurement is still being placed', () => {
+  const m = setup(); m.controller.toggle(); m.click(100, 1);
+  m.pointer('pointerdown', 0, 350);
+  assert.equal(m.latest().dragging ?? null, null);
+  m.controller.dispose();
 });

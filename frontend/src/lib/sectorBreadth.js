@@ -2,12 +2,13 @@
 // the per-stock technicals already computed on the sector-detail pages. No data
 // fetch: it reads rows already loaded and recomputes as more stream in.
 //
-// A `row` is one enriched constituent with (at least): aboveSma20, aboveSma200
-// (bool | null), rsi14 (number | null), breakout (0..7 | null; ≥2 = at a new
-// high, 1 = near, 0 = below), '1D' (percent | null), name (string).
+// A `row` is one enriched constituent with (at least): aboveSma20, aboveSma50,
+// aboveSma200 (bool | null), rsi14 (number | null), breakout (0..7 | null; ≥2 =
+// at a new high, 1 = near, 0 = below), '1D' (percent | null), name (string).
 //
-// Every dimension excludes rows whose relevant field is null, so each degrades
-// independently while the table is still loading.
+// A row counts as loaded once its history is in (aboveSma20 known, i.e. ≥20
+// sessions). Every dimension then excludes rows whose own field is null, so
+// each degrades independently while the table is still loading.
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -26,18 +27,33 @@ export function computeSectorBreadth(rows) {
   const loaded = (rows || []).filter(s => s && s.aboveSma20 !== null && s.aboveSma20 !== undefined);
   if (loaded.length === 0) return null;
 
-  // ── Moving-average breadth (mirrors the previous maGaugeData memo) ──
-  const above20 = loaded.filter(s => s.aboveSma20);
+  // ── Moving-average breadth ──
+  // The short-term card reads the 50-day average. The 20-day one flipped with
+  // a week's noise; the 50-day is the intermediate trend most breadth gauges
+  // quote. A listing with 20–49 sessions has no 50-day average yet: it stays
+  // in the other tiles but out of this percentage, rather than counting as
+  // "below" for lack of history.
+  const with50 = loaded.filter(s => s.aboveSma50 != null);
+  const above50 = with50.filter(s => s.aboveSma50);
+  const below50 = with50.filter(s => !s.aboveSma50);
+  const pct50 = with50.length ? (above50.length / with50.length) * 100 : 0;
   const above200 = loaded.filter(s => s.aboveSma200);
-  const pct20 = (above20.length / loaded.length) * 100;
   const pct200 = (above200.length / loaded.length) * 100;
+  const below200 = loaded.filter(s => s.aboveSma200 === false);
+  // Symbol and token travel with the name so the panel can link each stock.
+  const ref = s => ({ name: s.name, symbol: s.symbol, token: s.token });
   const sma = {
-    pct20,
+    pct50,
+    count50: with50.length,
     pct200,
-    above20names: above20.map(s => s.name),
-    below20names: loaded.filter(s => !s.aboveSma20).map(s => s.name),
+    above50names: above50.map(s => s.name),
+    below50names: below50.map(s => s.name),
     above200names: above200.map(s => s.name),
-    below200names: loaded.filter(s => s.aboveSma200 === false).map(s => s.name),
+    below200names: below200.map(s => s.name),
+    above50stocks: above50.map(ref),
+    below50stocks: below50.map(ref),
+    above200stocks: above200.map(ref),
+    below200stocks: below200.map(ref),
   };
 
   // ── Advance / decline (today) ──
@@ -73,7 +89,7 @@ export function computeSectorBreadth(rows) {
   const oversoldPenalty = clamp((oversoldRate - 0.40) / 0.60, 0, 1) * 10;
 
   const rawScore =
-      0.30 * pct20
+      0.30 * pct50
     + 0.25 * pct200
     + 0.20 * advDecline.pctAdv
     + 0.25 * (100 * newHighParticipation)

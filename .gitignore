@@ -50,3 +50,6 @@ backend/data/kite-sessions/
 
 # Local public-market validation artifacts and source archives (never credentials).
 backend/data/us-risk-severity/
+
+# Last live CNN Fear & Greed reading, kept across restarts (see cnnFearGreed.js).
+backend/data/cnn-fear-greed/
