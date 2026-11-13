@@ -44,6 +44,35 @@ describe('quadrantOf / compassOf', () => {
       }
     }
   })
+
+  // Plain words are only worth having if they say what the coordinates say.
+  // RS-Momentum is the rate of change of RS-Ratio: when both move the same
+  // way the change is speeding up, when they split it is slowing down.
+  test('diagonal headlines say "faster" or "more slowly" exactly as the maths does', () => {
+    for (const q of ['Leading', 'Weakening', 'Lagging', 'Improving']) {
+      for (const c of ['up-right', 'down-left']) {
+        const h = headlineFor(q, c)
+        assert.match(h, /faster|picking up speed/, `${q}:${c} — ${h}`)
+        assert.doesNotMatch(h, /more slowly/, `${q}:${c} — ${h}`)
+      }
+      for (const c of ['down-right', 'up-left']) {
+        const h = headlineFor(q, c)
+        assert.match(h, /more slowly/, `${q}:${c} — ${h}`)
+        assert.doesNotMatch(h, /faster|picking up speed/, `${q}:${c} — ${h}`)
+      }
+    }
+  })
+
+  test('headlines open with which side of the benchmark the sector is on, in plain words', () => {
+    for (const q of ['Leading', 'Weakening', 'Lagging', 'Improving']) {
+      const ahead = q === 'Leading' || q === 'Weakening'
+      for (const c of ['up', 'up-right', 'right', 'down-right', 'down', 'down-left', 'left', 'up-left', 'still']) {
+        const h = headlineFor(q, c)
+        assert.match(h, ahead ? /^(Still )?[Bb]eating \{B\}/ : /^Behind \{B\}/, `${q}:${c} — ${h}`)
+        assert.doesNotMatch(h, /momentum|relative strength|axes|axis|RS-/i, `${q}:${c} — ${h}`)
+      }
+    }
+  })
 })
 
 describe('tailWindow', () => {
@@ -111,7 +140,7 @@ describe('describeTail', () => {
     const r = describeTail(semis, { tailLength: 12, benchmark: 'SPY' })
     assert.equal(r.quadrant, 'Weakening')
     assert.equal(r.heading.compass, 'down-left')
-    assert.match(r.headline, /Still ahead of SPY, but the lead is shrinking/)
+    assert.equal(r.headline, 'Still beating SPY, but the lead is shrinking, and faster.')
     assert.equal(+r.delta.rsRatio.toFixed(1), -18.1)
     assert.equal(r.weeks, 8)
     assert.match(r.facts[0].text, /In Weakening for 9\+ weeks/)
@@ -121,7 +150,7 @@ describe('describeTail', () => {
     const flatRatio = series([[96, 95], [95, 94.5], [94, 94], [94, 94.5], [94, 95.2]])
     const r = describeTail(flatRatio, { tailLength: 12, benchmark: 'SPY' })
     assert.equal(r.heading.compass, 'up')
-    assert.match(r.headline, /momentum is picking up; relative strength flat/)
+    assert.match(r.headline, /gap held steady while recent weeks picked up/)
     assert.match(r.facts.find(f => f.kind === 'turn').text, /Momentum has risen for 2 weeks after falling for 2 weeks/)
   })
 
@@ -130,7 +159,7 @@ describe('describeTail', () => {
     assert.equal(r.quadrant, 'Lagging')
     assert.match(r.headline, /^Behind SPY/)
     assert.equal(r.facts[0].kind, 'crossing')
-    assert.match(r.facts[0].text, /Crossed Weakening → Lagging 4 weeks ago/)
+    assert.match(r.facts[0].text, /Moved from Weakening into Lagging 4 weeks ago/)
   })
 
   // The guardrail: this is commentary on a signal with no track record, so it
@@ -148,7 +177,7 @@ describe('describeTail', () => {
     const tiny = series([[100.5, 100.5], [100.52, 100.52], [100.54, 100.54]])
     const r = describeTail(tiny, { tailLength: 12, benchmark: 'SPY', group: { typicalStep: 2 } })
     assert.equal(r.heading.compass, 'still')
-    assert.match(r.headline, /holding position/)
+    assert.match(r.headline, /little change lately/)
     // Without a group yardstick it keeps its direction.
     assert.equal(describeTail(tiny, { tailLength: 12 }).heading.compass, 'up-right')
   })
@@ -163,7 +192,7 @@ describe('describeTail', () => {
     const r = describeTail(industrials, { tailLength: 3, scrubEnd: 1, benchmark: 'SPY' })
     assert.equal(r.latest.rsRatio, 99.6)
     assert.equal(r.quadrant, 'Lagging')
-    assert.match(r.facts[0].text, /Crossed Weakening → Lagging in the latest week/)
+    assert.match(r.facts[0].text, /Moved from Weakening into Lagging in the latest week/)
   })
 })
 

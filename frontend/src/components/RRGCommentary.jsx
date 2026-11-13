@@ -11,10 +11,10 @@ import './RRGCommentary.css';
 // trail on the chart; pinning it keeps the highlight while you read.
 
 const QUADRANT_MEANING = {
-  Leading: 'ahead of {B}, momentum rising',
-  Weakening: 'ahead of {B}, momentum falling',
-  Lagging: 'behind {B}, momentum falling',
-  Improving: 'behind {B}, momentum rising',
+  Leading: 'beating {B}, lead growing',
+  Weakening: 'beating {B}, lead shrinking',
+  Lagging: 'behind {B}, gap widening',
+  Improving: 'behind {B}, gap closing',
 };
 const COMPASS_LABEL = {
   up: 'Up', 'up-right': 'Up & right', right: 'Right', 'down-right': 'Down & right',
@@ -110,8 +110,11 @@ function SectorCard({ read, index, color, label, subtitle, plotted, pinned, focu
             <span className="rrgc-quadrant" style={{ color: qc.text, borderColor: `${qc.border}55`, background: qc.bg }}>{read.quadrant}</span>
             <HeadingChip heading={read.heading} />
             {fresh && <span className="rrgc-chip is-fresh">New in {read.quadrant}</span>}
-            {read.pace === 'accelerating' && <span className="rrgc-chip">Speeding up</span>}
-            {read.pace === 'slowing' && <span className="rrgc-chip">Slowing</span>}
+            {/* Size of the weekly steps on the chart — worded apart from the
+                headline's "faster" / "more slowly", which is about the lead
+                itself, so the two can disagree without contradicting. */}
+            {read.pace === 'accelerating' && <span className="rrgc-chip" title="Recent weekly moves on the chart are bigger than earlier ones">Bigger moves</span>}
+            {read.pace === 'slowing' && read.heading?.compass !== 'still' && <span className="rrgc-chip" title="Recent weekly moves on the chart are smaller than earlier ones">Smaller moves</span>}
           </div>
         </div>
         {plotted ? (
@@ -133,7 +136,7 @@ function SectorCard({ read, index, color, label, subtitle, plotted, pinned, focu
 
       {read.weeks > 0 && (
         <dl className="rrgc-stats" aria-label={`Change over ${read.weeks} weeks`}>
-          <div className="rrgc-stats-cap">Across the tail · {read.weeks} wk{read.weeks === 1 ? '' : 's'}</div>
+          <div className="rrgc-stats-cap">Change over {read.weeks} wk{read.weeks === 1 ? '' : 's'}</div>
           <StatRow label="RS-Ratio" from={read.first.rsRatio} to={read.latest.rsRatio} />
           <StatRow label="Momentum" from={read.first.rsMomentum} to={read.latest.rsMomentum} />
         </dl>
@@ -291,7 +294,7 @@ export default function RRGCommentary({
       <div className="rrgc-head">
         <div>
           <p className="rrgc-lede">
-            How each tail moved over the {tailLength} weeks to <strong>{windowEnd ? fmtDate(windowEnd) : '—'}</strong>, measured against <strong>{B}</strong>.
+            How each sector moved against <strong>{B}</strong> over the {tailLength} weeks to <strong>{windowEnd ? fmtDate(windowEnd) : '—'}</strong>.
           </p>
         </div>
         <div className="rrgc-controls">
@@ -328,7 +331,7 @@ export default function RRGCommentary({
           </div>
 
           <div className="rrgc-tile">
-            <div className="rrgc-tile-label">Ahead of {B}</div>
+            <div className="rrgc-tile-label">Beating {B}</div>
             <div className="rrgc-tile-value">{summary.ahead}<span className="rrgc-tile-of"> / {summary.total}</span></div>
             <div className="rrgc-tile-note">RS-Ratio at or above 100</div>
           </div>
@@ -376,7 +379,8 @@ export default function RRGCommentary({
         <strong>Descriptive only.</strong> This reads position and movement straight off the tails above.
         RRG rotation is not a scored signal in this app (it has no entry in the signal registry), so nothing here is a forecast —
         a sector in Improving has no measured tendency to reach Leading next.
-        RS-Ratio ≥ 100 means ahead of {B} on a smoothed basis; RS-Momentum ≥ 100 means that relative trend is gaining.
+        How to read the numbers: <strong>RS-Ratio</strong> above 100 means the sector has been beating {B} over recent months, below 100 means behind it.
+        <strong>Momentum</strong> is how fast that lead or gap is changing — above 100 it is moving in the sector’s favour, below 100 against it.
       </p>
       </div>
       )}

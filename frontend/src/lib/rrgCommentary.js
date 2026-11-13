@@ -132,43 +132,56 @@ export function paceOf(tail) {
   return r >= PACE_RATIO ? 'accelerating' : r <= 1 / PACE_RATIO ? 'slowing' : 'steady'
 }
 
-// Headline by (where it is) × (which way it moved over the last two weeks).
-// Hand-written rather than generated, so each can be checked as English and
-// as RRG — e.g. "Weakening, moving up-right" is momentum recovering while the
-// sector is still ahead, not a sector "heading to Leading". Diagonals depend
-// on the quadrant; straight moves (one axis flat) read the same in either
+// Headline by (where it is) × (which way it moved over the last two weeks),
+// in plain words — no "axes", "momentum" or "relative strength". The chart
+// already speaks RRG; the headline is for someone who doesn't.
+//
+// The vocabulary maps onto the two coordinates:
+//   RS-Ratio ≥ 100      → "beating {B}"; below → "behind {B}".
+//   RS-Ratio rising     → the lead grows / the gap closes; falling → the reverse.
+//   RS-Momentum         → how fast that is happening. The backend computes it
+//                         as RS-Ratio over its own moving average, so it acts
+//                         as RS-Ratio's rate of change (the standard RRG
+//                         reading), and a move where both coordinates go the
+//                         same way (up-right, down-left) is "faster" (or
+//                         "picking up speed"), and one where they split
+//                         (down-right, up-left) is "but more slowly". A test
+//                         holds every diagonal to that rule.
+// Hand-written rather than generated, so each can be checked as English and as
+// RRG. Diagonals depend on the quadrant ("Still beating" only makes sense in
+// Weakening); straight moves (one coordinate flat) read the same in either
 // quadrant on that side of 100, so they are keyed by side.
 const HEADLINES = {
-  'Leading:up-right': 'Ahead of {B} and pulling further away — relative strength and momentum both rising.',
-  'Leading:down-right': 'Still gaining on {B}, but momentum is cooling.',
-  'Leading:down-left': 'Still ahead of {B}, but giving ground on both axes.',
-  'Leading:up-left': 'Ahead of {B}; momentum firming while relative strength eases.',
-  'Weakening:up-right': 'Ahead of {B}, and momentum has turned back up.',
-  'Weakening:down-right': 'Relative strength still rising against {B}, but momentum is falling.',
-  'Weakening:down-left': 'Still ahead of {B}, but the lead is shrinking — both axes falling.',
-  'Weakening:up-left': 'Lead over {B} is shrinking, though momentum is turning up.',
-  'Lagging:up-right': 'Behind {B}, but recovering on both axes.',
-  'Lagging:down-right': 'Behind {B}; relative strength ticking up while momentum still falls.',
-  'Lagging:down-left': 'Behind {B} and still losing ground on both axes.',
-  'Lagging:up-left': 'Behind {B}, but momentum has started to turn up.',
-  'Improving:up-right': 'Closing the gap on {B} — relative strength and momentum both rising.',
-  'Improving:down-right': 'Relative strength still rising, but the momentum burst is fading.',
-  'Improving:down-left': 'Recovery against {B} is stalling — both axes slipping back.',
-  'Improving:up-left': 'Momentum rising while relative strength against {B} still slips.',
-  'ahead:up': 'Ahead of {B}; momentum picking up while relative strength holds flat.',
-  'ahead:down': 'Ahead of {B}; momentum fading while relative strength holds flat.',
-  'ahead:right': 'Ahead of {B} and widening the lead, with momentum flat.',
-  'ahead:left': 'Ahead of {B}, but the lead is narrowing, with momentum flat.',
-  'behind:up': 'Behind {B}, but momentum is picking up; relative strength flat.',
-  'behind:down': 'Behind {B}, with momentum fading; relative strength flat.',
-  'behind:right': 'Behind {B}, but closing the gap, with momentum flat.',
-  'behind:left': 'Behind {B} and falling further back, with momentum flat.',
+  'Leading:up-right': 'Beating {B}, and the lead is growing faster.',
+  'Leading:down-right': 'Beating {B}; the lead is still growing, but more slowly.',
+  'Leading:down-left': 'Beating {B}, but the lead is now shrinking, and faster.',
+  'Leading:up-left': 'Beating {B}; the lead is shrinking, but more slowly.',
+  'Weakening:up-right': 'Still beating {B}, and the lead is growing again, picking up speed.',
+  'Weakening:down-right': 'Still beating {B}; the lead is growing, but more slowly.',
+  'Weakening:down-left': 'Still beating {B}, but the lead is shrinking, and faster.',
+  'Weakening:up-left': 'Still beating {B}; the lead is shrinking, but more slowly.',
+  'Lagging:up-right': 'Behind {B}, but has started catching up, picking up speed.',
+  'Lagging:down-right': 'Behind {B}; the gap is closing, but more slowly.',
+  'Lagging:down-left': 'Behind {B}, and the gap is widening faster.',
+  'Lagging:up-left': 'Behind {B}; the gap is still widening, but more slowly.',
+  'Improving:up-right': 'Behind {B}, but closing the gap, and faster.',
+  'Improving:down-right': 'Behind {B}; still closing the gap, but more slowly.',
+  'Improving:down-left': 'Behind {B}; the catch-up has reversed and the gap is widening faster.',
+  'Improving:up-left': 'Behind {B}; the gap is widening again, but more slowly.',
+  'ahead:up': 'Beating {B}; the lead held steady while recent weeks picked up.',
+  'ahead:down': 'Beating {B}; the lead held steady while recent weeks softened.',
+  'ahead:right': 'Beating {B}, and the lead is growing at a steady pace.',
+  'ahead:left': 'Beating {B}, but the lead is shrinking at a steady pace.',
+  'behind:up': 'Behind {B}; the gap held steady while recent weeks picked up.',
+  'behind:down': 'Behind {B}; the gap held steady while recent weeks softened.',
+  'behind:right': 'Behind {B}, but closing the gap at a steady pace.',
+  'behind:left': 'Behind {B}, and the gap is widening at a steady pace.',
 }
 const STILL_HEADLINES = {
-  Leading: 'Ahead of {B} and holding position — little movement lately.',
-  Weakening: 'Ahead of {B}, momentum soft, but barely moving lately.',
-  Lagging: 'Behind {B} and stuck there — little movement lately.',
-  Improving: 'Behind {B} with firm momentum, but barely moving lately.',
+  Leading: 'Beating {B}, with little change lately.',
+  Weakening: 'Still beating {B}, with little change lately.',
+  Lagging: 'Behind {B}, with little change lately.',
+  Improving: 'Behind {B}, with little change lately.',
 }
 const sideOf = (quadrant) => (quadrant === 'Leading' || quadrant === 'Weakening' ? 'ahead' : 'behind')
 export function headlineFor(quadrant, compass) {
@@ -217,12 +230,12 @@ export function describeTail(series, { tailLength, scrubEnd = null, benchmark = 
   const weeks = tail.length - 1
 
   const headline = !heading
-    ? fill(`${sideOf(quadrant) === 'ahead' ? 'Ahead of' : 'Behind'} {B} — only one week of data in this window.`)
+    ? fill(`${sideOf(quadrant) === 'ahead' ? 'Beating' : 'Behind'} {B} — only one week of data in this window.`)
     : fill(headlineFor(quadrant, heading.compass))
 
   const facts = []
   if (lastCrossing && lastCrossing.to === quadrant) {
-    facts.push({ kind: 'crossing', text: `Crossed ${lastCrossing.from} → ${lastCrossing.to} ${weeksAgoText(lastCrossing.weeksAgo)}.` })
+    facts.push({ kind: 'crossing', text: `Moved from ${lastCrossing.from} into ${lastCrossing.to} ${weeksAgoText(lastCrossing.weeksAgo)}.` })
   } else {
     facts.push({ kind: 'tenure', text: `In ${quadrant} for ${tenure.atLeast ? `${tenure.count}+ weeks` : plural(tenure.count, 'week')}.` })
   }
@@ -231,7 +244,8 @@ export function describeTail(series, { tailLength, scrubEnd = null, benchmark = 
     facts.push({ kind: 'route', text: `Path over ${plural(weeks, 'week')}: ${route}.` })
   }
   if (turn) {
-    const axisName = turn.axis === 'rsMomentum' ? 'Momentum' : 'Relative strength'
+    // Named as the card's stat rows name them, so the fact points at a number.
+    const axisName = turn.axis === 'rsMomentum' ? 'Momentum' : 'RS-Ratio'
     const was = turn.dir === 'up' ? 'falling' : 'rising'
     const text = turn.weeks === 1
       ? `${axisName} turned ${turn.dir} in the latest week after ${was} for ${plural(turn.after, 'week')}.`
@@ -239,9 +253,9 @@ export function describeTail(series, { tailLength, scrubEnd = null, benchmark = 
     facts.push({ kind: 'turn', text })
   }
   // A still tail's headline already says it stopped; "slowed" would repeat it.
-  if (pace === 'accelerating') facts.push({ kind: 'pace', text: 'Moving faster than earlier in the tail.' })
-  else if (pace === 'slowing' && heading?.compass !== 'still') facts.push({ kind: 'pace', text: 'Movement has slowed versus earlier in the tail.' })
-  if (nearCentre) facts.push({ kind: 'centre', text: fill('Sitting near the centre — performing roughly in line with {B}.') })
+  if (pace === 'accelerating') facts.push({ kind: 'pace', text: 'Recent weekly moves on the chart are bigger than earlier ones.' })
+  else if (pace === 'slowing' && heading?.compass !== 'still') facts.push({ kind: 'pace', text: 'Recent weekly moves on the chart are smaller than earlier ones.' })
+  if (nearCentre) facts.push({ kind: 'centre', text: fill('Near the centre of the chart — doing about the same as {B}.') })
 
   return {
     quadrant, latest, first, weeks,
