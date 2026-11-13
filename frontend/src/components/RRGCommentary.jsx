@@ -22,6 +22,8 @@ const COMPASS_LABEL = {
 };
 const FACT_ICON = { crossing: '⇄', tenure: '◷', route: '⤳', turn: '↺', pace: '»', centre: '◎' };
 
+const OPEN_KEY = 'rrgCommentary.open';
+
 const fmt = (v) => v.toFixed(1);
 const signed = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}`;
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -178,6 +180,20 @@ export default function RRGCommentary({
 }) {
   const [scope, setScope] = useState('plotted');
   const [sort, setSort] = useState('rotation');
+  // Collapsed by default — the cards are long and the RRG page was crowded
+  // with them open. The choice is a per-viewer convenience, so it lives in
+  // localStorage and the panel still works when storage is unavailable.
+  const [open, setOpen] = useState(() => {
+    try { return localStorage.getItem(OPEN_KEY) === '1'; } catch { return false; }
+  });
+  const toggleOpen = () => {
+    const next = !open;
+    setOpen(next);
+    try { localStorage.setItem(OPEN_KEY, next ? '1' : '0'); } catch { /* storage blocked: session-only */ }
+    // A pin set from a card would keep dimming the chart with no card left
+    // on screen to explain it.
+    if (!next && pinnedKey) onTogglePin(pinnedKey);
+  };
 
   const plottedReads = useMemo(() => reads.filter(r => plottedKeys.has(r.key)), [reads, plottedKeys]);
   const shown = scope === 'plotted' ? plottedReads : reads;
@@ -251,10 +267,29 @@ export default function RRGCommentary({
   const st = summary.strongest;
 
   return (
-    <div className="rrgc">
+    <div className={`rrgc${open ? ' is-open' : ''}`}>
+      <button type="button" className="rrgc-toggle" aria-expanded={open} aria-controls="rrgc-panel" onClick={toggleOpen}>
+        <span className="rrgc-title">Rotation commentary</span>
+        <span className="rrgc-toggle-summary" aria-hidden={open}>
+          {QUADRANT_ORDER.map(q => (
+            <span key={q} className={summary.counts[q] === 0 ? 'is-zero' : ''}>
+              <i style={{ background: quadrantColors[q].border }} />{summary.counts[q]} {q}
+            </span>
+          ))}
+          {summary.fresh.length > 0 && <span className="rrgc-toggle-fresh">{summary.fresh.length} fresh crossing{summary.fresh.length === 1 ? '' : 's'}</span>}
+        </span>
+        <span className="rrgc-toggle-action">
+          {open ? 'Hide' : 'Show'}
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            <path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+      </button>
+
+      {open && (
+      <div id="rrgc-panel" className="rrgc-panel">
       <div className="rrgc-head">
         <div>
-          <h4 className="rrgc-title">Rotation commentary</h4>
           <p className="rrgc-lede">
             How each tail moved over the {tailLength} weeks to <strong>{windowEnd ? fmtDate(windowEnd) : '—'}</strong>, measured against <strong>{B}</strong>.
           </p>
@@ -343,6 +378,8 @@ export default function RRGCommentary({
         a sector in Improving has no measured tendency to reach Leading next.
         RS-Ratio ≥ 100 means ahead of {B} on a smoothed basis; RS-Momentum ≥ 100 means that relative trend is gaining.
       </p>
+      </div>
+      )}
     </div>
   );
 }

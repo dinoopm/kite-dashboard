@@ -1,10 +1,54 @@
 /* ─── Rotation commentary (under the RRG) ────────────────────────────────── */
 
-.rrgc {
-  margin-top: 1.5rem;
-  padding-top: 1.25rem;
-  border-top: 1px solid var(--border);
+.rrgc { margin-top: 1rem; }
+
+/* Collapsed bar — the panel's only footprint until it is opened. */
+.rrgc-toggle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  width: 100%;
+  padding: 0.6rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
 }
+.rrgc-toggle:hover { border-color: rgba(255, 255, 255, 0.18); background: rgba(255, 255, 255, 0.04); }
+.rrgc-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rrgc-toggle-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.8rem;
+  flex: 1;
+  min-width: 0;
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.rrgc-toggle-summary span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.rrgc-toggle-summary span.is-zero { opacity: 0.45; }
+.rrgc-toggle-summary i { width: 7px; height: 7px; border-radius: 2px; display: inline-block; }
+.rrgc-toggle-fresh { color: var(--accent); }
+.rrgc-toggle-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.rrgc-toggle-action svg { transition: transform 0.2s ease; }
+.rrgc.is-open .rrgc-toggle-action svg { transform: rotate(180deg); }
+.rrgc.is-open .rrgc-toggle-summary { visibility: hidden; }
+.rrgc-toggle:hover .rrgc-toggle-action { color: var(--text-primary); }
+.rrgc-panel { margin-top: 0.9rem; }
 
 /* Header */
 .rrgc-head {
@@ -16,10 +60,10 @@
   margin-bottom: 0.9rem;
 }
 .rrgc-title {
-  margin: 0 0 0.2rem;
-  font-size: 1.02rem;
+  font-size: 0.92rem;
   font-weight: 700;
   color: var(--text-primary);
+  white-space: nowrap;
 }
 .rrgc-lede {
   margin: 0;
