@@ -28,6 +28,22 @@ const START = () => { const d = new Date(); d.setMonth(d.getMonth() - 5); return
 const M = 21; // trading days ≈ 1 month (primary signal window)
 const Q = 63; // ≈ 3 months (context)
 
+// India tie-in. This used to say a 10Y "~4.75%+ historically triggers FII
+// selling of Indian equities" — a hard-coded threshold with no source and no
+// check, i.e. a claim about future flows of exactly the kind CLAUDE.md says
+// not to ship unvalidated. Checked on 2026-11-14 against this app's own
+// fii_dii_activity (140 sessions, 2026-04-23 → 11-13, 10Y between 4.29% and
+// 5.31%), with the 10Y taken at the prior US close: FIIs were net sellers on
+// 60% of sessions with the 10Y at or above 4.75% (mean −197 cr) and on 66%
+// below it (mean −1,602 cr). November, with the 10Y near 4.9%, was heavy net
+// buying. That is one stretch of one regime, so it doesn't disprove a link,
+// but nothing here supports a trigger level either. The note now states the
+// mechanism without a threshold.
+function indiaNoteFor(yieldNow) {
+  return `US 10Y at ${r2(yieldNow)}%. Higher US yields make Indian equities less attractive to foreign investors, `
+    + 'but no particular level reliably triggers FII selling — flows also turn on the rupee, valuations and global risk appetite.';
+}
+
 async function riskRegime() {
   const start = START();
   const [tnx, tlt, spy, hyg, lqd] = await Promise.all(
@@ -83,11 +99,8 @@ async function riskRegime() {
       ? { label: 'RISK-OFF', tone: 'alert', text: 'Money is rotating into bonds — a defensive, flight-to-safety tilt.' }
       : { label: 'NEUTRAL', tone: 'neutral', text: 'No decisive rotation between stocks and bonds right now.' };
 
-  // India tie-in: the yield level that historically pressures FII flows.
   const y = yieldNow;
-  const indiaNote = y >= 4.75
-    ? `US 10Y at ${r2(y)}% is in the zone (~4.75%+) that historically triggers FII selling of Indian equities.`
-    : `US 10Y at ${r2(y)}% is below the ~4.75% zone where FII outflows from India tend to accelerate.`;
+  const indiaNote = indiaNoteFor(y);
 
   return {
     verdict, score, gauges,
@@ -99,4 +112,4 @@ async function riskRegime() {
   };
 }
 
-module.exports = { riskRegime };
+module.exports = { riskRegime, indiaNoteFor };
