@@ -172,6 +172,28 @@ function macroRecordDue(hasSnapshotToday, results, scoredIds) {
   return { due: false, changed, reason: 'already recorded today, no scored series changed' };
 }
 
+// Money-flow regime recording (riskRegime.js → signals/record.recordRiskRegime).
+//
+// The read must describe a SETTLED US session: the gauges move intraday, and a
+// flip that reverses by the close was never that session's verdict. So nothing
+// is fetched from 13:00 to 21:59 UTC, which covers the session and the
+// settling hour in both EDT (13:30–20:00) and EST (14:30–21:00); the recorder
+// also refuses any read whose session has not closed in New York.
+//
+// `last` is an in-memory note of the last successful pass, and it is ONLY an
+// optimisation — it saves refetching five Yahoo series every 30 minutes all
+// night. Correctness never rests on it: the recorder writes transitions only,
+// keyed on the session, so a restart that forgets it costs one fetch and an
+// upsert that changes nothing. It is set after success, never before.
+const REGIME_REFETCH_MS = 12 * 60 * 60 * 1000;
+function regimeRecordDue(now = new Date(), last = null) {
+  const h = now.getUTCHours();
+  if (h >= 13 && h < 22) return { due: false, reason: 'US session open or settling' };
+  if (last && now.getTime() - last.at < REGIME_REFETCH_MS) return { due: false, reason: `read ${last.sessionDate} within 12h` };
+  return { due: true };
+}
+let lastRegimeRecord = null;
+
 /**
  * One pass of every daily recording job.
  *
@@ -180,7 +202,7 @@ function macroRecordDue(hasSnapshotToday, results, scoredIds) {
  * to also stop recording price signals.
  */
 async function runDailyJobs({ force = false, privateOnly = false } = {}) {
-  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null, stops: null, macro: null, usPicks: null };
+  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null, stops: null, macro: null, usPicks: null, riskRegime: null };
 
   // Trades first, and on EVERY tick rather than once a day. Kite exposes only
   // the CURRENT day's fills, so a day this does not run is a day whose trades
@@ -283,6 +305,23 @@ async function runDailyJobs({ force = false, privateOnly = false } = {}) {
   try { out.usRiskSeverity = (await require('./usRiskSeverity').getAndRecordUsRiskSeverity()).recording; }
   catch (err) { out.usRiskSeverity = { error: err.message }; }
 
+  // Money-flow regime: record the verdict when it changes. See regimeRecordDue.
+  try {
+    const decision = regimeRecordDue(new Date(), lastRegimeRecord);
+    if (!force && !decision.due) {
+      out.riskRegime = { skipped: decision.reason };
+    } else {
+      const snapshot = await require('./riskRegime').riskRegime();
+      const r = await require('./signals/record').recordRiskRegime(snapshot);
+      lastRegimeRecord = { at: Date.now(), sessionDate: snapshot.sessionDate };
+      out.riskRegime = { ...r, verdict: snapshot.verdict.label, sessionDate: snapshot.sessionDate };
+      if (r.saved) console.log(`[daily] money-flow regime ${snapshot.sessionDate}: ${r.priorVerdict || '(first record)'} → ${r.verdict}`);
+    }
+  } catch (err) {
+    out.riskRegime = { error: err.message };
+    console.warn('[daily] money-flow regime recording failed (will retry next tick):', err.message);
+  }
+
 
   // Macro: ingest the official series on EVERY tick, then record today's regime
   // BEFORE the outcome exists — the same standard as the picks snapshot, and
@@ -367,4 +406,4 @@ function startDailyJobs(options = {}) {
   return () => { clearTimeout(first); clearInterval(timer); };
 }
 
-module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, registerStopProposals, registerMacroCachePrime, picksSnapshotDue, snapshotIsDue, isoMinus, usSnapshotDue, runUsPickSnapshot, macroRecordDue };
+module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, registerStopProposals, registerMacroCachePrime, picksSnapshotDue, snapshotIsDue, isoMinus, usSnapshotDue, runUsPickSnapshot, macroRecordDue, regimeRecordDue };

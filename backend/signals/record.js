@@ -243,6 +243,41 @@ async function recordUsRiskFlags(snapshot, { db = supabase, now = () => new Date
   return { saved };
 }
 
+/**
+ * Money-flow regime (riskRegime.js): record the verdict when it CHANGES, from
+ * a read of a settled US session, before anything that follows exists.
+ *
+ * Transitions, not states — a NEUTRAL that holds for six weeks is one call,
+ * not thirty rows of evidence. snap_date is the US session the read describes
+ * (not the capture date), so one session can hold at most one transition and
+ * a re-run after a restart is a no-op; capturedAt in meta is the proof the row
+ * was written when it says. Reads taken while the session is still trading are
+ * refused: the gauges move intraday, and a mid-session flip that reverses by
+ * the close was never the session's verdict.
+ */
+async function recordRiskRegime(snapshot, { db = supabase, now = () => new Date() } = {}) {
+  if (!snapshot?.sessionDate || !snapshot.sessionComplete) return { saved: 0, skipped: 'session not settled' };
+  const label = snapshot.verdict?.label;
+  if (!label) return { saved: 0, skipped: 'no verdict' };
+  const name = `risk_regime@${snapshot.ruleVersion}`;
+  const { data, error } = await db.from('signal_emissions').select('snap_date,meta')
+    .eq('signal', name).eq('symbol', 'SPY').order('snap_date', { ascending: false }).limit(1);
+  if (error) throw new Error('Risk regime recording lookup failed');
+  const previous = data?.[0];
+  if (previous?.snap_date > snapshot.sessionDate) return { saved: 0, skipped: 'older session' };
+  if (previous?.meta?.verdict === label) return { saved: 0, skipped: 'same verdict; no transition' };
+  const captured = now().toISOString();
+  const row = versionEmission({ signal: 'risk_regime', symbol: 'SPY', snap_date: snapshot.sessionDate, source: 'recorded',
+    meta: { market: 'US', verdict: label, priorVerdict: previous?.meta?.verdict || null, score: snapshot.score, asOf: snapshot.sessionDate, capturedAt: captured } },
+    snapshot.ruleVersion, {
+      gauges: (snapshot.gauges || []).map(g => ({ id: g.id, raw: g.raw, score: g.score })),
+      yield: snapshot.yield, rules: snapshot.rules, source: snapshot.source, availableAt: captured,
+    });
+  const written = await db.from('signal_emissions').upsert([row], { onConflict: 'signal,snap_date,symbol', ignoreDuplicates: true }).select('signal');
+  if (written.error) throw new Error('Risk regime transition could not be recorded');
+  return { saved: written.data?.length || 0, verdict: label, priorVerdict: previous?.meta?.verdict || null, sessionDate: snapshot.sessionDate };
+}
+
 /** Everything, in one idempotent pass. Safe to run daily or over all history. */
 async function recordAll({ fromDate = null } = {}) {
   const price = await recordPriceSignals({ fromDate });
@@ -251,4 +286,4 @@ async function recordAll({ fromDate = null } = {}) {
   return { price, picks, highs, fromDate, recordedAt: new Date().toISOString() };
 }
 
-module.exports = { recordUsRiskFlags, recordUsRiskSeverity, recordAll, recordPriceSignals, recordPickSignals, record52wHighs, loadCandles, PRICE_RULE_VERSION };
+module.exports = { recordRiskRegime, recordUsRiskFlags, recordUsRiskSeverity, recordAll, recordPriceSignals, recordPickSignals, record52wHighs, loadCandles, PRICE_RULE_VERSION };

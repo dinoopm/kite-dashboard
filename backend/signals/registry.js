@@ -495,6 +495,11 @@ const BLOCKED_SIGNALS = [
     blockedReason: 'These user-defined market-wide severity thresholds have not been validated as return forecasts. Tier transitions are recorded forward in signal_emissions with versioned input snapshots and availability timestamps. The current symbol-versus-index scorer cannot measure a market-wide SPY rule against itself: it needs a separate US absolute-return/drawdown study using data available at each decision time, including lagged credit releases. An offline study now exists in riskSeverity/backtest.js; full historical point-in-time credit coverage and adequate resolved events are still required. Treat this as descriptive risk context, not a buy/sell signal.',
   },
   {
+    name: 'risk_regime', label: 'Money flow (risk-on / neutral / risk-off)', market: 'US', source: 'recorded', minBars: 22,
+    description: 'Three one-month gauges, each −1/0/+1: the US 10Y yield change (±0.08pp), SPY minus TLT return (±2pp), HYG minus LQD return (±0.5pp). A sum of +2 or more is RISK-ON, −2 or less RISK-OFF, otherwise NEUTRAL. Shown on the Money Flow panel, with a 60-session strip replayed from Yahoo daily closes.',
+    blockedReason: 'A descriptive label for what money did over the last month, never tested as a forecast of anything. It is market-wide, so the per-symbol scorer cannot express it, the same reason us_risk_severity and us_macro_regime sit here. Verdict transitions are recorded forward to signal_emissions after each US close (dailyJobs, risk_regime@<ruleVersion>, anchored on SPY, with the gauge inputs and capture time), from the first gateway run of this rule version (added 2026-11-14); the 60-session strip on the panel is reconstructed and must not be pooled with those rows. The label is also twitchy: in the replay it flipped four times between 15 and 22 Oct 2026 as gauges sat on their bands, so a scorer would have to count regimes, not flips, and would need a floor of ~20 resolved transitions, which is months of recording away. Treat it as a data display.',
+  },
+  {
     name: 'analyst_target_upside',
     label: 'Analyst target upside',
     source: 'recorded',

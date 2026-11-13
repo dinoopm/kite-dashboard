@@ -110,3 +110,21 @@ describe('macroRecordDue', () => {
     assert.equal(macroRecordDue(true, null, scored).due, false);
   });
 });
+
+describe('regimeRecordDue', () => {
+  const { regimeRecordDue } = require('./dailyJobs');
+  test('never reads the regime while the US session is open or settling', () => {
+    for (const t of ['2026-11-13T13:00:00Z', '2026-11-13T16:30:00Z', '2026-11-13T21:59:00Z']) {
+      assert.equal(regimeRecordDue(new Date(t)).due, false, t);
+    }
+  });
+  test('reads it after the close and overnight', () => {
+    assert.equal(regimeRecordDue(new Date('2026-11-13T22:00:00Z')).due, true);
+    assert.equal(regimeRecordDue(new Date('2026-11-14T03:00:00Z')).due, true);
+  });
+  test('does not refetch all night after a successful pass', () => {
+    const last = { at: Date.parse('2026-11-13T22:05:00Z'), sessionDate: '2026-11-13' };
+    assert.equal(regimeRecordDue(new Date('2026-11-14T02:00:00Z'), last).due, false);
+    assert.equal(regimeRecordDue(new Date('2026-11-16T22:05:00Z'), last).due, true);
+  });
+});
