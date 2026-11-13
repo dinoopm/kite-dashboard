@@ -7,6 +7,7 @@ import ConvictionModal from '../../components/alerts/ConvictionModal';
 import TradePlanModal from '../../components/alerts/TradePlanModal';
 import { biasClass } from '../../components/alerts/biasClass';
 import { breakoutRank, breakoutLabel } from '../../lib/breakout';
+import { extendedColumn, extendedFor, extendedQuoteLine } from '../../lib/usSession';
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 import { computeSectorBreadth } from '../../lib/sectorBreadth';
 import {
@@ -58,6 +59,23 @@ function SortTh({ label, sortKey, sortConfig, onSort, style }) {
     >
       {label} {active ? (sortConfig.direction === 'desc' ? '▼' : '▲') : '↕'}
     </th>
+  );
+}
+
+// ─── Pre-market / after-hours cell ───────────────────────────────────
+// Price over its move from the last regular close (not over 1D's base: before
+// the open, 1D is still yesterday's full session). The tooltip says when the
+// print was and which feed, because the free Alpaca feed runs 15 min behind
+// and a thin name's newest print can be an hour old.
+function ExtendedCell({ ext, market }) {
+  if (!ext) return <td style={{ padding: '0.4rem', textAlign: 'right', color: 'var(--text-secondary)' }}>–</td>;
+  const line = extendedQuoteLine(ext);
+  const title = `${line.label} · ${line.when}${line.note ? ` · ${line.note}` : ''} · vs ${market.currency}${ext.base.toFixed(2)} close`;
+  return (
+    <td title={title} style={{ padding: '0.4rem', textAlign: 'right', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+      <div style={{ color: 'var(--text-primary)' }}>{market.currency}{ext.price.toLocaleString(market.locale, { maximumFractionDigits: 2 })}</div>
+      <div style={{ fontSize: '0.7rem', fontWeight: 600, color: pctColor(ext.changePct) }}>{fmtPct(ext.changePct)}</div>
+    </td>
   );
 }
 
@@ -280,7 +298,10 @@ export default function SectorDetailPage({ market }) {
         const qRes = await fetchWithAbort(`${API}/api${market.apiPrefix}/quotes`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ instruments }),
+          // `outOfHours` returns the pre-market / after-hours print as its own
+          // field rather than folding it into last_price, so Price and 1D stay
+          // the regular session and line up with the 1W–3Y columns beside them.
+          body: JSON.stringify({ instruments, ...(market.hasExtendedHours ? { outOfHours: true } : {}) }),
           signal
         });
         qRaw = await qRes.json();
@@ -301,7 +322,7 @@ export default function SectorDetailPage({ market }) {
         const change1D = prevClose ? ((price - prevClose) / prevClose) * 100 : 0;
         return {
           symbol: c.symbol, name: c.name, key: c.key, token: c.token,
-          price, '1D': change1D,
+          price, '1D': change1D, ext: q?.out_of_hours ?? null,
           '1W': null, '1M': null, '3M': null, '6M': null, '1Y': null, '2Y': null, '3Y': null,
           rsi14: null, sma20: null, sma50: null, sma200: null, aboveSma20: null, aboveSma50: null, aboveSma200: null,
           breakout: null, weeklyHighs: null, pastRawMomentum: null, histLoaded: false,
@@ -575,6 +596,11 @@ export default function SectorDetailPage({ market }) {
     [sectorHistory, enrichedStockData]
   );
 
+  // Pre-market / after-hours column: null during the regular session (and
+  // always for India), so the table only grows a column when there is
+  // something to put in it. Named for the session the rows are in.
+  const extColumn = useMemo(() => extendedColumn(stockData), [stockData]);
+
   // ─── Sort & filter for Stocks table ──────────────────────────────
   const sortedStocks = useMemo(() => {
     let rows = [...enrichedStockData];
@@ -583,14 +609,19 @@ export default function SectorDetailPage({ market }) {
       rows = rows.filter(s => s.name.toLowerCase().includes(q) || s.symbol.toLowerCase().includes(q));
     }
     if (sortConfig.key) {
+      // The extended column sorts by what it shows: a print from the other
+      // session renders as a dash, so it sorts as one.
+      const valueOf = sortConfig.key === 'extPct'
+        ? (s) => extendedFor(s, extColumn)?.changePct
+        : (s) => s[sortConfig.key];
       rows.sort((a, b) => {
-        const av = a[sortConfig.key] ?? -Infinity;
-        const bv = b[sortConfig.key] ?? -Infinity;
+        const av = valueOf(a) ?? -Infinity;
+        const bv = valueOf(b) ?? -Infinity;
         return sortConfig.direction === 'desc' ? bv - av : av - bv;
       });
     }
     return rows;
-  }, [enrichedStockData, sortConfig, searchQuery]);
+  }, [enrichedStockData, sortConfig, searchQuery, extColumn]);
 
   const requestSort = (key) => {
     setSortConfig(prev => ({ key, direction: prev.key === key && prev.direction === 'desc' ? 'asc' : 'desc' }));
@@ -737,6 +768,9 @@ export default function SectorDetailPage({ market }) {
             <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
               <th style={{ textAlign: 'left', padding: '0.5rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5, width: '150px' }}>Name</th>
               <th style={{ textAlign: 'right', padding: '0.5rem', color: 'var(--text-secondary)', position: 'sticky', top: 0, background: '#0f0f1e', zIndex: 5 }}>Price</th>
+              {extColumn && (
+                <SortTh label={extColumn.label} sortKey="extPct" sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'right' }} />
+              )}
               {['1D','1W','1M','3M','6M','1Y','2Y','3Y'].map(k => (
                 <SortTh key={k} label={k} sortKey={k} sortConfig={sortConfig} onSort={requestSort} style={{ textAlign: 'right' }} />
               ))}
@@ -764,6 +798,7 @@ export default function SectorDetailPage({ market }) {
                 <td style={{ padding: '0.4rem', textAlign: 'right', fontWeight: 600 }}>
                   {s.price ? `${market.currency}${s.price.toLocaleString(market.locale, { maximumFractionDigits: 2 })}` : '–'}
                 </td>
+                {extColumn && <ExtendedCell ext={extendedFor(s, extColumn)} market={market} />}
                 <Cell value={s['1D']} />
                 <Cell value={s['1W']} />
                 <Cell value={s['1M']} />

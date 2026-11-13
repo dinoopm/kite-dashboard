@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { intradayBase, extendedQuoteLine, extendedColumn } from './usSession.js'
+import { intradayBase, extendedQuoteLine, extendedColumn, extendedFor } from './usSession.js'
 
 const quote = { last: 217.2, prevClose: 241, barDate: '2026-11-05' }
 const bar = (date) => ({ date })
@@ -86,5 +86,26 @@ describe('extendedColumn', () => {
   // Before the open, a thin name's newest print can still be last night's.
   test('calls it pre-market as soon as any row is', () => {
     assert.equal(extendedColumn([post, pre]).session, 'pre-market')
+  })
+})
+
+describe('extendedFor', () => {
+  const pre = { ext: { session: 'pre-market', changePct: 1.2 } }
+  const post = { ext: { session: 'after-hours', changePct: -3.4 } }
+  const column = { session: 'pre-market', label: 'Pre-market' }
+
+  test('gives the row its print when it is from the column\'s session', () => {
+    assert.equal(extendedFor(pre, column), pre.ext)
+  })
+
+  // Shown as a dash, so it must sort as one too.
+  test('is null for a print from the other session', () => {
+    assert.equal(extendedFor(post, column), null)
+  })
+
+  test('is null with no column or no print', () => {
+    assert.equal(extendedFor(pre, null), null)
+    assert.equal(extendedFor({ ext: null }, column), null)
+    assert.equal(extendedFor(undefined, column), null)
   })
 })

@@ -74,6 +74,10 @@ export const US_MARKET = {
   instrumentHref: (s) => `/us/${encodeURIComponent(s.token)}`,
   // No /api/us/sector-alerts endpoint exists, so the tab stays hidden.
   hasAlertsTab: false,
+  // US names trade 4 AM–8 PM ET around the regular session; /api/us/quotes
+  // returns that print beside the regular close when asked (`outOfHours`).
+  // India's quotes have no equivalent, so it never asks.
+  hasExtendedHours: true,
   // Alpaca answers 100 symbols of daily bars in one request, so the drill-down
   // does not have to walk an index one stock at a time. India has no equivalent
   // bulk endpoint, so it keeps the per-symbol path.

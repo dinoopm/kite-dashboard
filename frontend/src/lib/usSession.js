@@ -30,6 +30,16 @@ export function extendedColumn(rows) {
   return { session, label: SESSION_LABEL[session] ?? session }
 }
 
+/**
+ * The print a row shows in that column: null when the row's newest print is
+ * from the other session (last night's after-hours under a Pre-market header
+ * is not a pre-market price). Sorting goes through this too, so a column is
+ * never ordered by numbers it is showing as dashes.
+ */
+export function extendedFor(row, column) {
+  return column && row?.ext?.session === column.session ? row.ext : null
+}
+
 /** How to describe an out-of-hours print; null when there is none. */
 export function extendedQuoteLine(extended, now = new Date()) {
   if (!extended) return null
