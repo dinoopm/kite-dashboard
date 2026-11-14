@@ -27,6 +27,7 @@ const US_LABELS = {
   CIBR: 'Cybersecurity', UFO: 'Space Technology', ITA: 'Aerospace & Defence',
   QTUM: 'Quantum & Machine Learning', WQTM: 'Quantum Computing (pure)',
   HYDR: 'Hydrogen Energy', REMX: 'Rare Earth Metals', URA: 'Uranium',
+  ICLN: 'Clean Energy',
 };
 
 // The RRG plots one dot per constituent and labels it with the ticker, which is

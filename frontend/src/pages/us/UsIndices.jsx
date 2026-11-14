@@ -108,8 +108,10 @@ const INDICES = [
   //   HYDR  Hydrogen           Global X                 ~$3M/day — the thinnest
   //   REMX  Rare earth metals  VanEck                   ~$58M/day
   //   URA   Uranium            Global X                 ~$141M/day (URNM $20M)
+  //   ICLN  Clean energy       iShares / S&P Global     ~$112M/day (TAN $59M, PBW $11M,
+  //                            Clean Energy Transition             QCLN $6M, CNRG $1M)
   //
-  // All seven carry the full 1003 bars, so every column on this page including
+  // All eight carry the full 1003 bars, so every column on this page including
   // 3Y is computed rather than interpolated. None is a pure-play read: a space
   // or defence index necessarily holds names that earn most of their revenue
   // elsewhere, and the rare-earth and uranium funds are miner baskets, which
@@ -139,6 +141,16 @@ const INDICES = [
   { key: "HYDR", name: "Hydrogen Energy", category: "sector" },
   { key: "REMX", name: "Rare Earth Metals", category: "sector" },
   { key: "URA", name: "Uranium", category: "sector" },
+  // A global index, so its drilldown is the thin part. ICLN holds ~100 names
+  // and roughly half are European and Asian utilities and turbine makers
+  // (Vestas, Iberdrola, Orsted…) that trade in the US only over the counter,
+  // where Alpaca cannot price them; the Stocks tab shows the US-listed slice
+  // (First Solar, Nextracker, Bloom, Enphase, Ormat…), 9 names as measured on
+  // 2026-11-14. The row's own returns are the fund's and are complete. QCLN
+  // would drill into ~23 US names, but it trades ~$6M/day against ICLN's
+  // ~$112M and is weighted toward Tesla, Rivian and analog chips, so "how did
+  // clean energy do" would partly read "how did Tesla do". TAN is solar only.
+  { key: "ICLN", name: "Clean Energy", category: "sector" },
 ];
 
 // Keep rotation coverage aligned with the visible list. WQTM still lacks the
