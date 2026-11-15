@@ -132,61 +132,117 @@ export function paceOf(tail) {
   return r >= PACE_RATIO ? 'accelerating' : r <= 1 / PACE_RATIO ? 'slowing' : 'steady'
 }
 
-// Headline by (where it is) × (which way it moved over the last two weeks),
-// in plain words — no "axes", "momentum" or "relative strength". The chart
+// ─── Headline: where it stands, which way RS-Ratio moved, and how fast ──────
+//
+// In plain words — no "axes", "momentum" or "relative strength". The chart
 // already speaks RRG; the headline is for someone who doesn't.
 //
-// The vocabulary maps onto the two coordinates:
-//   RS-Ratio ≥ 100      → "beating {B}"; below → "behind {B}".
-//   RS-Ratio rising     → the lead grows / the gap closes; falling → the reverse.
-//   RS-Momentum         → how fast that is happening. The backend computes it
-//                         as RS-Ratio over its own moving average, so it acts
-//                         as RS-Ratio's rate of change (the standard RRG
-//                         reading), and a move where both coordinates go the
-//                         same way (up-right, down-left) is "faster" (or
-//                         "picking up speed"), and one where they split
-//                         (down-right, up-left) is "but more slowly". A test
-//                         holds every diagonal to that rule.
-// Hand-written rather than generated, so each can be checked as English and as
-// RRG. Diagonals depend on the quadrant ("Still beating" only makes sense in
-// Weakening); straight moves (one coordinate flat) read the same in either
-// quadrant on that side of 100, so they are keyed by side.
-const HEADLINES = {
-  'Leading:up-right': 'Beating {B}, and the lead is growing faster.',
-  'Leading:down-right': 'Beating {B}; the lead is still growing, but more slowly.',
-  'Leading:down-left': 'Beating {B}, but the lead is now shrinking, and faster.',
-  'Leading:up-left': 'Beating {B}; the lead is shrinking, but more slowly.',
-  'Weakening:up-right': 'Still beating {B}, and the lead is growing again, picking up speed.',
-  'Weakening:down-right': 'Still beating {B}; the lead is growing, but more slowly.',
-  'Weakening:down-left': 'Still beating {B}, but the lead is shrinking, and faster.',
-  'Weakening:up-left': 'Still beating {B}; the lead is shrinking, but more slowly.',
-  'Lagging:up-right': 'Behind {B}, but has started catching up, picking up speed.',
-  'Lagging:down-right': 'Behind {B}; the gap is closing, but more slowly.',
-  'Lagging:down-left': 'Behind {B}, and the gap is widening faster.',
-  'Lagging:up-left': 'Behind {B}; the gap is still widening, but more slowly.',
-  'Improving:up-right': 'Behind {B}, but closing the gap, and faster.',
-  'Improving:down-right': 'Behind {B}; still closing the gap, but more slowly.',
-  'Improving:down-left': 'Behind {B}; the catch-up has reversed and the gap is widening faster.',
-  'Improving:up-left': 'Behind {B}; the gap is widening again, but more slowly.',
-  'ahead:up': 'Beating {B}; the lead held steady while recent weeks picked up.',
-  'ahead:down': 'Beating {B}; the lead held steady while recent weeks softened.',
-  'ahead:right': 'Beating {B}, and the lead is growing at a steady pace.',
-  'ahead:left': 'Beating {B}, but the lead is shrinking at a steady pace.',
-  'behind:up': 'Behind {B}; the gap held steady while recent weeks picked up.',
-  'behind:down': 'Behind {B}; the gap held steady while recent weeks softened.',
-  'behind:right': 'Behind {B}, but closing the gap at a steady pace.',
-  'behind:left': 'Behind {B}, and the gap is widening at a steady pace.',
+// Every word is read off RS-Ratio alone:
+//   RS-Ratio ≥ 100   → "beating {B}"; below → "behind {B}". Measured in the
+//                      same audit: RS-Ratio's side of 100 matched the sector's
+//                      actual out/under-performance of SPY 85% of the time over
+//                      26 weeks and 90–92% over 39–52, but 57% over 4 weeks. So
+//                      it is a statement about the last half-year to year, and
+//                      the panel footer says so.
+//   RS-Ratio rising  → the lead grows / the gap closes; falling → the reverse.
+//   speed            → the last two weeks' change in RS-Ratio against the two
+//                      weeks before it. Nothing else.
+//
+// Speed used to be inferred from RS-Momentum: a move with both coordinates
+// going the same way was called "faster", a split one "more slowly", on the
+// textbook reading that momentum is RS-Ratio's rate of change. Here it is not —
+// the backend computes it as RS-Ratio over its own 26-week average, a level
+// gauge that mostly just follows RS-Ratio. Audited on 2026-11-16 across 29 US
+// sectors × 52 weeks, "faster" matched what RS-Ratio's weekly steps actually
+// did 52% of the time (71% on a two-week comparison) and "more slowly" 61%: a
+// sentence that was wrong a third to half of the time, in plain words nobody
+// would think to check. The test that guarded it checked the wording against
+// the rule, not against the data. So speed is now measured, and when it cannot
+// be (too little history) the headline says nothing about it.
+//
+// Momentum still appears where it is literally what it says: the heading chip
+// (chart direction), the stat rows, and the "turned up after falling" facts.
+//
+// 1.25×: two weeks' change a quarter larger or smaller than the two before is
+// the bar for "faster" / "more slowly"; inside that it is "about the same".
+const SPEED_RATIO = 1.25
+
+/**
+ * What RS-Ratio itself did up to endIdx. Pure.
+ *   dir    'up' | 'down' | 'flat' over the last `steps` weeks
+ *   speed  'faster' | 'slower' | 'steady' | 'started' | null
+ *          'started' = the two weeks before were flat or went the other way;
+ *          null = no comparison possible (fewer than two steps, or under four
+ *          weeks of history before this point).
+ * `eps` is the per-week change below which a move counts as flat.
+ */
+export function ratioTrend(series, endIdx, steps, eps = 0) {
+  const r = (i) => series[i].rsRatio
+  const dx = r(endIdx) - r(endIdx - steps)
+  const dir = Math.abs(dx) / steps <= eps ? 'flat' : dx > 0 ? 'up' : 'down'
+  let speed = null
+  let earlier = null
+  if (dir !== 'flat' && steps === 2 && endIdx >= 4) {
+    // The same two-week span, one span earlier, signed so that positive means
+    // "was already moving this way".
+    earlier = (r(endIdx - 2) - r(endIdx - 4)) * Math.sign(dx)
+    if (earlier / 2 <= eps) speed = 'started'
+    else {
+      const k = Math.abs(dx) / earlier
+      speed = k >= SPEED_RATIO ? 'faster' : k <= 1 / SPEED_RATIO ? 'slower' : 'steady'
+    }
+  }
+  return { dir, speed, change: dx, earlier, steps }
 }
-const STILL_HEADLINES = {
-  Leading: 'Beating {B}, with little change lately.',
-  Weakening: 'Still beating {B}, with little change lately.',
-  Lagging: 'Behind {B}, with little change lately.',
-  Improving: 'Behind {B}, with little change lately.',
+
+const HEADLINES = {
+  ahead: {
+    up: {
+      faster: 'Beating {B}, and the lead is growing faster than in the two weeks before.',
+      slower: 'Beating {B}; the lead is still growing, but more slowly than in the two weeks before.',
+      steady: 'Beating {B}, and the lead is growing at about the same pace as before.',
+      started: 'Beating {B}, and the lead has started growing.',
+      plain: 'Beating {B}, and the lead is growing.',
+    },
+    down: {
+      faster: 'Still beating {B}, but the lead is shrinking faster than in the two weeks before.',
+      slower: 'Still beating {B}; the lead is shrinking, but more slowly than in the two weeks before.',
+      steady: 'Still beating {B}, but the lead is shrinking at about the same pace as before.',
+      started: 'Still beating {B}, but the lead has started shrinking.',
+      plain: 'Still beating {B}, but the lead is shrinking.',
+    },
+    flat: 'Beating {B}; the lead held steady.',
+    still: 'Beating {B}, with little change lately.',
+  },
+  behind: {
+    up: {
+      faster: 'Behind {B}, but closing the gap faster than in the two weeks before.',
+      slower: 'Behind {B}; still closing the gap, but more slowly than in the two weeks before.',
+      steady: 'Behind {B}, but closing the gap at about the same pace as before.',
+      started: 'Behind {B}, but has started closing the gap.',
+      plain: 'Behind {B}, but closing the gap.',
+    },
+    down: {
+      faster: 'Behind {B}, and the gap is widening faster than in the two weeks before.',
+      slower: 'Behind {B}; the gap is still widening, but more slowly than in the two weeks before.',
+      steady: 'Behind {B}, and the gap is widening at about the same pace as before.',
+      started: 'Behind {B}, and the gap has started widening.',
+      plain: 'Behind {B}, and the gap is widening.',
+    },
+    flat: 'Behind {B}; the gap held steady.',
+    still: 'Behind {B}, with little change lately.',
+  },
 }
 const sideOf = (quadrant) => (quadrant === 'Leading' || quadrant === 'Weakening' ? 'ahead' : 'behind')
-export function headlineFor(quadrant, compass) {
-  if (compass === 'still') return STILL_HEADLINES[quadrant]
-  return HEADLINES[`${quadrant}:${compass}`] || HEADLINES[`${sideOf(quadrant)}:${compass}`]
+
+/**
+ * side: 'ahead' | 'behind'. dir: 'up' | 'down' | 'flat' | 'still' ('still' is
+ * the whole point barely moving on the chart; 'flat' is RS-Ratio alone holding
+ * while momentum moved). speed is ignored unless dir is 'up' or 'down'.
+ */
+export function headlineFor(side, dir, speed = null) {
+  const entry = HEADLINES[side][dir]
+  return typeof entry === 'string' ? entry : entry[speed || 'plain']
 }
 
 /**
@@ -229,9 +285,16 @@ export function describeTail(series, { tailLength, scrubEnd = null, benchmark = 
   const nearCentre = group.typicalDistance > 0 && distance < NEAR_CENTRE_FRACTION * group.typicalDistance
   const weeks = tail.length - 1
 
+  // RS-Ratio's own direction and speed — the only source for the headline's
+  // words. Flat is judged per week against a fifth of the group's typical step,
+  // the same yardstick that decides "holding still".
+  const side = sideOf(quadrant)
+  const ratio = heading
+    ? ratioTrend(series, endIdx, heading.steps, group.typicalStep > 0 ? STILL_FRACTION * group.typicalStep : 0)
+    : null
   const headline = !heading
-    ? fill(`${sideOf(quadrant) === 'ahead' ? 'Beating' : 'Behind'} {B} — only one week of data in this window.`)
-    : fill(headlineFor(quadrant, heading.compass))
+    ? fill(`${side === 'ahead' ? 'Beating' : 'Behind'} {B} — only one week of data in this window.`)
+    : fill(headlineFor(side, heading.compass === 'still' ? 'still' : ratio.dir, ratio.speed))
 
   const facts = []
   if (lastCrossing && lastCrossing.to === quadrant) {
@@ -261,7 +324,7 @@ export function describeTail(series, { tailLength, scrubEnd = null, benchmark = 
     quadrant, latest, first, weeks,
     delta: { rsRatio: latest.rsRatio - first.rsRatio, rsMomentum: latest.rsMomentum - first.rsMomentum },
     move: Math.hypot(latest.rsRatio - first.rsRatio, latest.rsMomentum - first.rsMomentum),
-    distance, nearCentre, heading, pace, crossings, lastCrossing, tenure, turn,
+    distance, nearCentre, heading, ratio, pace, crossings, lastCrossing, tenure, turn,
     headline, facts, tail,
   }
 }

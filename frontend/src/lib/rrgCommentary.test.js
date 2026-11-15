@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  quadrantOf, compassOf, headlineFor, tailWindow, quadrantTenure, crossingsIn, axisTurn, paceOf,
+  quadrantOf, compassOf, headlineFor, ratioTrend, tailWindow, quadrantTenure, crossingsIn, axisTurn, paceOf,
   describeTail, buildRotationCommentary, summarizeRotation, weekInProgress, SORTS,
 } from './rrgCommentary.js'
 
@@ -37,40 +37,81 @@ describe('quadrantOf / compassOf', () => {
     assert.equal(compassOf(-2, 0.2), 'left')
     assert.equal(compassOf(0.3, -3), 'down')
   })
-  test('every quadrant has a headline for every direction', () => {
-    for (const q of ['Leading', 'Weakening', 'Lagging', 'Improving']) {
-      for (const c of ['up', 'up-right', 'right', 'down-right', 'down', 'down-left', 'left', 'up-left', 'still']) {
-        assert.ok(headlineFor(q, c), `${q}:${c}`)
-      }
+})
+
+describe('headlineFor', () => {
+  const SIDES = ['ahead', 'behind']
+  const SPEEDS = ['faster', 'slower', 'steady', 'started', null]
+  const all = () => SIDES.flatMap(side => [
+    ...['up', 'down'].flatMap(dir => SPEEDS.map(speed => ({ side, dir, speed, h: headlineFor(side, dir, speed) }))),
+    ...['flat', 'still'].map(dir => ({ side, dir, speed: null, h: headlineFor(side, dir) })),
+  ])
+
+  test('there is a headline for every side, direction and speed', () => {
+    for (const { side, dir, speed, h } of all()) assert.ok(typeof h === 'string' && h.length > 10, `${side}:${dir}:${speed}`)
+  })
+
+  test('opens with the side in plain words and never names an RRG coordinate', () => {
+    for (const { side, dir, speed, h } of all()) {
+      assert.match(h, side === 'ahead' ? /^(Still )?[Bb]eating \{B\}/ : /^Behind \{B\}/, `${side}:${dir}:${speed} — ${h}`)
+      assert.doesNotMatch(h, /momentum|relative strength|axes|axis|RS-/i, h)
     }
   })
 
-  // Plain words are only worth having if they say what the coordinates say.
-  // RS-Momentum is the rate of change of RS-Ratio: when both move the same
-  // way the change is speeding up, when they split it is slowing down.
-  test('diagonal headlines say "faster" or "more slowly" exactly as the maths does', () => {
-    for (const q of ['Leading', 'Weakening', 'Lagging', 'Improving']) {
-      for (const c of ['up-right', 'down-left']) {
-        const h = headlineFor(q, c)
-        assert.match(h, /faster|picking up speed/, `${q}:${c} — ${h}`)
-        assert.doesNotMatch(h, /more slowly/, `${q}:${c} — ${h}`)
-      }
-      for (const c of ['down-right', 'up-left']) {
-        const h = headlineFor(q, c)
-        assert.match(h, /more slowly/, `${q}:${c} — ${h}`)
-        assert.doesNotMatch(h, /faster|picking up speed/, `${q}:${c} — ${h}`)
-      }
+  test('says nothing about speed when none was measured', () => {
+    for (const side of SIDES) for (const dir of ['up', 'down']) {
+      assert.doesNotMatch(headlineFor(side, dir, null), /faster|slowly|pace|started/, `${side}:${dir}`)
     }
   })
+})
 
-  test('headlines open with which side of the benchmark the sector is on, in plain words', () => {
-    for (const q of ['Leading', 'Weakening', 'Lagging', 'Improving']) {
-      const ahead = q === 'Leading' || q === 'Weakening'
-      for (const c of ['up', 'up-right', 'right', 'down-right', 'down', 'down-left', 'left', 'up-left', 'still']) {
-        const h = headlineFor(q, c)
-        assert.match(h, ahead ? /^(Still )?[Bb]eating \{B\}/ : /^Behind \{B\}/, `${q}:${c} — ${h}`)
-        assert.doesNotMatch(h, /momentum|relative strength|axes|axis|RS-/i, `${q}:${c} — ${h}`)
-      }
+describe('ratioTrend', () => {
+  const at = (rs) => series(rs.map(r => [r, 100]))
+  test('compares the last two weeks with the two before', () => {
+    assert.equal(ratioTrend(at([100, 101, 102, 104, 106]), 4, 2).speed, 'faster')   // +4 after +2
+    assert.equal(ratioTrend(at([100, 102, 104, 105, 106]), 4, 2).speed, 'slower')   // +2 after +4
+    assert.equal(ratioTrend(at([100, 101, 102, 103, 104.2]), 4, 2).speed, 'steady') // +2.2 after +2
+    assert.equal(ratioTrend(at([110, 108, 106, 103, 100]), 4, 2).speed, 'faster')   // −6 after −4
+  })
+  test('a move that follows a flat or opposite stretch has only started', () => {
+    assert.equal(ratioTrend(at([104, 102, 100, 101, 102]), 4, 2).speed, 'started')
+    assert.equal(ratioTrend(at([100, 100, 100, 101, 102]), 4, 2).speed, 'started')
+  })
+  test('makes no speed claim without four weeks behind it, or over one step', () => {
+    assert.equal(ratioTrend(at([100, 101, 103]), 2, 2).speed, null)
+    assert.equal(ratioTrend(at([100, 101, 102, 104, 106]), 4, 1).speed, null)
+  })
+  test('a change under the flat threshold is flat, whatever its sign', () => {
+    const t = ratioTrend(at([100, 100, 100, 100.05, 100.1]), 4, 2, 0.2)
+    assert.deepEqual([t.dir, t.speed], ['flat', null])
+  })
+})
+
+// The guard the old wording lacked. It used to be checked against a rule
+// ("both coordinates falling means faster"), and the rule was wrong about the
+// data a third to half of the time. This walks deterministic pseudo-random
+// tails and checks every word of every headline against RS-Ratio's own steps.
+describe('headline words are true of RS-Ratio', () => {
+  let seed = 7
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 - 0.5 }
+  test('direction and speed words match the numbers, over 400 tails', () => {
+    for (let n = 0; n < 400; n++) {
+      let r = 100 + rnd() * 20, m = 100 + rnd() * 10, vr = rnd(), vm = rnd()
+      const pts = []
+      for (let i = 0; i < 12; i++) { vr = vr * 0.6 + rnd() * 2; vm = vm * 0.6 + rnd() * 2; r += vr; m += vm; pts.push([+r.toFixed(2), +m.toFixed(2)]) }
+      const s = series(pts)
+      const read = describeTail(s, { tailLength: 8, benchmark: 'SPY' })
+      const h = read.headline
+      const e = s.length - 1
+      const dx = s[e].rsRatio - s[e - 2].rsRatio
+      const before = (s[e - 2].rsRatio - s[e - 4].rsRatio) * Math.sign(dx)
+      if (/growing|closing the gap/.test(h)) assert.ok(dx > 0, `${h} — dx ${dx}`)
+      if (/shrinking|widening/.test(h)) assert.ok(dx < 0, `${h} — dx ${dx}`)
+      if (/held steady/.test(h)) assert.equal(dx, 0, h)
+      if (/faster than/.test(h)) assert.ok(before > 0 && Math.abs(dx) >= 1.25 * before, `${h} — ${dx} after ${before}`)
+      if (/more slowly than/.test(h)) assert.ok(before > 0 && Math.abs(dx) <= before / 1.25, `${h} — ${dx} after ${before}`)
+      if (/started/.test(h)) assert.ok(before <= 0, `${h} — ${dx} after ${before}`)
+      assert.match(h, s[e].rsRatio >= 100 ? /^(Still b|B)eating SPY/ : /^Behind SPY/, h)
     }
   })
 })
@@ -140,7 +181,9 @@ describe('describeTail', () => {
     const r = describeTail(semis, { tailLength: 12, benchmark: 'SPY' })
     assert.equal(r.quadrant, 'Weakening')
     assert.equal(r.heading.compass, 'down-left')
-    assert.equal(r.headline, 'Still beating SPY, but the lead is shrinking, and faster.')
+    // −6.5 over the last two weeks against −4.9 over the two before.
+    assert.equal(r.headline, 'Still beating SPY, but the lead is shrinking faster than in the two weeks before.')
+    assert.equal(r.ratio.speed, 'faster')
     assert.equal(+r.delta.rsRatio.toFixed(1), -18.1)
     assert.equal(r.weeks, 8)
     assert.match(r.facts[0].text, /In Weakening for 9\+ weeks/)
@@ -150,7 +193,7 @@ describe('describeTail', () => {
     const flatRatio = series([[96, 95], [95, 94.5], [94, 94], [94, 94.5], [94, 95.2]])
     const r = describeTail(flatRatio, { tailLength: 12, benchmark: 'SPY' })
     assert.equal(r.heading.compass, 'up')
-    assert.match(r.headline, /gap held steady while recent weeks picked up/)
+    assert.equal(r.headline, 'Behind SPY; the gap held steady.')
     assert.match(r.facts.find(f => f.kind === 'turn').text, /Momentum has risen for 2 weeks after falling for 2 weeks/)
   })
 

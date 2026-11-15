@@ -10,11 +10,16 @@ import './RRGCommentary.css';
 // without scrolling back up to the chart. Hovering a card highlights that
 // trail on the chart; pinning it keeps the highlight while you read.
 
+// What each quadrant literally is. The second half is RS-Momentum, which here
+// is RS-Ratio against its own recent average — not whether the lead is growing
+// this week. These used to say "lead growing / shrinking", and a Leading card
+// whose lead had shrunk for a fortnight then sat under a label saying it was
+// growing. The card's headline carries the direction; this carries the level.
 const QUADRANT_MEANING = {
-  Leading: 'beating {B}, lead growing',
-  Weakening: 'beating {B}, lead shrinking',
-  Lagging: 'behind {B}, gap widening',
-  Improving: 'behind {B}, gap closing',
+  Leading: 'beating {B}, and stronger against it than its own recent average',
+  Weakening: 'beating {B}, but weaker against it than its own recent average',
+  Lagging: 'behind {B}, and weaker against it than its own recent average',
+  Improving: 'behind {B}, but stronger against it than its own recent average',
 };
 const COMPASS_LABEL = {
   up: 'Up', 'up-right': 'Up & right', right: 'Right', 'down-right': 'Down & right',
@@ -378,9 +383,11 @@ export default function RRGCommentary({
       <p className="rrgc-foot">
         <strong>Descriptive only.</strong> This reads position and movement straight off the tails above.
         RRG rotation is not a scored signal in this app (it has no entry in the signal registry), so nothing here is a forecast —
-        a sector in Improving has no measured tendency to reach Leading next.
-        How to read the numbers: <strong>RS-Ratio</strong> above 100 means the sector has been beating {B} over recent months, below 100 means behind it.
-        <strong>Momentum</strong> is how fast that lead or gap is changing — above 100 it is moving in the sector’s favour, below 100 against it.
+        a sector in Improving has no measured tendency to reach Leading next.{' '}
+        How to read the numbers: <strong>RS-Ratio</strong> above 100 means the sector’s price against {B} is above its own one-year average,
+        which nearly always means it has beaten {B} over the last six to twelve months; below 100, that it has trailed.{' '}
+        <strong>Momentum</strong> compares RS-Ratio with its own average over about the last six months: above 100, the sector is doing better against {B} than it has been lately; below 100, worse.
+        Each headline’s “faster” or “more slowly” is measured from RS-Ratio itself: its change over the last two weeks against the two before.
       </p>
       </div>
       )}
