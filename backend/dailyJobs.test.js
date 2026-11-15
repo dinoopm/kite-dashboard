@@ -128,3 +128,22 @@ describe('regimeRecordDue', () => {
     assert.equal(regimeRecordDue(new Date('2026-11-16T22:05:00Z'), last).due, true);
   });
 });
+
+describe('rrgRecordDue', () => {
+  const { rrgRecordDue } = require('./dailyJobs');
+  test('the window opens at the Friday close in New York', () => {
+    assert.equal(rrgRecordDue(new Date('2026-11-13T21:00:00Z')).week, '2026-11-06'); // still trading: last week, long past
+    const open = rrgRecordDue(new Date('2026-11-13T21:30:00Z'));
+    assert.deepEqual([open.due, open.week], [true, '2026-11-13']);
+  });
+  test('stays open over the weekend and shuts at Monday 13:30 UTC', () => {
+    assert.equal(rrgRecordDue(new Date('2026-11-15T23:00:00Z')).due, true);
+    assert.equal(rrgRecordDue(new Date('2026-11-16T13:29:00Z')).due, true);
+    const late = rrgRecordDue(new Date('2026-11-16T13:30:00Z'));
+    assert.equal(late.due, false);
+    assert.match(late.reason, /left to the reconstruction/);
+  });
+  test('a handled week is not fetched again', () => {
+    assert.equal(rrgRecordDue(new Date('2026-11-15T23:00:00Z'), '2026-11-13').due, false);
+  });
+});

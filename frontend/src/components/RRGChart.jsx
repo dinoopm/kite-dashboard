@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import RRGCommentary from './RRGCommentary';
+import RrgTrackRecord from './RrgTrackRecord';
 import { buildRotationCommentary } from '../lib/rrgCommentary';
 
 const RRG_COLORS = [
@@ -68,6 +69,10 @@ export default function RRGChart({
   // drill-downs know the real names (they hold the constituent list), so index
   // pages leave this null and lose nothing.
   subtitleFn = () => null,
+  // Which track record applies to THIS chart's universe: 'us-sectors' (scored
+  // against SPY), 'in-sectors' (registered, blocked), or nothing — a
+  // drill-down's stocks, which have never been measured. See RrgTrackRecord.
+  trackRecord = null,
 }) {
   const CHART_W = 1000, CHART_H = 650;
   const PAD = { top: 40, right: 60, bottom: 65, left: 75 };
@@ -653,6 +658,8 @@ export default function RRGChart({
           })}
         </div>
       </div>
+
+      <RrgTrackRecord scope={trackRecord} benchmarkLabel={benchmarkLabel} />
 
       {commentary && (
         <RRGCommentary

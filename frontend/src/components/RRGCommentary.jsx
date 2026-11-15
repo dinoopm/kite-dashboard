@@ -381,9 +381,8 @@ export default function RRGCommentary({
       <div className="rrgc-body">{body}</div>
 
       <p className="rrgc-foot">
-        <strong>Descriptive only.</strong> This reads position and movement straight off the tails above.
-        RRG rotation is not a scored signal in this app (it has no entry in the signal registry), so nothing here is a forecast —
-        a sector in Improving has no measured tendency to reach Leading next.{' '}
+        <strong>Descriptive only.</strong> This reads position and movement straight off the tails above and makes no forecast.
+        Whether entering a quadrant has predicted anything is a separate question, answered — where it has been measured — by the track-record badges above this panel.{' '}
         How to read the numbers: <strong>RS-Ratio</strong> above 100 means the sector’s price against {B} is above its own one-year average,
         which nearly always means it has beaten {B} over the last six to twelve months; below 100, that it has trailed.{' '}
         <strong>Momentum</strong> compares RS-Ratio with its own average over about the last six months: above 100, the sector is doing better against {B} than it has been lately; below 100, worse.

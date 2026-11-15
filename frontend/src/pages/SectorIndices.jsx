@@ -1666,6 +1666,7 @@ function SectorIndices() {
         rrgSvgRef={rrgSvgRef}
         rrgContainerRef={rrgContainerRef}
         navigate={navigate}
+        trackRecord="in-sectors"
       />}
 
       <section className="glass-panel" style={{ padding: '1rem' }}>

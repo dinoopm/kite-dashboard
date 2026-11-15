@@ -279,6 +279,33 @@ async function recordRiskRegime(snapshot, { db = supabase, now = () => new Date(
   return { saved: written.data?.length || 0, verdict: settled.label, priorVerdict: previous?.meta?.verdict || null, sessionDate: settled.date };
 }
 
+/**
+ * RRG quadrant entries (rrg/rotation.js): write the entries of ONE completed
+ * week, the weekend it completed.
+ *
+ * `deadline` is the moment that week's outcome starts to exist — the next
+ * week's opening bell. A row written after it would be labelled recorded
+ * while knowing part of its own answer, which is the one thing the label
+ * promises it does not; past the deadline the week is left to the
+ * reconstruction, where it belongs. Insert-only on (signal, week, symbol), so
+ * a re-run over the same weekend is a no-op.
+ */
+async function recordRrgEntries(entries, { week, market = 'US', benchmark = 'SPY', ruleVersion, deadline, db = supabase, now = () => new Date() } = {}) {
+  if (!week || !ruleVersion) throw new Error('recordRrgEntries needs a week and a rule version');
+  const at = now();
+  if (deadline && at.getTime() >= new Date(deadline).getTime()) return { saved: 0, week, skipped: 'past the next open — left to the reconstruction' };
+  const mine = (entries || []).filter(e => e.date === week);
+  if (!mine.length) return { saved: 0, week, entries: 0 };
+  const captured = at.toISOString();
+  const rows = mine.map(e => versionEmission({
+    signal: `${market.toLowerCase()}_rrg_enter_${e.to.toLowerCase()}`, symbol: e.symbol, snap_date: week, source: 'recorded',
+    meta: { market, benchmark, from: e.from, to: e.to, asOf: week, capturedAt: captured },
+  }, ruleVersion, { rsRatio: e.rsRatio, rsMomentum: e.rsMomentum, previousWeek: e.prev || null, availableAt: captured }));
+  const written = await db.from('signal_emissions').upsert(rows, { onConflict: 'signal,snap_date,symbol', ignoreDuplicates: true }).select('signal');
+  if (written.error) throw new Error('RRG entries could not be recorded');
+  return { saved: written.data?.length || 0, week, entries: mine.length };
+}
+
 /** Everything, in one idempotent pass. Safe to run daily or over all history. */
 async function recordAll({ fromDate = null } = {}) {
   const price = await recordPriceSignals({ fromDate });
@@ -287,4 +314,4 @@ async function recordAll({ fromDate = null } = {}) {
   return { price, picks, highs, fromDate, recordedAt: new Date().toISOString() };
 }
 
-module.exports = { recordRiskRegime, recordUsRiskFlags, recordUsRiskSeverity, recordAll, recordPriceSignals, recordPickSignals, record52wHighs, loadCandles, PRICE_RULE_VERSION };
+module.exports = { recordRrgEntries, recordRiskRegime, recordUsRiskFlags, recordUsRiskSeverity, recordAll, recordPriceSignals, recordPickSignals, record52wHighs, loadCandles, PRICE_RULE_VERSION };

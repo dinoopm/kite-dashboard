@@ -1590,6 +1590,7 @@ function UsIndices() {
         defaultVisibleKeys={US_DEFAULT_VISIBLE}
         getNavHref={(sector) => `/us/sector/${encodeURIComponent(sector.key)}`}
         shortNameFn={(name) => name}
+        trackRecord="us-sectors"
       />}
 
       {activeTab !== 'global' && (

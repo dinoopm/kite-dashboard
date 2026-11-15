@@ -8,10 +8,11 @@
 //
 // It is deliberately DESCRIPTIVE. Textbook RRG reading says an Improving tail
 // "should" rotate into Leading next. That is a claim about future prices, and
-// rotation has no entry in backend/signals/registry.js, so no track record
-// here. Every sentence is therefore past or present tense ("moved", "is
-// sliding"), never "will". If rotation is ever registered and scored, the
-// forecast belongs on its SignalScore badge, not in this prose.
+// the place for it is a track record, not prose: quadrant entries are
+// registered (us_rrg_enter_*) and scored by backend/rrg, shown as badges by
+// RrgTrackRecord — and when first measured, 2017–2026 on US sector ETFs, they
+// showed no edge. Every sentence here is therefore past or present tense
+// ("moved", "is shrinking"), never "will".
 
 export const QUADRANT_ORDER = ['Leading', 'Weakening', 'Lagging', 'Improving']
 

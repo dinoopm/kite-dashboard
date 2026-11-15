@@ -34,6 +34,10 @@ attached, so it shows as visibly unvalidated instead of quietly unvalidated.
   signal, scored, split by `source`.
 - `backend/picks/scorecard.js` → `GET /api/stock-picks/scorecard` — the published
   picks specifically.
+- `backend/rrg/scorecard.js` → `GET /api/rrg/scorecard` — RRG quadrant entries
+  for the US sector ETFs against SPY, on weekly bars. Reconstructed (2017→) and
+  recorded (weekly, by `dailyJobs`) are scored separately. `rrg/series.js` is a
+  copy of the route's RRG arithmetic; change one, change both.
 - `backend/dataHealth.js` → `GET /api/data-health` — which price tables have holes.
 
 ### recorded vs reconstructed

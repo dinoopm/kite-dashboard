@@ -6057,6 +6057,18 @@ app.get('/api/risk-regime', async (req, res) => {
   }
 });
 
+// ─── RRG rotation track record (US) ──────────────────────────────────────────
+// Whether a sector entering an RRG quadrant went on to beat or lag SPY —
+// reconstructed from history and, separately, recorded weekly. See
+// backend/rrg/scorecard.js. Built lazily and cached there for 12h.
+app.get('/api/rrg/scorecard', async (req, res) => {
+  try {
+    res.json(await require('./rrg/scorecard').getUsRotationScorecard());
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // ─── Morning briefing ────────────────────────────────────────────────────────
 // "What changed since yesterday" — market flows + VIX, per-holding analytic
 // deltas (needs holding_state_snapshots), quant-picks churn. See briefing.js.

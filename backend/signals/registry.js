@@ -500,6 +500,11 @@ const BLOCKED_SIGNALS = [
     blockedReason: 'A descriptive label for what money did over the last month, never tested as a forecast of anything. It is market-wide, so the per-symbol scorer cannot express it, the same reason us_risk_severity and us_macro_regime sit here. Verdict transitions are recorded forward to signal_emissions after each US close (dailyJobs, risk_regime@<ruleVersion>, anchored on SPY, with the readings and capture time). Each row is the settled read for that session, from daily closes, never the live word, which depends on the hour it is taken. Recording runs from the first gateway run of this rule version (settled-close recording added 2026-11-16); the 60-session strip on the panel is reconstructed and must not be pooled with those rows. The label is also twitchy: in the replay it flipped four times between 15 and 22 Oct 2026 as gauges sat on their bands, so a scorer would have to count regimes, not flips, and would need a floor of ~20 resolved transitions, which is months of recording away. Treat it as a data display.',
   },
   {
+    name: 'rrg_rotation', label: 'RRG quadrant entry (Indian sectors)', source: 'recorded',
+    description: 'An Indian sector index entering an RRG quadrant against its benchmark — the same four claims the US entries make (us_rrg_enter_*).',
+    blockedReason: 'Not scored for India yet. The sector-index history behind the Indian RRG comes through a live Kite session, which the scheduled recorder does not have, and nse_bhavcopy holds stocks, not indices; an RRG point also needs 77 weeks of history before it exists. The US version IS scored (backend/rrg/scorecard.js, GET /api/rrg/scorecard): over 2017-2026, 29 sector ETFs against SPY, no quadrant entry showed an edge at 8 weeks that chance would not produce, and entering Improving, the textbook step before Leading, was followed by slightly below-benchmark returns. That is a US result and must not be borrowed as an Indian one; until the Indian series is scored the same way, treat the chart as a description of where sectors have been.',
+  },
+  {
     name: 'analyst_target_upside',
     label: 'Analyst target upside',
     source: 'recorded',
@@ -548,6 +553,25 @@ const RECORDED_SIGNALS = [
   // rendered as if that meant something.
   { name: 'us_picks_top25', label: 'US quant picks (top 25)', source: 'recorded', market: 'US', scoredBy: '/api/us/stock-picks/scorecard', description: 'Every symbol written to us_pick_snapshots that day. Excess over SPY.' },
   { name: 'us_picks_top10', label: 'US quant picks (top 10)', source: 'recorded', market: 'US', scoredBy: '/api/us/stock-picks/scorecard', description: 'The top 10 of the same snapshot — tests whether rank ordering carries information.' },
+
+  // RRG quadrant entries, US sector ETFs against SPY. A sector's completed-week
+  // RRG point moves into a quadrant it was outside for the four weeks before.
+  // Scored by rrg/scorecard.js (weekly bars, excess over SPY at 4/8/13 weeks),
+  // NOT by signals/scorecard.js — `market: 'US'` is what keeps these off the
+  // NIFTY calendar. Two halves, never pooled: the reconstruction from ~11 years
+  // of daily bars, and the rows recordRrgEntries writes the weekend an entry
+  // happens. A point needs 77 weeks of shared history (52 for RS-Ratio's
+  // average, then 26 for RS-Momentum's), plus 4 for the cooldown.
+  ...[
+    ['Leading', 'bullish', 'RS-Ratio and RS-Momentum both at or above 100: ahead of SPY and above its own recent average. Read as strength.'],
+    ['Improving', 'bullish', 'RS-Ratio below 100 with RS-Momentum at or above 100: behind SPY but above its own recent average. Read as the step before Leading.'],
+    ['Weakening', 'bearish', 'RS-Ratio at or above 100 with RS-Momentum below 100: ahead of SPY but below its own recent average. Read as an early warning.'],
+    ['Lagging', 'bearish', 'RS-Ratio and RS-Momentum both below 100: behind SPY and below its own recent average. Read as weakness.'],
+  ].map(([q, direction, what]) => ({
+    name: `us_rrg_enter_${q.toLowerCase()}`, label: `RRG: entered ${q}`, source: 'recorded', market: 'US', minBars: 81,
+    direction, scoredBy: '/api/rrg/scorecard',
+    description: `A US sector ETF's weekly RRG point entered ${q} against SPY, having been outside it for the previous four completed weeks. ${what}`,
+  })),
 ];
 
 const ALL_SIGNALS = [...PRICE_SIGNALS, ...RECORDED_SIGNALS, ...BLOCKED_SIGNALS];

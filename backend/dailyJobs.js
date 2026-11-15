@@ -196,6 +196,55 @@ function regimeRecordDue(now = new Date(), last = null) {
 }
 let lastRegimeRecord = null;
 
+// RRG rotation recording (rrg/rotation.js → signals/record.recordRrgEntries).
+//
+// Weekly, not daily: a quadrant entry is a fact about a completed week. The
+// window to record one opens when the week's last session has closed (16:15
+// in New York on its Friday) and shuts at the next week's opening bell, taken
+// as Monday 13:30 UTC — the earlier of the two clock changes, so the window is
+// never left open into a session. Inside it the write is "before the outcome
+// exists"; outside it, it is not, and the week is left to the reconstruction.
+//
+// `lastWeek` is an in-memory note that a week was handled, and only an
+// optimisation: a week with no entries writes no rows, so the table cannot say
+// it was looked at. A restart that forgets it costs one fetch and an upsert
+// that changes nothing.
+function rrgRecordDue(now = new Date(), lastWeek = null) {
+  const { weekComplete, fridayKey } = require('./rrg/series');
+  let week = fridayKey(now);
+  if (!weekComplete(week, now)) {
+    const d = new Date(`${week}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - 7);
+    week = d.toISOString().slice(0, 10);
+  }
+  const open = new Date(`${week}T13:30:00Z`); open.setUTCDate(open.getUTCDate() + 3); // the Monday after
+  const deadline = open.toISOString();
+  if (week === lastWeek) return { due: false, week, deadline, reason: 'week already handled' };
+  if (now.getTime() >= open.getTime()) return { due: false, week, deadline, reason: 'past the next open — left to the reconstruction' };
+  return { due: true, week, deadline };
+}
+let lastRrgWeek = null;
+
+async function runRrgRecording(decision) {
+  const { fetchBarsMulti } = require('./alpacaData');
+  const { entriesForWeek, RULE_VERSION } = require('./rrg/rotation');
+  const { resampleToWeekly, weekComplete } = require('./rrg/series');
+  const { US_RRG_KEYS, US_RRG_BENCHMARK } = require('./rrg/universe');
+  // Three years: a point needs 77 weeks behind it and an entry four more.
+  const start = new Date(); start.setFullYear(start.getFullYear() - 3);
+  const bars = await fetchBarsMulti([US_RRG_BENCHMARK, ...US_RRG_KEYS], start);
+  const bench = bars[US_RRG_BENCHMARK] || [];
+  const settled = resampleToWeekly(bench).filter(w => weekComplete(w.date));
+  // The week's bars must actually be in the feed. "No entries" and "no data
+  // yet" both come back empty, and only the first may mark the week handled.
+  if (settled[settled.length - 1]?.date !== decision.week) return { skipped: 'week not in the price feed yet', week: decision.week, handled: false };
+  const sectors = Object.fromEntries(US_RRG_KEYS.filter(k => bars[k]?.length).map(k => [k, bars[k]]));
+  const entries = entriesForWeek(sectors, bench, decision.week);
+  const r = await require('./signals/record').recordRrgEntries(entries, {
+    week: decision.week, market: 'US', benchmark: US_RRG_BENCHMARK, ruleVersion: RULE_VERSION, deadline: decision.deadline,
+  });
+  return { ...r, handled: true, moves: entries.map(e => `${e.symbol} ${e.from}→${e.to}`) };
+}
+
 /**
  * One pass of every daily recording job.
  *
@@ -204,7 +253,7 @@ let lastRegimeRecord = null;
  * to also stop recording price signals.
  */
 async function runDailyJobs({ force = false, privateOnly = false } = {}) {
-  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null, stops: null, macro: null, usPicks: null, riskRegime: null };
+  const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null, stops: null, macro: null, usPicks: null, riskRegime: null, rrgRotation: null };
 
   // Trades first, and on EVERY tick rather than once a day. Kite exposes only
   // the CURRENT day's fills, so a day this does not run is a day whose trades
@@ -325,6 +374,22 @@ async function runDailyJobs({ force = false, privateOnly = false } = {}) {
     console.warn('[daily] money-flow regime recording failed (will retry next tick):', err.message);
   }
 
+  // RRG rotation: the entries of the week that just completed. See rrgRecordDue.
+  try {
+    const decision = rrgRecordDue(new Date(), lastRrgWeek);
+    if (!decision.due) {
+      out.rrgRotation = { skipped: decision.reason, week: decision.week };
+    } else {
+      const r = await runRrgRecording(decision);
+      if (r.handled) lastRrgWeek = decision.week;
+      out.rrgRotation = r;
+      if (r.saved) console.log(`[daily] RRG entries ${decision.week}: ${r.saved} recorded (${r.moves.join(', ')})`);
+    }
+  } catch (err) {
+    out.rrgRotation = { error: err.message };
+    console.warn('[daily] RRG rotation recording failed (will retry next tick):', err.message);
+  }
+
 
   // Macro: ingest the official series on EVERY tick, then record today's regime
   // BEFORE the outcome exists — the same standard as the picks snapshot, and
@@ -409,4 +474,4 @@ function startDailyJobs(options = {}) {
   return () => { clearTimeout(first); clearInterval(timer); };
 }
 
-module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, registerStopProposals, registerMacroCachePrime, picksSnapshotDue, snapshotIsDue, isoMinus, usSnapshotDue, runUsPickSnapshot, macroRecordDue, regimeRecordDue };
+module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, registerStopProposals, registerMacroCachePrime, picksSnapshotDue, snapshotIsDue, isoMinus, usSnapshotDue, runUsPickSnapshot, macroRecordDue, regimeRecordDue, rrgRecordDue };
