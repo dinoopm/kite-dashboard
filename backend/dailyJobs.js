@@ -174,11 +174,13 @@ function macroRecordDue(hasSnapshotToday, results, scoredIds) {
 
 // Money-flow regime recording (riskRegime.js → signals/record.recordRiskRegime).
 //
-// The read must describe a SETTLED US session: the gauges move intraday, and a
-// flip that reverses by the close was never that session's verdict. So nothing
-// is fetched from 13:00 to 21:59 UTC, which covers the session and the
-// settling hour in both EDT (13:30–20:00) and EST (14:30–21:00); the recorder
-// also refuses any read whose session has not closed in New York.
+// What gets recorded is the last SETTLED US session, computed from daily
+// closes, so the answer is the same whenever this runs — the hour is not part
+// of the evidence. Nothing is fetched from 13:00 to 21:59 UTC only because no
+// new settled session can appear then: it covers the session and the settling
+// hour in both EDT (13:30–20:00) and EST (14:30–21:00). If Yahoo has not
+// posted a close by the first pass after 22:00, that session is picked up by
+// the next pass twelve hours later, still before the following open.
 //
 // `last` is an in-memory note of the last successful pass, and it is ONLY an
 // optimisation — it saves refetching five Yahoo series every 30 minutes all
@@ -313,9 +315,10 @@ async function runDailyJobs({ force = false, privateOnly = false } = {}) {
     } else {
       const snapshot = await require('./riskRegime').riskRegime();
       const r = await require('./signals/record').recordRiskRegime(snapshot);
-      lastRegimeRecord = { at: Date.now(), sessionDate: snapshot.sessionDate };
-      out.riskRegime = { ...r, verdict: snapshot.verdict.label, sessionDate: snapshot.sessionDate };
-      if (r.saved) console.log(`[daily] money-flow regime ${snapshot.sessionDate}: ${r.priorVerdict || '(first record)'} → ${r.verdict}`);
+      const settledDate = snapshot.settled?.date || null;
+      lastRegimeRecord = { at: Date.now(), sessionDate: settledDate };
+      out.riskRegime = { ...r, verdict: snapshot.settled?.label || null, sessionDate: settledDate };
+      if (r.saved) console.log(`[daily] money-flow regime ${settledDate}: ${r.priorVerdict || '(first record)'} → ${r.verdict}`);
     }
   } catch (err) {
     out.riskRegime = { error: err.message };

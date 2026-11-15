@@ -244,38 +244,39 @@ async function recordUsRiskFlags(snapshot, { db = supabase, now = () => new Date
 }
 
 /**
- * Money-flow regime (riskRegime.js): record the verdict when it CHANGES, from
- * a read of a settled US session, before anything that follows exists.
+ * Money-flow regime (riskRegime.js): record the verdict when it CHANGES,
+ * before anything that follows exists.
  *
  * Transitions, not states — a NEUTRAL that holds for six weeks is one call,
- * not thirty rows of evidence. snap_date is the US session the read describes
- * (not the capture date), so one session can hold at most one transition and
- * a re-run after a restart is a no-op; capturedAt in meta is the proof the row
- * was written when it says. Reads taken while the session is still trading are
- * refused: the gauges move intraday, and a mid-session flip that reverses by
- * the close was never the session's verdict.
+ * not thirty rows of evidence. What is written is `snapshot.settled`: the
+ * replay's last completed session, computed from daily closes alone. It is
+ * never the live word, which takes the 10Y from a live quote and so depends on
+ * the hour the job happens to run (see the header of riskRegime.js). snap_date
+ * is that session, so one session can hold at most one transition and a re-run
+ * at any later hour finds the same answer and writes nothing; capturedAt in
+ * meta is the proof of when the row was written.
  */
 async function recordRiskRegime(snapshot, { db = supabase, now = () => new Date() } = {}) {
-  if (!snapshot?.sessionDate || !snapshot.sessionComplete) return { saved: 0, skipped: 'session not settled' };
-  const label = snapshot.verdict?.label;
-  if (!label) return { saved: 0, skipped: 'no verdict' };
+  const settled = snapshot?.settled;
+  if (!settled?.date || !settled.label) return { saved: 0, skipped: 'no settled session' };
   const name = `risk_regime@${snapshot.ruleVersion}`;
   const { data, error } = await db.from('signal_emissions').select('snap_date,meta')
     .eq('signal', name).eq('symbol', 'SPY').order('snap_date', { ascending: false }).limit(1);
   if (error) throw new Error('Risk regime recording lookup failed');
   const previous = data?.[0];
-  if (previous?.snap_date > snapshot.sessionDate) return { saved: 0, skipped: 'older session' };
-  if (previous?.meta?.verdict === label) return { saved: 0, skipped: 'same verdict; no transition' };
+  if (previous?.snap_date > settled.date) return { saved: 0, skipped: 'older session' };
+  if (previous?.meta?.verdict === settled.label) return { saved: 0, skipped: 'same verdict; no transition' };
   const captured = now().toISOString();
-  const row = versionEmission({ signal: 'risk_regime', symbol: 'SPY', snap_date: snapshot.sessionDate, source: 'recorded',
-    meta: { market: 'US', verdict: label, priorVerdict: previous?.meta?.verdict || null, score: snapshot.score, asOf: snapshot.sessionDate, capturedAt: captured } },
+  const row = versionEmission({ signal: 'risk_regime', symbol: 'SPY', snap_date: settled.date, source: 'recorded',
+    meta: { market: 'US', verdict: settled.label, priorVerdict: previous?.meta?.verdict || null, score: settled.score, asOf: settled.date, capturedAt: captured } },
     snapshot.ruleVersion, {
-      gauges: (snapshot.gauges || []).map(g => ({ id: g.id, raw: g.raw, score: g.score })),
-      yield: snapshot.yield, rules: snapshot.rules, source: snapshot.source, availableAt: captured,
+      readings: { yield: settled.yield, yield1mo: settled.yield1mo, spyTlt1mo: settled.spyTlt1mo, hygLqd1mo: settled.hygLqd1mo },
+      scores: settled.scores, rules: snapshot.rules,
+      source: 'Yahoo daily closes — ^TNX, SPY, TLT, HYG, LQD', availableAt: captured,
     });
   const written = await db.from('signal_emissions').upsert([row], { onConflict: 'signal,snap_date,symbol', ignoreDuplicates: true }).select('signal');
   if (written.error) throw new Error('Risk regime transition could not be recorded');
-  return { saved: written.data?.length || 0, verdict: label, priorVerdict: previous?.meta?.verdict || null, sessionDate: snapshot.sessionDate };
+  return { saved: written.data?.length || 0, verdict: settled.label, priorVerdict: previous?.meta?.verdict || null, sessionDate: settled.date };
 }
 
 /** Everything, in one idempotent pass. Safe to run daily or over all history. */

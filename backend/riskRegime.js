@@ -19,6 +19,16 @@
 //     ever serve as evidence (registry: risk_regime, blocked).
 // Both read the thresholds from RULES, so the strip, the live word and the
 // record cannot drift into describing different rules.
+//
+// What is recorded is the SETTLED read — the replay's last completed session,
+// computed from closes alone — not the live word. The first version recorded
+// the live read, which takes the 10Y from CNBC at the moment the job runs. The
+// job runs every 12 hours at a phase set by when the gateway started, so a
+// gateway started around midday UTC recorded at 23:00–01:00 UTC, when
+// Treasuries are trading again in Asia: an overnight move would have been
+// saved under the previous session's date, and on a day near a band the live
+// and replayed reads could disagree about what that session was. A settled
+// read is the same at any hour, and the strip shows exactly what was recorded.
 
 const YahooFinance = require('yahoo-finance2').default;
 const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
@@ -66,8 +76,12 @@ function scoreRegime({ yield1mo, spyTlt1mo, hygLqd1mo }, rules = RULES) {
 }
 
 // Changes when the thresholds or the scoring logic change — not when a comment
-// in this file does, which would split one rule's record into several.
-const RULE_VERSION = ruleFingerprint('risk-regime', [JSON.stringify(RULES), scoreRegime.toString(), band.toString()]);
+// in this file does, which would split one rule's record into several. The
+// input tag is part of it: rows recorded from the live CNBC read (one, on
+// 2026-11-13) stay under their own version rather than being pooled with rows
+// recorded from settled closes.
+const RECORD_INPUTS = 'settled-daily-closes';
+const RULE_VERSION = ruleFingerprint('risk-regime', [JSON.stringify(RULES), scoreRegime.toString(), band.toString(), RECORD_INPUTS]);
 
 const VERDICT_TEXT = {
   'RISK-ON': { tone: 'good', text: 'Money is favouring stocks over bonds — no flight to safety.' },
@@ -242,7 +256,9 @@ async function riskRegime({ now = new Date() } = {}) {
     context: { spy3mo: r1(ret(spy, Q)), tlt3mo: r1(ret(tlt, Q)) },
     indiaNote: indiaNoteFor(yieldNow),
     history, since: sinceFor(history, label),
-    // What the recorder needs to decide whether this read is a settled one.
+    // What the recorder writes: the last completed session, from closes only.
+    // Null until there is one. Never the live word above — see the header.
+    settled: history.length ? history[history.length - 1] : null,
     sessionDate, sessionComplete: sessionDate ? sessionComplete(sessionDate, now) : false,
     rules: RULES, ruleVersion: RULE_VERSION, validation: validationEntry(),
     asOf: now.toISOString(),

@@ -22,9 +22,11 @@ function database() {
   return { db, rows };
 }
 
-const read = (label, sessionDate, extra = {}) => ({
-  verdict: { label }, score: label === 'RISK-OFF' ? -2 : 0, sessionDate, sessionComplete: true, ruleVersion: 'risk-regime-test',
-  gauges: [{ id: 'yield', raw: -0.09, score: -1 }], yield: { now: 5.1 }, rules: { windowSessions: 21 }, source: 'test', ...extra,
+// `live` is today's live word; the recorder must ignore it and write `settled`.
+const read = (label, date, { live = label, ...extra } = {}) => ({
+  verdict: { label: live }, ruleVersion: 'risk-regime-test', rules: { windowSessions: 21 },
+  settled: { date, label, score: label === 'RISK-OFF' ? -2 : 0, scores: { yield: -1, stocksBonds: -1, credit: 0 }, yield: 5.1, yield1mo: -0.09, spyTlt1mo: -2.7, hygLqd1mo: -0.2 },
+  ...extra,
 });
 const now = () => new Date('2026-11-13T22:10:00Z');
 
@@ -42,14 +44,27 @@ test('records the first verdict, then only changes', async () => {
   assert.equal(last.source, 'recorded');
   assert.equal(last.meta.verdict, 'NEUTRAL');
   assert.equal(last.meta.capturedAt, now().toISOString());
-  assert.equal(last.meta.inputs.gauges[0].raw, -0.09);
+  assert.equal(last.meta.inputs.readings.yield1mo, -0.09);
+  assert.match(last.meta.inputs.source, /daily closes/);
 });
 
-// A mid-session read is not the session's verdict.
-test('refuses a read of a session still trading', async () => {
+// The live word takes the 10Y from a live quote, so it depends on the hour the
+// job runs — overnight in Asia it can differ from what the session closed at.
+test('records the settled session, never the live word', async () => {
   const { db, rows } = database();
-  const r = await recordRiskRegime(read('RISK-ON', '2026-11-13', { sessionComplete: false }), { db, now });
-  assert.equal(r.skipped, 'session not settled');
+  await recordRiskRegime(read('NEUTRAL', '2026-11-13', { live: 'RISK-ON' }), { db, now });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].meta.verdict, 'NEUTRAL');
+  // The same session read again hours later, with the live word now different, changes nothing.
+  const again = await recordRiskRegime(read('NEUTRAL', '2026-11-13', { live: 'RISK-OFF' }), { db, now: () => new Date('2026-11-14T01:00:00Z') });
+  assert.equal(again.skipped, 'same verdict; no transition');
+  assert.equal(rows.length, 1);
+});
+
+test('writes nothing when no session has settled', async () => {
+  const { db, rows } = database();
+  const r = await recordRiskRegime({ verdict: { label: 'RISK-ON' }, ruleVersion: 'risk-regime-test', settled: null }, { db, now });
+  assert.equal(r.skipped, 'no settled session');
   assert.equal(rows.length, 0);
 });
 
