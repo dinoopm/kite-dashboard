@@ -17,10 +17,15 @@
 const { createClient } = require('../auth/database');
 const { buildSeries } = require('../backtest/indicators');
 const { detectAll, PRICE_SIGNALS } = require('./registry');
-const { fileRuleVersion, versionEmission, seriesInputs } = require('./audit');
+const { ruleFingerprint, versionEmission, seriesInputs } = require('./audit');
 const { PRICE_RULE_VERSION } = require('./ruleVersions');
 const { DEFAULT_COST_MODEL } = require('../signalScoring');
-const HIGH_RULE_VERSION = fileRuleVersion('high-52w', [__filename]);
+// The rule is record52wHighs itself, so that is what is fingerprinted. This
+// used to be the whole file, which meant adding any OTHER recorder below —
+// three were added in November 2026 — gave the 52-week-high record a new
+// version each time and split its history for no change in what it records.
+// (Function declarations are hoisted, so the reference is valid here.)
+const HIGH_RULE_VERSION = ruleFingerprint('high-52w', [record52wHighs.toString()]);
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
