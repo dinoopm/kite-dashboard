@@ -39,6 +39,20 @@ attached, so it shows as visibly unvalidated instead of quietly unvalidated.
   recorded (weekly, by `dailyJobs`) are scored separately. `rrg/series.js` is a
   copy of the route's RRG arithmetic; change one, change both.
 - `backend/dataHealth.js` → `GET /api/data-health` — which price tables have holes.
+- `frontend/src/pages/TrackRecord.jsx` (`/track-record`) — every registry claim in
+  one list, merged from the three scorecards and sorted by how much is known.
+  It measures nothing itself; a row's state is read off its scorer's `headline`.
+
+### rule versions
+
+A rule version is a fingerprint, and results under different versions are never
+added together. It must cover the detection logic and nothing else:
+`signals/ruleVersions.js` fingerprints `registry.js` only ABOVE the
+`BLOCKED_SIGNALS` array. It used to hash the whole file, so adding an unrelated
+blocked entry gave all ten price detectors a new version with 30 days of history
+— three times in one week in November 2026. Keep descriptions, labels and
+blocked/recorded entries below that line, and never fingerprint a whole file
+that also holds other things.
 
 ### recorded vs reconstructed
 

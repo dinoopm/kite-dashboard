@@ -38,6 +38,7 @@ import SurveillanceStocks from './pages/marketData/SurveillanceStocks'
 import StockPicks from './pages/marketData/StockPicks'
 import MacroEconomics from './pages/marketData/MacroEconomics'
 import ExpiryStudy from './pages/marketData/ExpiryStudy'
+import TrackRecord from './pages/TrackRecord'
 import EventsCalendar from './pages/marketData/EventsCalendar'
 import OilTracker from './pages/marketData/OilTracker'
 import Navbar from './components/Navbar'
@@ -294,6 +295,7 @@ function App() {
           <Route path="/vix" element={<VixIndex />} />
           <Route path="/crypto" element={<Crypto />} />
           <Route path="/chat" element={<Chat />} />
+          <Route path="/track-record" element={<TrackRecord />} />
           <Route path="/market-data/stock-picks" element={<StockPicks />} />
           <Route path="/market-data/fii-dii" element={<FiiDii />} />
           <Route path="/market-data/large-deals" element={<LargeDeals />} />

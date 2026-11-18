@@ -17,6 +17,9 @@ const MARKET_DATA_LINKS = [
   { to: '/market-data/events',              label: 'Corporate Events',          hint: 'Upcoming results/dividend dates + your own events; holdings highlighted.' },
   { to: '/market-data/expiry',              label: 'F&O Expiry',                hint: 'Next monthly expiry, and whether expiry sessions are measurably more volatile (they are not).' },
   { to: '/market-data/oil',                 label: 'Crude Oil (WTI / Brent)',   hint: 'WTI & Brent spot, day change and ranges (10-min delayed).' },
+  // Not market data, but it is where the app answers for itself, and it
+  // covers both markets — so it sits at the foot of both menus.
+  { to: '/track-record',                    label: '✓ Track Record',            hint: 'Every signal and label the app shows, and whether it has been measured.' },
 ];
 
 // Sublinks under the "US" dropdown (Alpaca-powered US market data).
@@ -28,6 +31,7 @@ const US_LINKS = [
   { to: '/us/stock-picks', label: 'Quant Picks', hint: 'Five-factor ranking of S&P 500 + Nasdaq 100 with a recorded track record vs SPY.' },
   { to: '/us/basket',   label: 'Baskets',  hint: 'Build thematic baskets of US stocks with performance + RRG.' },
   { to: '/us/virtual',  label: 'Virtual',  hint: 'Paper portfolios of US stocks — invested, P&L, day change, allocation.' },
+  { to: '/track-record', label: '✓ Track Record', hint: 'Every signal and label the app shows, and whether it has been measured.' },
 ];
 
 function Navbar({ onDisconnect }) {
