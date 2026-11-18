@@ -38,6 +38,58 @@ async function fetchAll(table, cols, applyFilters) {
   return out;
 }
 
+// PostgREST filter value, quoted so that the characters its grammar reserves
+// (commas, dots, colons, parentheses — a signal name carries '@' and '/', a
+// symbol '&' and '-') are read as data.
+const quote = (v) => `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
+/**
+ * "Rows after this key", for a composite key, as a PostgREST `or` filter:
+ *   (a > A) or (a = A and b > B) or (a = A and b = B and c > C)
+ */
+function keysetAfter(keys, last) {
+  return keys.map((k, i) => {
+    const eq = keys.slice(0, i).map(p => `${p}.eq.${quote(last[p])}`);
+    const gt = `${k}.gt.${quote(last[k])}`;
+    return eq.length ? `and(${[...eq, gt].join(',')})` : gt;
+  }).join(',');
+}
+
+/**
+ * Read a whole table in primary-key order, a page at a time, by KEY.
+ *
+ * fetchAll above pages by offset, which makes Postgres walk every row it
+ * skips, and with an ORDER BY that is not the key, sort the table for every
+ * page. On signal_emissions that stopped working: the select list extracts
+ * fields from `meta`, which on versioned rows carries a full input snapshot,
+ * and those extractions are evaluated for every row sorted or skipped, not
+ * just the thousand returned. At ~83k rows (2026-11-16) even the FIRST page in
+ * date order hit Supabase's 8-second statement timeout, so /api/signals/
+ * scorecard failed outright — and because a badge hides itself when its
+ * scorecard fails, every Indian track-record badge disappeared without a word.
+ *
+ * Keyed paging reads each row once, off the primary-key index, and extracts
+ * only from the rows it returns. `keys` must be the table's unique key, in
+ * index order, and must be in `cols`. Rows come back in key order; sort
+ * afterwards if another order is needed.
+ */
+async function fetchAllKeyset(table, cols, keys, applyFilters, { page = 1000, client = supabase } = {}) {
+  const out = [];
+  let last = null;
+  for (;;) {
+    let q = client.from(table).select(cols);
+    if (applyFilters) q = applyFilters(q);
+    if (last) q = q.or(keysetAfter(keys, last));
+    for (const k of keys) q = q.order(k, { ascending: true });
+    const { data, error } = await q.limit(page);
+    if (error) throw new Error(`${table}: ${error.message}`);
+    out.push(...(data || []));
+    if (!data || data.length < page) break;
+    last = data[data.length - 1];
+  }
+  return out;
+}
+
 /** Every session either source knows about, from `since` on. See the note above. */
 function mergeCalendars(tableDates, benchDates, since) {
   const all = new Set((tableDates || []).filter(d => d >= since));
@@ -154,6 +206,6 @@ async function buildMarketContext(symbols, since) {
 }
 
 module.exports = {
-  BENCHMARK, fetchAll, mergeCalendars, findCalendarGaps, alignToCalendar,
+  BENCHMARK, fetchAll, fetchAllKeyset, keysetAfter, mergeCalendars, findCalendarGaps, alignToCalendar,
   fetchTradingDates, fetchCloses, fetchPriceBars, fetchBenchmark, buildMarketContext,
 };

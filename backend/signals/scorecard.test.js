@@ -122,3 +122,42 @@ test('US market severity emissions stay unvalidated and are never scored on an I
   const entry = result.signals.find(s => s.signal === 'us_risk_severity');
   assert.equal(entry.headline.state, 'unscoreable');
 });
+
+// The emissions read was reworked on 2026-11-16 after it began timing out (see
+// fetchAllKeyset): meta-derived fields are read once per signal name instead
+// of once per row. These hold the rule that makes that safe.
+describe('attachMeta', () => {
+  const { attachMeta } = require('./scorecard');
+  const rows = [
+    { signal: 'breakout_20d@v1', snap_date: '2026-06-01', symbol: 'AAA', source: 'reconstructed' },
+    { signal: 'breakout_20d@v1', snap_date: '2026-06-02', symbol: 'BBB', source: 'reconstructed' },
+    { signal: 'bb_squeeze', snap_date: '2026-06-01', symbol: 'AAA', source: 'reconstructed' },
+  ];
+  const meta = { canonicalSignal: 'breakout_20d', ruleVersion: 'v1', costModel: { version: 'illustrative-v1' }, inputSnapshot: 'true' };
+
+  test('fields shared by a signal name are read once and applied to all its rows', async () => {
+    let exactCalls = 0;
+    const out = await attachMeta(rows, {
+      sample: async (name) => (name === 'breakout_20d@v1' ? meta : {}),
+      exact: async () => { exactCalls++; return []; },
+    });
+    assert.equal(exactCalls, 0);
+    assert.deepEqual(out.filter(r => r.signal === 'breakout_20d@v1').map(r => r.ruleVersion), ['v1', 'v1']);
+    assert.equal(out[0].costModel.version, 'illustrative-v1');
+    // A legacy row has none of these, and must come back with nulls, not undefined.
+    assert.deepEqual([out[2].canonicalSignal, out[2].ruleVersion, out[2].costModel, out[2].inputSnapshot], [null, null, null, null]);
+  });
+
+  // The assumption is checked, not trusted: if a name's first and last rows
+  // differ, that name is read row by row.
+  test('a signal name whose rows disagree is read exactly', async () => {
+    const out = await attachMeta(rows, {
+      sample: async (name, ascending) => (name === 'breakout_20d@v1' ? { ...meta, inputSnapshot: ascending ? 'true' : 'false' } : {}),
+      exact: async (name) => (name === 'breakout_20d@v1' ? [
+        { snap_date: '2026-06-01', symbol: 'AAA', ...meta, inputSnapshot: 'true' },
+        { snap_date: '2026-06-02', symbol: 'BBB', ...meta, inputSnapshot: 'false' },
+      ] : []),
+    });
+    assert.deepEqual(out.filter(r => r.signal === 'breakout_20d@v1').map(r => r.inputSnapshot), ['true', 'false']);
+  });
+});

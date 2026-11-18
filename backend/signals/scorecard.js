@@ -17,9 +17,12 @@
 
 const { scoreSignal, summarise, DEFAULT_COST_MODEL } = require('../signalScoring');
 const { normalizeEmission } = require('./audit');
+const { createClient } = require('../auth/database');
 const { PRICE_RULE_VERSION } = require('./ruleVersions');
-const { fetchAll, buildMarketContext } = require('./marketSeries');
+const { fetchAllKeyset, buildMarketContext } = require('./marketSeries');
 const { ALL_SIGNALS, PRICE_SIGNALS, BLOCKED_SIGNALS, signalMeta } = require('./registry');
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 const currentRuleVersions = Object.fromEntries(PRICE_SIGNALS.map(signal => [signal.name, PRICE_RULE_VERSION]));
 
@@ -28,10 +31,67 @@ const HORIZONS = [5, 10, 22];
 // under-sampled signal is visibly under-sampled instead of merely absent.
 const MIN_N = 20;
 
+// Reading signal_emissions.
+//
+// Paged by primary key, not by offset in date order — see fetchAllKeyset for
+// why the old query stopped returning at all. And the four fields taken from
+// `meta` are no longer extracted per row: a versioned row's meta is ~30 KB
+// (it carries the full input snapshot), so pulling four paths out of a
+// thousand of them is a statement timeout on its own. Those fields are a
+// property of the signal NAME, not of the row — the name is
+// `<signal>@<ruleVersion>`, and the cost model is part of what the rule
+// version fingerprints — so they are read once per name, from its first and
+// last row. If the two ever disagree, that name alone is read row by row, in
+// pages small enough to finish. Nothing is assumed that is not checked.
+//
+// The rows are then put back into the order the rest of this file was written
+// against (date, signal, symbol): firstFired / lastFired below read the first
+// and last date of each group.
+const EMISSION_KEY = ['signal', 'snap_date', 'symbol'];
+const META_COLS = 'canonicalSignal:meta->>signal,ruleVersion:meta->>ruleVersion,costModel:meta->costModel,inputSnapshot:meta->>inputSnapshot';
+const META_FIELDS = ['canonicalSignal', 'ruleVersion', 'costModel', 'inputSnapshot'];
+const byDateSignalSymbol = (a, b) =>
+  (a.snap_date < b.snap_date ? -1 : a.snap_date > b.snap_date ? 1 : 0)
+  || (a.signal < b.signal ? -1 : a.signal > b.signal ? 1 : 0)
+  || (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0);
+const pick = (row) => Object.fromEntries(META_FIELDS.map(f => [f, row?.[f] ?? null]));
+
+async function sampleMeta(name, ascending) {
+  const { data, error } = await supabase.from('signal_emissions').select(META_COLS).eq('signal', name)
+    .order('snap_date', { ascending }).order('symbol', { ascending }).limit(1);
+  if (error) throw new Error(`signal_emissions: ${error.message}`);
+  return data?.[0] || null;
+}
+const exactMeta = (name) => fetchAllKeyset('signal_emissions', `signal,snap_date,symbol,${META_COLS}`, EMISSION_KEY,
+  (q) => q.eq('signal', name), { page: 200 });
+
+/**
+ * Attach the meta-derived fields to light rows. `sample` and `exact` are
+ * injectable so the agreement rule can be tested without a database.
+ */
+async function attachMeta(rows, { sample = sampleMeta, exact = exactMeta, concurrency = 6 } = {}) {
+  const names = [...new Set(rows.map(r => r.signal))];
+  const shared = new Map();   // name → fields every row of it shares
+  const perRow = new Map();   // name → Map(key → fields), only where rows differ
+  let next = 0;
+  const worker = async () => {
+    while (next < names.length) {
+      const name = names[next++];
+      const [first, last] = await Promise.all([sample(name, true), sample(name, false)]);
+      if (JSON.stringify(pick(first)) === JSON.stringify(pick(last))) { shared.set(name, pick(first)); continue; }
+      const each = await exact(name);
+      perRow.set(name, new Map(each.map(r => [`${r.snap_date}|${r.symbol}`, pick(r)])));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, names.length) }, worker));
+  return rows.map(r => ({ ...r, ...(shared.get(r.signal) || perRow.get(r.signal)?.get(`${r.snap_date}|${r.symbol}`) || pick(null)) }));
+}
+
 async function fetchEmissions() {
-  const rows = await fetchAll('signal_emissions', 'signal,snap_date,symbol,source,canonicalSignal:meta->>signal,ruleVersion:meta->>ruleVersion,costModel:meta->costModel,inputSnapshot:meta->>inputSnapshot',
-    (q) => q.order('snap_date', { ascending: true }).order('signal').order('symbol'));
-  return rows.filter(row => !row.signal.startsWith('technical_alert/')).map(normalizeEmission);
+  const light = await fetchAllKeyset('signal_emissions', 'signal,snap_date,symbol,source',
+    EMISSION_KEY, (q) => q.not('signal', 'like', 'technical_alert/%'));
+  const rows = await attachMeta(light.filter(row => !row.signal.startsWith('technical_alert/')));
+  return rows.sort(byDateSignalSymbol).map(normalizeEmission);
 }
 
 const pct = (x) => (x == null ? null : +x.toFixed(2));
@@ -124,6 +184,9 @@ async function runSignalScorecard({ fetchRows = fetchEmissions, context = buildM
   const signals = [];
   const blocked = BLOCKED_SIGNALS.map(s => ({
     signal: s.name, label: s.label, source: s.source,
+    // For the Track Record page, which lists every claim with what it is and
+    // which market it speaks about. Additive: the badges read only `headline`.
+    description: s.description || null, market: s.market || 'IN',
     firings: 0, symbols: 0, horizons: [],
     headline: headline([], { blockedReason: s.blockedReason }),
   }));
@@ -177,6 +240,7 @@ async function runSignalScorecard({ fetchRows = fetchEmissions, context = buildM
     .filter(s => !seen.has(s.name) && !s.blockedReason && s.market !== 'US')
     .map(s => ({
       signal: s.name, label: s.label, source: s.source, direction: s.direction || 'bullish',
+      description: s.description || null,
       firings: 0, symbols: 0, horizons: [],
       // "Check the recorder" is the right default — a signal shipping in the UI
       // with no emissions is usually a recording bug. It is the WRONG message
@@ -212,4 +276,4 @@ async function runSignalScorecard({ fetchRows = fetchEmissions, context = buildM
   };
 }
 
-module.exports = { runSignalScorecard, headline, present, HORIZONS, MIN_N };
+module.exports = { runSignalScorecard, headline, present, attachMeta, fetchEmissions, HORIZONS, MIN_N };
