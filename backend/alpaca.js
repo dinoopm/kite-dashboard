@@ -1437,7 +1437,13 @@ router.get('/earnings-calendar', async (req, res) => {
 // next-day close-to-close moves, because the filing doesn't say whether the
 // release was pre-market (reaction lands day D) or post-close (day D+1); the
 // earnings move dominates that session, so max-abs picks the right one.
-const SEC_UA = { 'User-Agent': 'kite-dashboard/1.0 dinoopm@gmail.com' };
+// SEC asks automated clients to identify themselves with a contact address in
+// the User-Agent, and may refuse requests that do not. That address is
+// personal, and this repository is public, so it lives in .env as
+// SEC_USER_AGENT (e.g. "kite-dashboard/1.0 you@example.com"), never in source.
+// Without it the requests still go out under a generic name; if SEC starts
+// refusing them, the earnings-reaction panel says so via its HTTP error.
+const SEC_UA = { 'User-Agent': process.env.SEC_USER_AGENT || 'kite-dashboard/1.0' };
 let cikMapCache = { map: null, ts: 0 };
 const earningsReactionCache = {}; // sym -> { data, ts }
 const EARN_REACT_TTL = 24 * 60 * 60 * 1000;
