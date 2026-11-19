@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
-import StrategyParamsForm, { useStrategies } from '../components/backtest/StrategyParamsForm'
+import StrategyParamsForm from '../components/backtest/StrategyParamsForm'
+import { useStrategies } from '../hooks/useStrategies'
 import BacktestResults from '../components/backtest/BacktestResults'
 import PastRunsList from '../components/backtest/PastRunsList'
 
@@ -156,7 +157,7 @@ export default function Backtest() {
         return
       }
       pollTimer.current = setTimeout(() => poll(jobId), POLL_MS)
-    } catch (e) {
+    } catch {
       if (!mountedRef.current) return
       // Transient poll failure — keep trying; the job is still running server-side.
       pollTimer.current = setTimeout(() => poll(jobId), POLL_MS * 2)

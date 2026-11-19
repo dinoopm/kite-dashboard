@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useFetchJson } from '../hooks/useFetchJson'
 import { fmtDate } from '../lib/formatDate'
 
 // Manipulation red-flag banner shared by the India and US instrument pages.
@@ -10,19 +10,9 @@ import { fmtDate } from '../lib/formatDate'
 // Deterministic heuristics, not verdicts: a flag means "look closer", and the
 // quiet all-clear line means none of the known trap patterns matched.
 export default function RedFlagsPanel({ url }) {
-  const [data, setData] = useState(null)
+  const { data } = useFetchJson(url)
 
-  useEffect(() => {
-    let alive = true
-    setData(null)
-    fetch(url)
-      .then(r => (r.ok ? r.json() : null))
-      .then(j => { if (alive) setData(j) })
-      .catch(() => { })
-    return () => { alive = false }
-  }, [url])
-
-  if (!data || data.error) return null
+  if (!data) return null
 
   const flags = data.flags || []
   if (!flags.length) {

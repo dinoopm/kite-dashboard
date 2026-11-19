@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useFetchJson } from '../hooks/useFetchJson';
 import { fmtDate } from '../lib/formatDate';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -99,16 +99,7 @@ function RatingBar({ row }) {
 }
 
 export default function AnalystsPanel({ fetchUrl, money, bigMoney, emptyNote }) {
-  const [d, setD] = useState(null);
-  const [err, setErr] = useState(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    let on = true; setLoading(true); setErr(null);
-    fetch(fetchUrl).then(r => r.json())
-      .then(j => { if (!on) return; if (j.error) setErr(j.error); else setD(j); })
-      .catch(e => on && setErr(e.message)).finally(() => on && setLoading(false));
-    return () => { on = false; };
-  }, [fetchUrl]);
+  const { data: d, error: err, loading } = useFetchJson(fetchUrl);
 
   if (loading) return <div className="loader" />;
   if (err) return <div className="glass-panel" style={{ padding: '1.5rem', color: RED }}>Failed to load analyst data: {err}</div>;

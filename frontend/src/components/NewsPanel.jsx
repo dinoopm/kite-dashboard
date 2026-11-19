@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useFetchJson } from '../hooks/useFetchJson'
 
 // Per-stock news list for the instrument-page News tab. India: /api/news/:symbol,
 // US: /api/us/news/:symbol — both return { items: [{ title, link, source,
@@ -18,18 +18,7 @@ function ago(iso) {
 }
 
 export default function NewsPanel({ url }) {
-  const [data, setData] = useState(null)
-  const [error, setError] = useState(null)
-
-  useEffect(() => {
-    let on = true
-    setData(null); setError(null)
-    fetch(url)
-      .then(r => r.json())
-      .then(j => { if (!on) return; j.error ? setError(j.error) : setData(j) })
-      .catch(e => on && setError(e.message))
-    return () => { on = false }
-  }, [url])
+  const { data, error } = useFetchJson(url)
 
   if (error) return <div className="glass-panel" style={{ padding: '1.5rem', color: 'var(--danger)' }}>Couldn't load news: {error}</div>
   if (!data) return <div className="loader" />

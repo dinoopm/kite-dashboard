@@ -98,7 +98,6 @@ export default function SectorDetailPage({ market }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [sectorQuote, setSectorQuote] = useState(null);  // { price, change1D }
-  const [sectorToken, setSectorToken] = useState(null);
   const [sectorReturns, setSectorReturns] = useState(null);
   const [sectorHistory, setSectorHistory] = useState([]);
   const [sectorRsi14, setSectorRsi14] = useState(null);
@@ -200,7 +199,6 @@ export default function SectorDetailPage({ market }) {
           const prevClose = sq.ohlc?.close ?? price;
           const change1D = prevClose ? ((price - prevClose) / prevClose) * 100 : 0;
           setSectorQuote({ price, change1D });
-          setSectorToken(String(sq.instrument_token));
         }
 
         const benchmarkToken = nq?.instrument_token ? String(nq.instrument_token) : null;
@@ -446,7 +444,7 @@ export default function SectorDetailPage({ market }) {
 
           let arr = null;
           if (hData?.content?.[0]?.text) {
-            try { const p = JSON.parse(hData.content[0].text); if (Array.isArray(p)) arr = p; } catch {}
+            try { const p = JSON.parse(hData.content[0].text); if (Array.isArray(p)) arr = p; } catch { /* unparseable history: treated as none */ }
           }
 
           const patch = arr?.length && !signal.aborted ? rowPatchFrom(arr) : null;
@@ -644,7 +642,7 @@ export default function SectorDetailPage({ market }) {
     const emojis = { Leading: '🟢', Weakening: '🟡', Lagging: '🔴', Improving: '🔵' };
     if (!q) return null;
     return (
-      <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '0.2rem 0.5rem', borderRadius: '4px', border: `1px solid ${colors[q] || '#888'}`, color: colors[q] || '#888', background: `${colors[q]}15` || 'transparent' }}>
+      <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '0.2rem 0.5rem', borderRadius: '4px', border: `1px solid ${colors[q] || '#888'}`, color: colors[q] || '#888', background: colors[q] ? `${colors[q]}15` : 'transparent' }}>
         {emojis[q]} {q}
       </span>
     );

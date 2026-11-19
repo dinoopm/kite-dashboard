@@ -147,7 +147,8 @@ function loadIndicesSnapshot() {
 
 function saveIndicesSnapshot(data) {
   try {
-    const rows = data.map(({ history, ...rest }) => rest); // drop history (large, reloads anyway)
+    // Drop history (large, reloads anyway).
+    const rows = data.map(row => { const rest = { ...row }; delete rest.history; return rest; });
     localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ ts: Date.now(), rows }));
   } catch { /* quota / serialization — non-fatal */ }
 }

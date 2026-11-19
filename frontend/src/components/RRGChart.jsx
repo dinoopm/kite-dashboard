@@ -23,7 +23,7 @@ const DEFAULT_BENCHMARK_OPTIONS = [
   { value: 'NSE:NIFTY MIDCAP 100', label: 'MIDCAP 100 (Growth/Risk)' },
 ];
 
-export const QUADRANT_COLORS = {
+const QUADRANT_COLORS = {
   Leading:   { bg: 'rgba(34, 197, 94, 0.1)',  border: '#22c55e', text: '#22c55e', emoji: '🟢' },
   Weakening: { bg: 'rgba(234, 179, 8, 0.1)',  border: '#eab308', text: '#eab308', emoji: '🟡' },
   Lagging:   { bg: 'rgba(239, 68, 68, 0.1)',  border: '#ef4444', text: '#ef4444', emoji: '🔴' },

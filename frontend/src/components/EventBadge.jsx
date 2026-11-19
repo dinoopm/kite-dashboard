@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useFetchJson } from '../hooks/useFetchJson'
 
 // "Results on 08 Jul" / "Earnings 21–25 Jul" chip for the instrument pages.
 // India: /api/events/:symbol (NSE board-meeting calendar — results, dividend,
@@ -12,36 +12,30 @@ const fmt = (iso) => {
 }
 const daysUntil = (iso) => Math.ceil((new Date(iso + 'T00:00:00') - new Date()) / 86400000)
 
-export default function EventBadge({ url }) {
-  const [items, setItems] = useState(null)
+// The chips a response produces, or null for none. Pure.
+function chipsFrom(j) {
+  if (!j || j.error) return null
+  const out = []
+  // India shape: { events: [{ purpose, date, detail }] }
+  for (const e of (j.events || []).slice(0, 2)) {
+    out.push({ label: `${e.purpose} · ${fmt(e.date)}`, date: e.date, title: e.detail })
+  }
+  // US shape: { earnings: {from,to}, exDividendDate }. Yahoo returns the
+  // LAST report when the next one isn't scheduled yet — show only if the
+  // window's end is still ahead.
+  if (j.earnings && daysUntil(j.earnings.to) >= 0) {
+    const win = j.earnings.from === j.earnings.to ? fmt(j.earnings.from) : `${fmt(j.earnings.from)}–${fmt(j.earnings.to)}`
+    out.push({ label: `Earnings ${win}`, date: j.earnings.from, title: 'Next earnings (Yahoo; a range until the company confirms)' })
+  }
+  if (j.exDividendDate && daysUntil(j.exDividendDate) >= 0) {
+    out.push({ label: `Ex-div ${fmt(j.exDividendDate)}`, date: j.exDividendDate, title: 'Ex-dividend date' })
+  }
+  return out.length ? out : null
+}
 
-  useEffect(() => {
-    let on = true
-    setItems(null)
-    fetch(url)
-      .then(r => (r.ok ? r.json() : null))
-      .then(j => {
-        if (!on || !j || j.error) return
-        const out = []
-        // India shape: { events: [{ purpose, date, detail }] }
-        for (const e of (j.events || []).slice(0, 2)) {
-          out.push({ label: `${e.purpose} · ${fmt(e.date)}`, date: e.date, title: e.detail })
-        }
-        // US shape: { earnings: {from,to}, exDividendDate }. Yahoo returns the
-        // LAST report when the next one isn't scheduled yet — show only if the
-        // window's end is still ahead.
-        if (j.earnings && daysUntil(j.earnings.to) >= 0) {
-          const win = j.earnings.from === j.earnings.to ? fmt(j.earnings.from) : `${fmt(j.earnings.from)}–${fmt(j.earnings.to)}`
-          out.push({ label: `Earnings ${win}`, date: j.earnings.from, title: 'Next earnings (Yahoo; a range until the company confirms)' })
-        }
-        if (j.exDividendDate && daysUntil(j.exDividendDate) >= 0) {
-          out.push({ label: `Ex-div ${fmt(j.exDividendDate)}`, date: j.exDividendDate, title: 'Ex-dividend date' })
-        }
-        if (out.length) setItems(out)
-      })
-      .catch(() => { })
-    return () => { on = false }
-  }, [url])
+export default function EventBadge({ url }) {
+  const { data } = useFetchJson(url)
+  const items = chipsFrom(data)
 
   if (!items) return null
   return (

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { fetchWithAbort } from '../../hooks/useFetchWithAbort'
-import StrategyParamsForm, { useStrategies } from './StrategyParamsForm'
+import StrategyParamsForm from './StrategyParamsForm'
+import { useStrategies } from '../../hooks/useStrategies'
 import BacktestResults from './BacktestResults'
 import PastRunsList from './PastRunsList'
 

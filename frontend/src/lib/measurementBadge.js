@@ -56,6 +56,8 @@ export function badgePlacement({ from, to, width, height, badgeWidth, badgeHeigh
     { left: MARGIN, top: maxTop }, { left: maxLeft, top: maxTop },
   ].map(c => ({ ...c, side: 'corner', covered: overlapArea(rectOf(c.left, c.top), sel) }))
   corners.sort((a, b) => a.covered - b.covered)
-  const { covered, ...best } = corners[0]
+  // Strip the scoring field; callers get only the position.
+  const best = { ...corners[0] }
+  delete best.covered
   return best
 }

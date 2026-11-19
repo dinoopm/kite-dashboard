@@ -149,7 +149,7 @@ function MarketDataTable({
       }
       tokenCacheRef.current.set(symbol, token)
       navigate(`/instrument/${token}?symbol=${encodeURIComponent(symbol)}`)
-    } catch (e) {
+    } catch {
       // Silently fall back to the symbol-only URL — the Instrument page will
       // still load quote and fundamentals; only the chart requires the token.
       navigate(`/instrument/0?symbol=${encodeURIComponent(symbol)}`)

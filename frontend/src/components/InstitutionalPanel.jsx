@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useFetchJson } from '../hooks/useFetchJson'
 import { fmtDate } from '../lib/formatDate'
 
 // Institutional-activity header for the India instrument page's Institutional
@@ -42,24 +42,11 @@ function Stat({ label, value, color, sub }) {
 }
 
 export default function InstitutionalPanel({ symbol }) {
-  const [d, setD] = useState(null)
-  const [market, setMarket] = useState(null)
+  const { data: d } = useFetchJson(`/api/institutional/${encodeURIComponent(symbol)}`)
+  const { data: flows } = useFetchJson('/api/fiidii?limit=5')
+  const market = Array.isArray(flows) ? flows : null
 
-  useEffect(() => {
-    let on = true
-    setD(null); setMarket(null)
-    fetch(`/api/institutional/${encodeURIComponent(symbol)}`)
-      .then(r => (r.ok ? r.json() : null))
-      .then(j => { if (on) setD(j) })
-      .catch(() => { })
-    fetch('/api/fiidii?limit=5')
-      .then(r => (r.ok ? r.json() : null))
-      .then(j => { if (on && Array.isArray(j)) setMarket(j) })
-      .catch(() => { })
-    return () => { on = false }
-  }, [symbol])
-
-  if (!d || d.error) return null
+  if (!d) return null
   const tone = TONES[d.verdict?.tone] || TONES.neutral
   const deliv = d.delivery
   const delivTrend = deliv ? (deliv.recentAvg > deliv.priorAvg ? 'rising' : deliv.recentAvg < deliv.priorAvg ? 'falling' : 'flat') : null

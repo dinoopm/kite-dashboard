@@ -3,7 +3,6 @@ import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceDot } from 'recharts'
 import VolumePane from '../components/VolumePane'
 import { hasTradedVolume } from '../lib/volume'
-import { format, parseISO } from 'date-fns'
 import { fetchWithAbort } from '../hooks/useFetchWithAbort'
 import AlertRow from '../components/alerts/AlertRow'
 import SignalChart from '../components/SignalChart'
@@ -3015,7 +3014,6 @@ function Instrument() {
           if (years.length < 2) return null;
           const latest = years[years.length - 1];
           const prior = years[years.length - 2];
-          const earliest = years[0];
 
           // Leverage: prefer borrowings (corp) but fall back to deposits (bank)
           const debtField = latest.borrowings != null ? 'borrowings' : (latest.deposits != null ? 'deposits' : null);

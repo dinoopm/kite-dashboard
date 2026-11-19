@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useFetchJson } from '../../hooks/useFetchJson';
 import { useParams, Link } from 'react-router-dom';
 import useUrlTab from '../../hooks/useUrlTab';
 import usePointMeasurement from '../../hooks/usePointMeasurement';
@@ -279,16 +280,7 @@ function FundGroup({ title, rows }) {
   );
 }
 function Fundamentals({ sym }) {
-  const [d, setD] = useState(null);
-  const [err, setErr] = useState(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    let on = true; setLoading(true); setErr(null);
-    fetch(`/api/us/fundamentals/${sym}`).then(r => r.json())
-      .then(j => { if (!on) return; if (j.error) setErr(j.error); else setD(j); })
-      .catch(e => on && setErr(e.message)).finally(() => on && setLoading(false));
-    return () => { on = false; };
-  }, [sym]);
+  const { data: d, error: err, loading } = useFetchJson(`/api/us/fundamentals/${sym}`);
 
   if (loading) return <div className="loader" />;
   if (err) return <div className="glass-panel" style={{ padding: '1.5rem', color: RED }}>Failed to load fundamentals: {err}</div>;
@@ -372,15 +364,7 @@ function Fundamentals({ sym }) {
 // reaction to its own past reports (/api/us/earnings-reaction: SEC 8-K dates
 // × daily closes). Rendered next to the upcoming-events chips.
 function EarningsReaction({ sym }) {
-  const [d, setD] = useState(null);
-  useEffect(() => {
-    let on = true; setD(null);
-    fetch(`/api/us/earnings-reaction/${sym}`)
-      .then(r => (r.ok ? r.json() : null))
-      .then(j => { if (on && j && !j.error) setD(j); })
-      .catch(() => { });
-    return () => { on = false; };
-  }, [sym]);
+  const { data: d } = useFetchJson(`/api/us/earnings-reaction/${sym}`);
   if (!d) return null;
   // "Typically moves ±11.16%" off two reports is not a typical anything, and
   // amber styling plus "size accordingly" turns that noise into a position
@@ -448,16 +432,7 @@ function HolderTable({ title, rows }) {
 // positions (up to 45 days late by SEC rule) + Yahoo's rolling ~6m net-buying
 // aggregate, read into a deterministic verdict server-side.
 function Holders({ sym }) {
-  const [d, setD] = useState(null);
-  const [err, setErr] = useState(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    let on = true; setLoading(true); setErr(null);
-    fetch(`/api/us/holders/${sym}`).then(r => r.json())
-      .then(j => { if (!on) return; if (j.error) setErr(j.error); else setD(j); })
-      .catch(e => on && setErr(e.message)).finally(() => on && setLoading(false));
-    return () => { on = false; };
-  }, [sym]);
+  const { data: d, error: err, loading } = useFetchJson(`/api/us/holders/${sym}`);
 
   if (loading) return <div className="loader" />;
   if (err) return <div className="glass-panel" style={{ padding: '1.5rem', color: RED }}>Failed to load holders: {err}</div>;
@@ -497,17 +472,8 @@ function Holders({ sym }) {
 }
 
 function PnL({ sym }) {
-  const [d, setD] = useState(null);
-  const [err, setErr] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { data: d, error: err, loading } = useFetchJson(`/api/us/pnl/${sym}`);
   const [period, setPeriod] = useState('annual');
-  useEffect(() => {
-    let on = true; setLoading(true); setErr(null);
-    fetch(`/api/us/pnl/${sym}`).then(r => r.json())
-      .then(j => { if (!on) return; if (j.error) setErr(j.error); else setD(j); })
-      .catch(e => on && setErr(e.message)).finally(() => on && setLoading(false));
-    return () => { on = false; };
-  }, [sym]);
   if (loading) return <div className="loader" />;
   if (err) return <div className="glass-panel" style={{ padding: '1.5rem', color: RED }}>Failed to load P&amp;L: {err}</div>;
   if (!d) return null;
@@ -715,16 +681,7 @@ const BS_ROWS = [
 ];
 
 function BalanceSheet({ sym }) {
-  const [d, setD] = useState(null);
-  const [err, setErr] = useState(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    let on = true; setLoading(true); setErr(null);
-    fetch(`/api/us/balance-sheet/${sym}`).then(r => r.json())
-      .then(j => { if (!on) return; if (j.error) setErr(j.error); else setD(j); })
-      .catch(e => on && setErr(e.message)).finally(() => on && setLoading(false));
-    return () => { on = false; };
-  }, [sym]);
+  const { data: d, error: err, loading } = useFetchJson(`/api/us/balance-sheet/${sym}`);
 
   if (loading) return <div className="loader" />;
   if (err) return <div className="glass-panel" style={{ padding: '1.5rem', color: RED }}>Failed to load balance sheet: {err}</div>;
@@ -895,18 +852,9 @@ const CF_SERIES = [
 ];
 
 function Cashflow({ sym }) {
-  const [d, setD] = useState(null);
-  const [err, setErr] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { data: d, error: err, loading } = useFetchJson(`/api/us/cashflow/${sym}`);
   const [view, setView] = useState('chart'); // 'chart' | 'table'
   const [helpOpen, setHelpOpen] = useState(false);
-  useEffect(() => {
-    let on = true; setLoading(true); setErr(null);
-    fetch(`/api/us/cashflow/${sym}`).then(r => r.json())
-      .then(j => { if (!on) return; if (j.error) setErr(j.error); else setD(j); })
-      .catch(e => on && setErr(e.message)).finally(() => on && setLoading(false));
-    return () => { on = false; };
-  }, [sym]);
   useEffect(() => {
     if (!helpOpen) return;
     const onKey = (e) => { if (e.key === 'Escape') setHelpOpen(false); };

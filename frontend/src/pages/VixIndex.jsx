@@ -8,6 +8,19 @@ import {
   alignSeries, vixNiftyCorrelation, forwardReturnStudy, regimeReadout,
 } from '../lib/vixAnalytics';
 
+// Dense blotter stat cell. Module level: defined inside the page it was a new
+// component type on every render, so React remounted all nine cells each time.
+function Stat({ label, value, color, sub }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', padding: '0 0.95rem', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
+      <span style={{ fontSize: '0.6rem', letterSpacing: '0.07em', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>{label}</span>
+      <span style={{ fontSize: '0.95rem', fontWeight: 700, color: color || 'var(--text-primary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+        {value}{sub && <span style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', marginLeft: 4, fontWeight: 500 }}>{sub}</span>}
+      </span>
+    </div>
+  );
+}
+
 // ─── Main VIX Index Page ───────────────────────────────────────
 function VixIndex() {
   const [vixQuote, setVixQuote] = useState(null);
@@ -172,15 +185,6 @@ function VixIndex() {
     );
   };
 
-  // Dense blotter stat cell.
-  const Stat = ({ label, value, color, sub }) => (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', padding: '0 0.95rem', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
-      <span style={{ fontSize: '0.6rem', letterSpacing: '0.07em', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>{label}</span>
-      <span style={{ fontSize: '0.95rem', fontWeight: 700, color: color || 'var(--text-primary)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-        {value}{sub && <span style={{ fontSize: '0.62rem', color: 'var(--text-secondary)', marginLeft: 4, fontWeight: 500 }}>{sub}</span>}
-      </span>
-    </div>
-  );
 
   const tickPct = (v) => (yrLo == null || yrHi <= yrLo) ? 0 : ((v - yrLo) / (yrHi - yrLo)) * 100;
 

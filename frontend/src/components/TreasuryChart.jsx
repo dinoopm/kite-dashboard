@@ -1,4 +1,5 @@
 import { Fragment, useState, useEffect } from 'react'
+import { useFetchJson } from '../hooks/useFetchJson'
 import EquityDecisionPanel from './EquityDecisionPanel'
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts'
 
@@ -20,8 +21,7 @@ const asOfClock = (iso) => { try { return new Date(iso).toLocaleTimeString('en-U
 
 export default function TreasuryChart() {
   const [range, setRange] = useState('6M')
-  const [data, setData] = useState(null)
-  const [error, setError] = useState(null)
+  const { data, error } = useFetchJson(`/api/us/treasury-10y?range=${range}`)
   const [annualData, setAnnualData] = useState(null)
   const [annualError, setAnnualError] = useState(null)
   const [expandedYear, setExpandedYear] = useState(null)
@@ -99,15 +99,6 @@ export default function TreasuryChart() {
     return { year, point, yieldValue, previous, change: previous ? Math.round((yieldValue - previous.y) * 100) : null }
   })
 
-  useEffect(() => {
-    let on = true
-    setData(null); setError(null)
-    fetch(`/api/us/treasury-10y?range=${range}`)
-      .then(r => r.json())
-      .then(j => { if (!on) return; j.error ? setError(j.error) : setData(j) })
-      .catch(e => on && setError(e.message))
-    return () => { on = false }
-  }, [range])
 
   const up = data?.changeBps != null && data.changeBps >= 0
   const stroke = up ? '#f87171' : '#34d399' // rising yields = risk-off tint (red)

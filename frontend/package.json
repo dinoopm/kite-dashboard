@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node --test 'src/lib/**/*.test.js'",
+    "test": "eslint src --quiet && node --test 'src/lib/**/*.test.js' 'src/hooks/**/*.test.js'",
     "preview": "vite preview"
   },
   "dependencies": {

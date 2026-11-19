@@ -91,30 +91,30 @@ function Dashboard() {
       const us = usData?.indices ? usData : null;
 
       if (profileData?.content?.[0]?.text) {
-        try { p = JSON.parse(profileData.content[0].text); } catch (e) { }
+        try { p = JSON.parse(profileData.content[0].text); } catch { /* malformed payload: keep the default */ }
       }
       if (holdingsData?.content?.[0]?.text) {
         try {
           const parsed = JSON.parse(holdingsData.content[0].text);
           h = parsed.data || parsed;
-        } catch (e) { }
+        } catch { /* malformed payload: keep the default */ }
       }
       if (mfData?.content?.[0]?.text) {
         try {
           const parsed = JSON.parse(mfData.content[0].text);
           m = parsed.data || parsed;
-        } catch (e) { }
+        } catch { /* malformed payload: keep the default */ }
       }
       if (marginsData?.content?.[0]?.text) {
         try {
           const parsed = JSON.parse(marginsData.content[0].text);
           cash = parsed.data || parsed;
-        } catch (e) { }
+        } catch { /* malformed payload: keep the default */ }
       }
       if (quotesData?.content?.[0]?.text) {
         try {
           idx = JSON.parse(quotesData.content[0].text);
-        } catch (e) { }
+        } catch { /* malformed payload: keep the default */ }
       }
       if (Array.isArray(fiiDiiData)) {
         fd = fiiDiiData;

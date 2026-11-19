@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useFetchJson } from '../../hooks/useFetchJson';
 import { Link } from 'react-router-dom';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine } from 'recharts';
 import useUsVix, { vixAsOf, vixTiming } from '../../hooks/useUsVix';
@@ -10,7 +11,6 @@ import UsRiskSeverityPanel from '../../components/UsRiskSeverityPanel';
 import VixRiskTimeline from '../../components/VixRiskTimeline';
 import { annotateSeverity, SEVERITY_COLORS } from '../../lib/severityTimeline';
 import { percentileBelow, impliedDailyMovePct, etDate, freshnessRows } from '../../lib/vixPage';
-import { fetchWithAbort } from '../../hooks/useFetchWithAbort';
 import './UsVix.css';
 
 const RANGES = { '1M': 31, '3M': 93, '6M': 186, '1Y': 366, '2Y': 2 * 366, '3Y': 3 * 366, '5Y': 5 * 366, '10Y': 10 * 366, MAX: null };
@@ -23,20 +23,13 @@ export default function UsVix() {
   const [range, setRange] = useState('1Y');
   const [severity, setSeverity] = useState(null);
   const [cnn, setCnn] = useState(null);
-  const [provisional, setProvisional] = useState(null);
   // When the quote is newer than the assessment's closing date, ask what the
   // same rule says with only VIX swapped for the number shown at the top of
   // this page. Read-only on the server and never recorded.
   const quoteDay = data ? (data.kind === 'daily-close' ? data.asOf : etDate(data.asOf)) : null;
-  useEffect(() => {
-    if (!Number.isFinite(data?.current) || !severity?.asOf || !quoteDay || quoteDay <= severity.asOf) { setProvisional(null); return; }
-    const controller = new AbortController();
-    fetchWithAbort(`/api/us/risk-severity/provisional?vix=${data.current}`, { signal: controller.signal, timeoutMs: 30_000 })
-      .then(r => (r.ok ? r.json() : null))
-      .then(j => { if (!controller.signal.aborted) setProvisional(j?.provisional || null); })
-      .catch(() => { if (!controller.signal.aborted) setProvisional(null); });
-    return () => controller.abort();
-  }, [data?.current, quoteDay, severity?.asOf]);
+  const provisionalUrl = Number.isFinite(data?.current) && severity?.asOf && quoteDay && quoteDay > severity.asOf
+    ? `/api/us/risk-severity/provisional?vix=${data.current}` : null;
+  const provisional = useFetchJson(provisionalUrl, { timeoutMs: 30_000 }).data?.provisional || null;
   const model = usePointMeasurement(`us-vix:${range}`);
   const series = useMemo(() => {
     if (!data) return [];

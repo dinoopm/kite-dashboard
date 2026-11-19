@@ -10,7 +10,6 @@ const uid = () => Math.random().toString(36).slice(2, 9);
 const fmtMoney = (v) => (v == null ? '—' : `$${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })}`);
 const fmtSignedMoney = (v) => (v == null ? '—' : `${v >= 0 ? '+' : '−'}$${Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 2 })}`);
 const fmtPct = (v) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`);
-const fmtQty = (v) => (v == null ? '—' : Number(v).toLocaleString('en-US', { maximumFractionDigits: 4 }));
 const signColor = (v) => (v == null ? 'var(--text-secondary)' : v > 0 ? '#10b981' : v < 0 ? '#ef4444' : 'var(--text-secondary)');
 
 // Derive every calculated field for one holding from its avg cost, qty and LTP.

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useFetchJson } from '../../hooks/useFetchJson'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 
 // Crude oil tracker: WTI (CL=F) + Brent (BZ=F) spot cards from /api/oil plus
@@ -62,22 +63,8 @@ function GradeCard({ g }) {
 // Combined WTI + Brent daily-close chart with timeframe toggle.
 function OilChart() {
   const [tf, setTf] = useState('1M')
-  const [hist, setHist] = useState(null)   // { tf, points } for the active tf
-  const [histError, setHistError] = useState(null)
-
-  useEffect(() => {
-    let on = true
-    setHist(null); setHistError(null)
-    fetch(`/api/oil/history?tf=${tf}`)
-      .then(r => r.json().then(j => ({ ok: r.ok, j })))
-      .then(({ ok, j }) => {
-        if (!on) return
-        if (!ok) throw new Error(j.error || 'history unavailable')
-        setHist(j)
-      })
-      .catch(e => { if (on) setHistError(e.message) })
-    return () => { on = false }
-  }, [tf])
+  // { tf, points } for the active tf
+  const { data: hist, error: histError } = useFetchJson(`/api/oil/history?tf=${tf}`)
 
   // Change over the visible window: first → last non-null close per grade.
   const periodChange = (key) => {
