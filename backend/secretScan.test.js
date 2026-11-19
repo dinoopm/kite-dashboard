@@ -73,7 +73,9 @@ test('the patterns catch what they are meant to', () => {
   const hits = (text) => CHECKS.filter(c => !c.onlyIn).flatMap(c => [...text.matchAll(c.re)].map(() => c.what));
   const at = String.fromCharCode(64);
   assert.ok(hits(`ua = 'app/1.0 someone${at}gmail.com'`).includes('personal email address'));
-  assert.ok(hits('key = "eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.abcdefghijklmnop"').includes('JWT (e.g. a Supabase service key)'));
-  assert.ok(hits('-----BEGIN PRIVATE KEY-----').length);
+  // Assembled at runtime so this file's own text never matches the scan above.
+  const jwt = ['ey', 'JhbGciOiJIUzI1NiJ9', '.ey', 'Jyb2xlIjoic2VydmljZV9yb2xlIn0', '.abcdefghijklmnop'].join('');
+  assert.ok(hits(`key = "${jwt}"`).includes('JWT (e.g. a Supabase service key)'));
+  assert.ok(hits(['-----BEGIN', 'PRIVATE KEY-----'].join(' ')).length);
   assert.deepEqual(hits('Co-Authored-By: Claude <noreply' + at + 'anthropic.com>'), []);
 });
