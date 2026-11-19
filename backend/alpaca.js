@@ -488,17 +488,13 @@ router.get('/vcp/:symbol', async (req, res) => {
 // ════════════════════════════════════════════════════════════════════════════
 
 // RRG universe — the sector + industry ETFs rotated against the benchmark.
-const RRG_US_KEYS = [
-  'XLK', 'XLF', 'XLV', 'XLY', 'XLP', 'XLE', 'XLI', 'XLB', 'XLRE', 'XLU', 'XLC',
-  'SMH', 'XBI', 'KRE', 'ITB', 'XOP', 'XRT', 'IYT', 'GLD', 'GDX', 'IGV',
-  // Thematic funds — see the note on the frontend INDICES list for why each
-  // proxy was chosen. They rotate against the benchmark like any other row.
-  'CIBR', 'UFO', 'ITA', 'QTUM', 'HYDR', 'REMX', 'URA', 'ICLN',
-  // WQTM is deliberately absent: RRG plots relative strength over a rolling
-  // multi-quarter window, and the fund has ~10 months of history. A tail drawn
-  // from whatever exists would place it on the chart with the same authority as
-  // a four-year series. It joins once it can be measured on the same terms.
-];
+// One list, in rrg/universe.js, read here, by the weekly RRG recorder, and
+// (via a test) held equal to the US Indices page's rows. It used to be written
+// out three times, and a sector added to one copy and not the others would
+// plot on the chart without ever being recorded. WQTM is deliberately absent:
+// its ~10 months of history cannot fill the multi-quarter window.
+const { US_RRG_KEYS: RRG_US_KEYS } = require('./rrg/universe');
+const { rrgSeries, quadrantOf } = require('./rrg/series');
 
 // Labels for everything the US pages can show (indices, sectors, industries,
 // and drilldown constituents) so names render without a second lookup.
@@ -601,43 +597,6 @@ async function loadDailyBars(sym) {
   return dailyBarsInflight[sym];
 }
 
-// ─── RRG math (ported from the backend's Kite RRG so output is identical) ────
-function resampleToWeekly(dailyCandles) {
-  const weeks = [];
-  let currentWeek = null;
-  for (const c of dailyCandles) {
-    const d = new Date(c.date);
-    const day = d.getDay();
-    const friday = new Date(d);
-    friday.setDate(d.getDate() + (5 - day));
-    const weekKey = friday.toISOString().split('T')[0];
-    if (!currentWeek || currentWeek.key !== weekKey) {
-      currentWeek = { key: weekKey, close: c.close, date: c.date };
-      weeks.push(currentWeek);
-    } else {
-      currentWeek.close = c.close;
-      currentWeek.date = c.date;
-    }
-  }
-  return weeks;
-}
-function computeEMA(values, period) {
-  if (values.length === 0) return [];
-  const k = 2 / (period + 1);
-  const ema = [values[0]];
-  for (let i = 1; i < values.length; i++) ema.push(values[i] * k + ema[i - 1] * (1 - k));
-  return ema;
-}
-function computeSMA(values, period) {
-  const sma = [];
-  for (let i = 0; i < values.length; i++) {
-    if (i < period - 1) { sma.push(null); continue; }
-    let sum = 0;
-    for (let j = i - period + 1; j <= i; j++) sum += values[j];
-    sma.push(sum / period);
-  }
-  return sma;
-}
 
 // ─── POST /api/us/quotes — Kite get_quotes shape ────────────────────────────
 router.post('/quotes', async (req, res) => {
@@ -711,61 +670,19 @@ router.get('/rrg', async (req, res) => {
     if (!benchDaily || benchDaily.length === 0) {
       return res.json({ ready: false, benchmark, sectors: [], message: 'Benchmark history unavailable' });
     }
-    const benchWeekly = resampleToWeekly(benchDaily);
-    const benchMap = {};
-    for (const w of benchWeekly) benchMap[w.key] = w.close;
-
     const sectors = [];
     for (const key of keys) {
       let daily;
       try { daily = await fetchDailyBars(key, 4); } catch { continue; }
       if (!daily || daily.length === 0) continue;
-      const weekly = resampleToWeekly(daily);
-
-      const aligned = [];
-      for (const sw of weekly) {
-        const bClose = benchMap[sw.key];
-        if (bClose && bClose > 0) aligned.push({ weekKey: sw.key, sectorClose: sw.close, benchClose: bClose });
-      }
-      if (aligned.length < 26) continue;
-
-      const ratioSmaWindow = aligned.length >= 52 ? 52 : 26;
-      const momSmaWindow = aligned.length >= 52 ? 26 : 13;
-      const rawRS = aligned.map(a => (a.sectorClose / a.benchClose) * 100);
-      const rsSmooth = computeEMA(rawRS, 10);
-      const rsSmoothSMA = computeSMA(rsSmooth, ratioSmaWindow);
-      const rsRatio = rsSmooth.map((v, i) => (rsSmoothSMA[i] == null || rsSmoothSMA[i] === 0) ? null : (v / rsSmoothSMA[i]) * 100);
-
-      const firstValidIdx = rsRatio.findIndex(v => v !== null && v !== 0);
-      const rsMomentum = rsRatio.map(() => null);
-      if (firstValidIdx >= 0) {
-        const validSlice = rsRatio.slice(firstValidIdx);
-        const validSliceSMA = computeSMA(validSlice, momSmaWindow);
-        for (let i = 0; i < validSlice.length; i++) {
-          const v = validSlice[i], sma = validSliceSMA[i];
-          if (v == null || v === 0 || sma == null || sma === 0) continue;
-          rsMomentum[firstValidIdx + i] = (v / sma) * 100;
-        }
-      }
-
-      const series = [];
-      for (let i = aligned.length - 1; i >= 0 && series.length < 52; i--) {
-        if (rsRatio[i] !== null && rsRatio[i] !== 0 && rsMomentum[i] !== null) {
-          series.unshift({
-            date: aligned[i].weekKey,
-            rsRatio: parseFloat(rsRatio[i].toFixed(2)),
-            rsMomentum: parseFloat(rsMomentum[i].toFixed(2)),
-          });
-        }
-      }
+      // The RRG arithmetic lives in rrg/series.js — the same function the
+      // rotation track record is scored with, so the chart and its record
+      // cannot describe different points. The chart shows the last 52 weeks.
+      const series = rrgSeries(daily, benchDaily).slice(-52);
       if (series.length === 0) continue;
 
       const latest = series[series.length - 1];
-      let quadrant = 'Lagging';
-      if (latest.rsRatio >= 100 && latest.rsMomentum >= 100) quadrant = 'Leading';
-      else if (latest.rsRatio >= 100 && latest.rsMomentum < 100) quadrant = 'Weakening';
-      else if (latest.rsRatio < 100 && latest.rsMomentum >= 100) quadrant = 'Improving';
-
+      const quadrant = quadrantOf(latest.rsRatio, latest.rsMomentum);
       sectors.push({ name: labelFor(key), key, token: key, quadrant, series });
     }
 

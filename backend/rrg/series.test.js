@@ -13,6 +13,12 @@ function daily(n, f, start = '2022-01-03') {
 }
 
 describe('fridayKey / resampleToWeekly', () => {
+  // Kite stamps Indian daily candles at midnight IST, which is the previous
+  // evening in UTC. The old inline copies keyed weeks in the server's local
+  // timezone, so on an IST machine every week carried its Thursday's date.
+  test('Kite-style IST timestamps key to the same Friday, Monday to Friday', () => {
+    for (const d of ['2026-11-09', '2026-11-11', '2026-11-13']) assert.equal(fridayKey(`${d}T00:00:00+05:30`), '2026-11-13');
+  });
   test('every day of a week keys to its Friday', () => {
     for (const d of ['2026-11-09', '2026-11-11', '2026-11-13']) assert.equal(fridayKey(`${d}T05:00:00Z`), '2026-11-13');
     assert.equal(fridayKey('2026-11-16T05:00:00Z'), '2026-11-20');

@@ -3396,57 +3396,9 @@ const RRG_SECTOR_NAMES = {
   "NSE:NIFTY IND DEFENCE": "NIFTY INDIA DEFENCE"
 };
 
-// Helper: resample daily candles to weekly (Friday close)
-function resampleToWeekly(dailyCandles) {
-  const weeks = [];
-  let currentWeek = null;
-
-  for (const c of dailyCandles) {
-    const d = new Date(c.date);
-    // Get the Friday of this week (ISO: Mon=1...Sun=7)
-    const day = d.getDay(); // 0=Sun, 1=Mon...6=Sat
-    const diff = 5 - day; // distance to Friday
-    const friday = new Date(d);
-    friday.setDate(d.getDate() + diff);
-    const weekKey = friday.toISOString().split('T')[0];
-
-    if (!currentWeek || currentWeek.key !== weekKey) {
-      currentWeek = { key: weekKey, close: c.close, date: c.date };
-      weeks.push(currentWeek);
-    } else {
-      // Update with the latest candle in this week
-      currentWeek.close = c.close;
-      currentWeek.date = c.date;
-    }
-  }
-  return weeks;
-}
-
-// Helper: compute EMA
-function computeEMA(values, period) {
-  if (values.length === 0) return [];
-  const k = 2 / (period + 1);
-  const ema = [values[0]];
-  for (let i = 1; i < values.length; i++) {
-    ema.push(values[i] * k + ema[i - 1] * (1 - k));
-  }
-  return ema;
-}
-
-// Helper: compute SMA (returns array aligned to end, first (period-1) entries are null)
-function computeSMA(values, period) {
-  const sma = [];
-  for (let i = 0; i < values.length; i++) {
-    if (i < period - 1) {
-      sma.push(null);
-    } else {
-      let sum = 0;
-      for (let j = i - period + 1; j <= i; j++) sum += values[j];
-      sma.push(sum / period);
-    }
-  }
-  return sma;
-}
+// RRG maths: see rrg/series.js (rrgSeries, quadrantOf), shared by every RRG
+// route and the rotation track record.
+const { rrgSeries, quadrantOf } = require('./rrg/series');
 
 // RRG token cache — maps instrument key to token, populated from quotes
 const rrgTokenCache = {};
@@ -3574,14 +3526,6 @@ app.get('/api/rrg', async (req, res) => {
     }
 
     console.log(`  ✅ Benchmark data: ${benchmarkCached.data.length} daily candles`);
-    const benchmarkWeekly = resampleToWeekly(benchmarkCached.data);
-    console.log(`  ✅ Benchmark weekly: ${benchmarkWeekly.length} weeks`);
-
-    // Build a date→close map for the benchmark
-    const benchmarkMap = {};
-    for (const w of benchmarkWeekly) {
-      benchmarkMap[w.key] = w.close;
-    }
 
     // Step 3: Compute RS-Ratio and RS-Momentum for each security
     const sectors = [];
@@ -3597,86 +3541,21 @@ app.get('/api/rrg', async (req, res) => {
         continue;
       }
 
-      const sectorWeekly = resampleToWeekly(sectorCached.data);
-
-      // Align sector and benchmark by week key
-      const aligned = [];
-      for (const sw of sectorWeekly) {
-        const bClose = benchmarkMap[sw.key];
-        if (bClose && bClose > 0) {
-          aligned.push({ weekKey: sw.key, sectorClose: sw.close, benchClose: bClose });
-        }
-      }
-
-      if (aligned.length < 26) {
-        skipped.push(`${sectorKey}: only ${aligned.length} aligned weeks (need 26 for stable RS math; newly-listed indices are deferred until enough history accrues)`);
+      // The RRG arithmetic lives in rrg/series.js, shared with the US route
+      // and the rotation track record (10-week EMA of sector/benchmark, over
+      // its 52-week SMA; momentum over a 26-week SMA; 26/13 below 52 weeks).
+      // This used to be a third inline copy. It was output-identical on a
+      // CET or UTC server, but keyed weeks in the server's local timezone, so
+      // on an IST machine every week was labelled with its Thursday's date.
+      const series = rrgSeries(sectorCached.data, benchmarkCached.data).slice(-52);
+      if (series.length === 0) {
+        skipped.push(`${sectorKey}: too little shared weekly history for RS math (needs 26+ aligned weeks; newly-listed indices are deferred until enough history accrues)`);
         continue;
-      }
-
-      // Fixed smoothing windows so every sector is plotted on a comparable scale.
-      // Full JdK uses 10/52/26 but we shorten the ratio window to 26 when <52 weeks exist.
-      const emaWindow = 10;
-      const ratioSmaWindow = aligned.length >= 52 ? 52 : 26;
-      const momSmaWindow = aligned.length >= 52 ? 26 : 13;
-
-      // Raw RS = (sector / benchmark) * 100
-      const rawRS = aligned.map(a => (a.sectorClose / a.benchClose) * 100);
-
-      // EMA smoothing (period dynamically set)
-      const rsSmooth = computeEMA(rawRS, emaWindow);
-
-      // RS-Ratio = (RS_smooth / SMA(RS_smooth, dynSma)) * 100
-      const rsSmoothSMA = computeSMA(rsSmooth, ratioSmaWindow);
-      const rsRatio = rsSmooth.map((v, i) => {
-        if (rsSmoothSMA[i] === null || rsSmoothSMA[i] === 0) return null;
-        return (v / rsSmoothSMA[i]) * 100;
-      });
-
-      // RS-Momentum = (RS_Ratio / SMA(RS_Ratio, momSmaWindow)) * 100
-      //
-      // Treating early `null` rsRatio values as 0 (the previous logic)
-      // polluted the SMA window with zeros for the entire warmup period.
-      // When real rsRatio values (~100) finally started, the SMA was still
-      // averaging in 25 zeros and 1 real value → SMA ≈ 3.85 → rsMomentum
-      // exploded to ~2600. CHEMICALS hit this hardest because it had fewer
-      // aligned weeks; the user saw rsMomentum = 1300 vs every other
-      // sector's 95-115.
-      //
-      // Fix: compute the SMA only on the valid suffix of rsRatio (from the
-      // first non-null index onward), then map results back to the original
-      // index space. The null prefix produces null rsMomentum, which is
-      // already filtered out by the series builder below.
-      const firstValidIdx = rsRatio.findIndex(v => v !== null && v !== 0);
-      const rsMomentum = rsRatio.map(() => null);
-      if (firstValidIdx >= 0) {
-        const validSlice = rsRatio.slice(firstValidIdx);
-        const validSliceSMA = computeSMA(validSlice, momSmaWindow);
-        for (let i = 0; i < validSlice.length; i++) {
-          const v = validSlice[i];
-          const sma = validSliceSMA[i];
-          if (v == null || v === 0 || sma == null || sma === 0) continue;
-          rsMomentum[firstValidIdx + i] = (v / sma) * 100;
-        }
-      }
-
-      // Build the output series — last 52 valid weekly data points
-      const series = [];
-      for (let i = aligned.length - 1; i >= 0 && series.length < 52; i--) {
-        if (rsRatio[i] !== null && rsRatio[i] !== 0 && rsMomentum[i] !== null) {
-          series.unshift({
-            date: aligned[i].weekKey,
-            rsRatio: parseFloat(rsRatio[i].toFixed(2)),
-            rsMomentum: parseFloat(rsMomentum[i].toFixed(2))
-          });
-        }
       }
 
       if (series.length > 0) {
         const latest = series[series.length - 1];
-        let quadrant = 'Lagging';
-        if (latest.rsRatio >= 100 && latest.rsMomentum >= 100) quadrant = 'Leading';
-        else if (latest.rsRatio >= 100 && latest.rsMomentum < 100) quadrant = 'Weakening';
-        else if (latest.rsRatio < 100 && latest.rsMomentum >= 100) quadrant = 'Improving';
+        const quadrant = quadrantOf(latest.rsRatio, latest.rsMomentum);
 
         sectors.push({
           name: RRG_SECTOR_NAMES[sectorKey] || sectorKey.split(':')[1] || sectorKey,

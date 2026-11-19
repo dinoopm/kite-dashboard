@@ -36,8 +36,9 @@ attached, so it shows as visibly unvalidated instead of quietly unvalidated.
   picks specifically.
 - `backend/rrg/scorecard.js` → `GET /api/rrg/scorecard` — RRG quadrant entries
   for the US sector ETFs against SPY, on weekly bars. Reconstructed (2017→) and
-  recorded (weekly, by `dailyJobs`) are scored separately. `rrg/series.js` is a
-  copy of the route's RRG arithmetic; change one, change both.
+  recorded (weekly, by `dailyJobs`) are scored separately. `rrg/series.js` is
+  the only RRG arithmetic — both RRG routes call it — and `rrg/universe.js` the
+  only US sector list (a frontend test holds the US Indices page to it).
 - `backend/dataHealth.js` → `GET /api/data-health` — which price tables have holes.
 - `frontend/src/pages/TrackRecord.jsx` (`/track-record`) — every registry claim in
   one list, merged from the three scorecards and sorted by how much is known.

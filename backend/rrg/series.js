@@ -18,11 +18,13 @@
 // washed out — which it has long before the first point exists, since a point
 // needs 77 weeks behind it.
 //
-// This is a second copy of the route arithmetic, kept deliberately identical
-// (same windows, same rounding to two decimals, same skip rules). It was
-// checked on 2026-11-16 against values the US route returned on 2026-11-14 —
-// see the note in rrg/series.test.js. If the routes' maths changes, this must
-// change with it, or the track record describes a different chart.
+// This is now the ONLY copy. GET /api/us/rrg (alpaca.js) and the Indian
+// /api/rrg (server.js) both call rrgSeries, so the chart and the rotation
+// track record cannot describe different points. Before 2026-11-19 each route
+// had its own inline copy; switching was checked to be output-identical — the
+// US route byte-for-byte on all 29 sectors × 52 weeks, the Indian maths on
+// synthetic Kite-style data — except that the old Indian copy keyed weeks in
+// the server's local timezone (see the IST test in rrg/series.test.js).
 
 const EMA_WEEKS = 10;
 
