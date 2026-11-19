@@ -185,7 +185,7 @@ export default function SectorAdxChart({ bars }) {
       {summary && (
         <p style={{ margin: '0.6rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           <span style={{ color: regime.color, fontWeight: 700 }}>{regime.text}</span> · {summary}{' '}
-          <span style={{ opacity: 0.75 }}>Under {BUILDING} is chop, {BUILDING}–{STRONG} is a trend forming, {STRONG}+ is a trend worth trading.</span>
+          <span style={{ opacity: 0.75 }}>Under {BUILDING} is chop, {BUILDING}–{STRONG} is a trend forming, {STRONG}+ is a strong trend — by convention; not tested here as a trading signal.</span>
         </p>
       )}
     </div>

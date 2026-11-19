@@ -6,7 +6,7 @@ function VolumeGainers() {
   return (
     <MarketDataTable
       title="Volume Gainers"
-      description="Stocks with unusually high volume vs their 1-week and 2-week averages — often a leading indicator of accumulation, breakouts, or news flow. Source: NSE live-analysis-volume."
+      description="Stocks with unusually high volume vs their 1-week and 2-week averages — a sign something is happening, not which way. This list has not been tested as a predictor; the closest measured rule, a 2× volume thrust on an up day, is on the Track Record page. Source: NSE live-analysis-volume."
       endpoint="/api/volume-gainers"
       dateField="trade_date"
       defaultPreset="7d"

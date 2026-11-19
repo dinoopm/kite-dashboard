@@ -711,7 +711,7 @@ function SignalChart({ token, symbol, fetchUrl, market = 'IN' }) {
         </label>
         {showBB && squeeze.current != null && (
           <span
-            title={`Bollinger Bandwidth = (Upper − Lower) ÷ Middle. A ${SQUEEZE_LOOKBACK}-bar low (squeeze) signals compressed volatility — a breakout is statistically more likely to follow.`}
+            title={`Bollinger Bandwidth = (Upper − Lower) ÷ Middle. A ${SQUEEZE_LOOKBACK}-bar low (squeeze) marks compressed volatility. It says nothing about direction, and a squeeze has not been followed by outperformance in this app\u2019s data — its record is on the Track Record page as \u201cBollinger squeeze begins\u201d.`}
             style={{
               fontSize: '0.76rem', fontWeight: 700, padding: '0.25rem 0.65rem', borderRadius: '6px', whiteSpace: 'nowrap',
               color: squeeze.isSqueezeNow ? '#0f172a' : 'var(--text-secondary)',

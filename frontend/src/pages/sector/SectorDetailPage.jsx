@@ -16,6 +16,7 @@ import {
   computeSMA, resampleToWeeklyHighs, findHiddenLeaders,
 } from '../../lib/sectorAnalytics';
 import SectorBreadthPanel from '../../components/SectorBreadthPanel';
+import SignalScore from '../../components/SignalScore';
 import SectorAdxChart from '../../components/SectorAdxChart';
 
 const ALERTS_REFRESH_MS = 60_000;
@@ -761,6 +762,14 @@ export default function SectorDetailPage({ market }) {
             </span>
           )}
         </div>
+      </div>
+      {/* The Breakout column reads as a buy cue (🚀), so the closest measured
+          rules ride beside it. On US sectors the badge says "not measured
+          here" rather than borrowing an Indian result. */}
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', margin: '0 0 0.6rem', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+        <span>Breakout column — track record of the nearest scored rules:</span>
+        <SignalScore signal="breakout_20d" label="20-day breakout" market={market.id === 'us' ? 'US' : 'IN'} />
+        <SignalScore signal="breakout_55d" label="55-day breakout" market={market.id === 'us' ? 'US' : 'IN'} />
       </div>
       <div style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>

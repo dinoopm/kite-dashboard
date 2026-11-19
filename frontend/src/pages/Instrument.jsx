@@ -1685,7 +1685,7 @@ function Instrument() {
                 <label style={{ ...labelStyle, opacity: hasVolume ? 1 : 0.5 }}>
                   <span style={capStyle}>
                     Volume ≥ <strong style={{ color: 'var(--accent)' }}>{volMult.toFixed(1)}×</strong> 20-bar avg
-                    <span className="info-icon" title="A real breakout usually comes on heavy volume. Only flag breakouts whose volume is at least this many times the 20-day average. Higher = fewer, higher-conviction signals.">{' '}ⓘ</span>
+                    <span className="info-icon" title="Only flag breakouts whose volume is at least this many times the 20-day average. Higher = fewer signals. Whether heavy volume makes a breakout more reliable has not been measured here; the golden-cross track record compares volume-confirmed and quiet crosses side by side.">{' '}ⓘ</span>
                   </span>
                   <input type="range" min="1" max="3" step="0.1" value={volMult} disabled={!hasVolume} onChange={e => setVolMult(+e.target.value)} style={{ accentColor: '#38bdf8', cursor: hasVolume ? 'pointer' : 'not-allowed' }} />
                   {!hasVolume && <span style={{ fontSize: '0.65rem', color: '#fbbf24' }}>No volume for indices — filter off</span>}

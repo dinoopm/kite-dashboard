@@ -127,11 +127,16 @@ export function forwardReturnStudy(vixCloses, niftyCloses, currentVix, horizons 
 // One-line, data-driven read of the vol regime for the strategy banner.
 export function regimeReadout({ vix, ivPct, ivr, vrp, z }) {
   const cheapRich = ivPct == null ? '' : ivPct < 20 ? 'cheap' : ivPct > 80 ? 'rich' : 'mid-range';
+  // Describes where vol sits; recommends nothing. This used to add "selling
+  // premium is paid for the risk" / "favor buying optionality" and "tends to
+  // mean-revert" — trading advice and a forecast, none of it measured here.
+  // What the app HAS measured from this VIX level is the forward NIFTY study
+  // on the same page, which is where a reader should look.
   const vrpPhrase = vrp == null ? ''
-    : vrp > 1.5 ? 'implied is well above realized (positive variance risk premium) — selling premium is paid for the risk'
-    : vrp < -1.5 ? 'implied is below realized — options look cheap vs. what Nifty is actually delivering; favor buying optionality'
+    : vrp > 1.5 ? 'implied is well above realized (a positive variance risk premium)'
+    : vrp < -1.5 ? 'implied is below realized — options are pricing less movement than Nifty is delivering'
     : 'implied and realized are roughly in line';
-  const stretch = z == null ? '' : z < -1 ? ' Vol is stretched low and tends to mean-revert up.' : z > 1.5 ? ' Vol is stretched high and tends to mean-revert down.' : '';
+  const stretch = z == null ? '' : z < -1 ? ` Vol is stretched low against its recent average (z ${z.toFixed(1)}).` : z > 1.5 ? ` Vol is stretched high against its recent average (z ${z.toFixed(1)}).` : '';
   const pctTxt = ivPct == null ? '' : `${Math.round(ivPct)}th percentile of the past year (IV Rank ${Math.round(ivr ?? 0)})`;
   return `India VIX ${vix.toFixed(2)} sits in the ${pctTxt} — implied vol is ${cheapRich}. ${vrpPhrase ? vrpPhrase[0].toUpperCase() + vrpPhrase.slice(1) + '.' : ''}${stretch}`;
 }

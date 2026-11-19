@@ -1,4 +1,5 @@
 import MarketDataTable from '../../components/MarketDataTable'
+import SignalScore from '../../components/SignalScore'
 
 // NSE 52-week high/low daily snapshot — stocks at or near their yearly extremes.
 function Week52HighLow() {
@@ -6,6 +7,14 @@ function Week52HighLow() {
     <MarketDataTable
       title="52-Week High / Low"
       description="Daily snapshot of NSE equities and their adjusted 52-week high/low levels, with the dates those extremes were set. Source: NSE archive CSV, daily sync."
+      // A new 52-week high is read as strength, so the list is a buy cue. Its
+      // record (high_52w, recorded the day NSE reports the high) rides with it.
+      headerExtra={
+        <span style={{ display: 'inline-flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+          Is a new 52-week high a buy signal here?
+          <SignalScore signal="high_52w" label="New 52-week high" market="IN" />
+        </span>
+      }
       endpoint="/api/52wk-high-low"
       dateField="trade_date"
       defaultPreset="7d"

@@ -54,7 +54,7 @@ function TradePlanModal({ stock, onClose }) {
     'HOLD / WAIT':        { headline: 'No clean edge yet', body: 'Either signals are mixed or the reward/risk is below the 1.5× minimum. If you own it, hold; if you don\'t, wait for a better setup.' },
     'HOLD (OVERBOUGHT)':  { headline: 'Strong but stretched', body: 'Momentum is good, but RSI is above 70. Hold what you own; do NOT add fresh capital here — wait for RSI to cool below 65.' },
     'TRIM':               { headline: 'Book partial profits', body: 'You are up significantly and the stock is overbought. The engine suggests trimming part of your position to lock in gains, while leaving a runner.' },
-    'SELL (AT RANGE)':    { headline: 'Pinned at the ceiling', body: 'The stock is range-bound and pressed against the 20-day high. Range tops usually push price back. Book profits if you\'re long; do not buy here.' },
+    'SELL (AT RANGE)':    { headline: 'Pinned at the ceiling', body: 'The stock is range-bound and pressed against the 20-day high, where its recent rallies have stalled. That pattern is the engine\'s reason, not a measured result — this action\'s record is in the alert track record. Book profits if you\'re long; do not buy here.' },
     'AVOID':              { headline: 'Stay out', body: 'Technicals are severely broken or volatility is erratic. Execution risk is high — wide stops, gap risk, asymmetric drawdowns. Sit this one out.' },
   }
   const v = verdicts[action] || { headline: action, body: 'See engine reason below.' }

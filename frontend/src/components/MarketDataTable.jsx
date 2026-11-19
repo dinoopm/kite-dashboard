@@ -78,6 +78,8 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 250]
  * Props:
  *   title           — page heading
  *   description     — subtitle paragraph
+ *   headerExtra     — optional node under the description, e.g. the track-record
+ *                     badge of a signal the page lists (CLAUDE.md: a claim shows its record)
  *   endpoint        — API path (e.g. /api/fiidii)
  *   columns         — [{ key, label, align?, fmt?, color?, sortable? }]
  *   dateField       — date column for from/to filtering (null disables date UI)
@@ -96,6 +98,7 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 250]
 function MarketDataTable({
   title,
   description,
+  headerExtra = null,
   endpoint,
   columns,
   dateField = 'trade_date',
@@ -326,6 +329,7 @@ function MarketDataTable({
         {description && (
           <p style={{ margin: '0.3rem 0 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>{description}</p>
         )}
+        {headerExtra && <div style={{ marginTop: '0.5rem' }}>{headerExtra}</div>}
       </header>
 
       <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>

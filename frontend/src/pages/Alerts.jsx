@@ -518,7 +518,7 @@ function Alerts() {
                   <em>Action:</em> Hold if you own. Do NOT buy new shares — wait for RSI to cool below 65.
                 </div>
                 <div>
-                  <span style={{ color: '#ef4444', fontWeight: 800 }}>▼ SELL (AT RANGE)</span> — Range-bound stock hitting the ceiling. Ceiling usually pushes price back.<br />
+                  <span style={{ color: '#ef4444', fontWeight: 800 }}>▼ SELL (AT RANGE)</span> — Range-bound stock at the top of its range, where recent rallies stalled. Not a measured result — see the track record below.<br />
                   <em>Action:</em> Book partial profits if in position. Do NOT buy here.
                 </div>
                 <div>
