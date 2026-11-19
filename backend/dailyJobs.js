@@ -252,7 +252,41 @@ async function runRrgRecording(decision) {
  * logged and the next still runs, because a broken picks snapshot is no reason
  * to also stop recording price signals.
  */
+// Short, human summaries of a job's result for the status page. Unknown
+// shapes fall back to their keys — the point is "what did it do", not a dump.
+function jobSummary(v) {
+  if (!v || typeof v !== 'object') return null;
+  if (v.skipped) return `skipped: ${v.skipped}`;
+  const bits = [];
+  for (const k of ['saved', 'synced', 'proposed', 'snapDate', 'week', 'verdict', 'regime', 'sessionDate']) {
+    if (v[k] != null) bits.push(`${k} ${v[k]}`);
+  }
+  return bits.join(', ') || 'ran';
+}
+
+/**
+ * Leave each job's outcome where the status page can read it (healthLog). The
+ * gateway's run only: workers run the private jobs for one account, and their
+ * outcomes are that session's business, not the machine's.
+ */
+function logOutcomes(out) {
+  try {
+    const { noteOutcome, noteRecord } = require('./healthLog');
+    for (const [key, v] of Object.entries(out)) {
+      if (key === 'ranAt' || v == null) continue;
+      noteOutcome(`job-${key}`, v.error ? { ok: false, error: v.error } : { ok: true, detail: jobSummary(v) });
+    }
+    noteRecord('tick-daily-jobs', { ranAt: out.ranAt, finishedAt: new Date().toISOString() });
+  } catch { /* the jobs matter more than their log */ }
+}
+
 async function runDailyJobs({ force = false, privateOnly = false } = {}) {
+  const out = await runDailyJobsInner({ force, privateOnly });
+  if (!privateOnly) logOutcomes(out);
+  return out;
+}
+
+async function runDailyJobsInner({ force = false, privateOnly = false } = {}) {
   const out = { ranAt: new Date().toISOString(), picks: null, emissions: null, trades: null, stops: null, macro: null, usPicks: null, riskRegime: null, rrgRotation: null };
 
   // Trades first, and on EVERY tick rather than once a day. Kite exposes only
@@ -466,6 +500,11 @@ function runOnce(opts) {
 
 /** Start the timer. Returns a stop function, mainly so tests can clean up. */
 function startDailyJobs(options = {}) {
+  // The status page needs to know the jobs are scheduled at all, and how often,
+  // to tell "not run yet" from "stopped running".
+  if (!options.privateOnly) {
+    try { require('./healthLog').noteRecord('tick-daily-jobs-scheduled', { startedAt: new Date().toISOString(), tickMs: TICK_MS }); } catch { /* see logOutcomes */ }
+  }
   const first = setTimeout(() => { runOnce(options).catch(() => {}); }, FIRST_TICK_MS);
   const timer = setInterval(() => { runOnce(options).catch(() => {}); }, TICK_MS);
   if (timer.unref) timer.unref();
@@ -474,4 +513,4 @@ function startDailyJobs(options = {}) {
   return () => { clearTimeout(first); clearInterval(timer); };
 }
 
-module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, registerStopProposals, registerMacroCachePrime, picksSnapshotDue, snapshotIsDue, isoMinus, usSnapshotDue, runUsPickSnapshot, macroRecordDue, regimeRecordDue, rrgRecordDue };
+module.exports = { startDailyJobs, runDailyJobs, runOnce, registerTradeSync, registerStopProposals, registerMacroCachePrime, picksSnapshotDue, snapshotIsDue, isoMinus, usSnapshotDue, runUsPickSnapshot, macroRecordDue, regimeRecordDue, rrgRecordDue, jobSummary, logOutcomes, TICK_MS };

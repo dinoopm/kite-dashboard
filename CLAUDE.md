@@ -42,6 +42,13 @@ attached, so it shows as visibly unvalidated instead of quietly unvalidated.
 - `frontend/src/pages/TrackRecord.jsx` (`/track-record`) — every registry claim in
   one list, merged from the three scorecards and sorted by how much is known.
   It measures nothing itself; a row's state is read off its scorer's `headline`.
+- `backend/systemStatus.js` → `GET /api/system-status`, page `/status`, and a
+  banner on every page when anything is in state `fail`. Jobs and scorecards
+  report through `backend/healthLog.js` (files in `backend/data/health/`, so
+  the gateway and every worker can write without a migration). Any new daily
+  job or scorecard should call `noteOutcome` and be listed in `JOBS` /
+  `SCORECARDS`, or its failures are silent again. Warnings never raise the
+  banner — an alarm that is always on is one nobody reads.
 
 ### rule versions
 

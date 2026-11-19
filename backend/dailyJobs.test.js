@@ -147,3 +147,28 @@ describe('rrgRecordDue', () => {
     assert.equal(rrgRecordDue(new Date('2026-11-15T23:00:00Z'), '2026-11-13').due, false);
   });
 });
+
+describe('logOutcomes', () => {
+  test('each job leaves an outcome the status page can read, and the tick is recorded', () => {
+    const fs = require('fs'); const os = require('os'); const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobs-health-'));
+    const saved = process.env.HEALTH_LOG_DIR;
+    process.env.HEALTH_LOG_DIR = dir;
+    delete require.cache[require.resolve('./healthLog')];
+    try {
+      const { logOutcomes, jobSummary } = require('./dailyJobs');
+      logOutcomes({ ranAt: '2026-11-19T22:00:00Z', picks: { saved: 25, snapDate: '2026-11-19' }, macro: { error: 'FRED 503' }, usPicks: { skipped: 'not due' }, trades: null });
+      const read = (n) => JSON.parse(fs.readFileSync(path.join(dir, `${n}.json`), 'utf8'));
+      assert.equal(read('job-picks').lastOk, true);
+      assert.equal(read('job-picks').lastDetail, 'saved 25, snapDate 2026-11-19');
+      assert.deepEqual([read('job-macro').lastOk, read('job-macro').lastError], [false, 'FRED 503']);
+      assert.equal(read('job-usPicks').lastDetail, 'skipped: not due');
+      assert.equal(fs.existsSync(path.join(dir, 'job-trades.json')), false);
+      assert.equal(read('tick-daily-jobs').ranAt, '2026-11-19T22:00:00Z');
+      assert.equal(jobSummary({ verdict: 'NEUTRAL', sessionDate: '2026-11-19' }), 'verdict NEUTRAL, sessionDate 2026-11-19');
+    } finally {
+      process.env.HEALTH_LOG_DIR = saved;
+      delete require.cache[require.resolve('./healthLog')];
+    }
+  });
+});

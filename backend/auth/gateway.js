@@ -197,6 +197,9 @@ function startGateway() {
   const secureCookies = publicOrigin?.startsWith('https:') || process.env.NODE_ENV === 'production';
   const gateway = createGateway({ allowedOrigins, secureCookies });
   const listener = gateway.app.listen(process.env.PORT || 3001, () => console.log('Kite dashboard gateway started; sign in with your own Kite account.'));
+  // Who is running, and since when: the status page compares this with the
+  // files on disk to say whether a restart is needed to load recent changes.
+  require('../healthLog').noteRecord('process-gateway', { role: 'gateway', startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() });
   // Public market data jobs run once here, never once per account worker.
   require('../alpaca').checkFeedAgreement().catch(() => {});
   const { checkDataHealth, logDataHealth } = require('../dataHealth');

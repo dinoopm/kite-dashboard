@@ -53,3 +53,6 @@ backend/data/us-risk-severity/
 
 # Last live CNN Fear & Greed reading, kept across restarts (see cnnFearGreed.js).
 backend/data/cnn-fear-greed/
+
+# Job and scorecard outcomes read by the status page (see healthLog.js).
+backend/data/health/

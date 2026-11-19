@@ -20,6 +20,7 @@ const MARKET_DATA_LINKS = [
   // Not market data, but it is where the app answers for itself, and it
   // covers both markets — so it sits at the foot of both menus.
   { to: '/track-record',                    label: '✓ Track Record',            hint: 'Every signal and label the app shows, and whether it has been measured.' },
+  { to: '/status',                          label: '● Status',                  hint: 'Whether the jobs, scorecards, feeds and scrapers behind the app are working.' },
 ];
 
 // Sublinks under the "US" dropdown (Alpaca-powered US market data).

@@ -47,8 +47,10 @@ router.get('/scorecard', async (req, res) => {
   try {
     const data = await runUsPicksScorecard();
     scorecardCache = { data, ts: Date.now() };
+    require('../healthLog').noteOutcome('scorecard-us-picks', { ok: true });
     res.json(data);
   } catch (err) {
+    if (!missingTable(err)) require('../healthLog').noteOutcome('scorecard-us-picks', { ok: false, error: err.message });
     if (missingTable(err)) {
       // Return the real empty-rows shape, not `signals: []`.
       //

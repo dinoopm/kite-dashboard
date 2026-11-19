@@ -148,6 +148,12 @@ const FEEDS = [
   { table: 'nse_52_week_high_low',   col: 'trade_date', grace: 2, label: '52-week highs/lows',  probe: 'RELIANCE' },
   { table: 'volume_gainers',         col: 'trade_date', grace: 2, label: 'Volume gainers' },
   { table: 'stock_pick_snapshots',   col: 'snap_date',  grace: 2, label: 'Published picks' },
+  // One row per session, written by the Market Data Sync workflow. Added after
+  // 2026-11-13, when NSE started refusing the scraper's homepage handshake and
+  // the day's row only existed because someone noticed GitHub's failure email.
+  // NSE serves only the latest session, so a missed day is lost once the next
+  // one is published — two sessions of grace is the last moment it can be saved.
+  { table: 'fii_dii_activity',       col: 'trade_date', grace: 2, label: 'FII / DII flows' },
   // A stalled macro sync is invisible otherwise: the panel keeps rendering
   // last week's regime with no indication that nothing has updated it. Three
   // sessions of grace covers a long weekend plus one missed run.

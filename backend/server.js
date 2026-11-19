@@ -4,6 +4,7 @@ if (process.env.KITE_SESSION_WORKER !== '1') {
   return;
 }
 const express = require('express');
+const { noteOutcome } = require('./healthLog');
 const path = require('path');
 const { Client } = require("@modelcontextprotocol/sdk/client/index.js");
 const { StdioClientTransport } = require("@modelcontextprotocol/sdk/client/stdio.js");
@@ -5600,9 +5601,47 @@ app.get('/api/data-health', async (req, res) => {
     }
     const data = await checkDataHealth();
     dataHealthCache = { data, ts: Date.now() };
+    noteOutcome('scorecard-data-health', { ok: true, detail: data.ok ? 'all feeds current' : `${data.feeds.filter(f => !f.ok).length} feed(s) behind or with gaps` });
     res.json(data);
   } catch (err) {
     console.error('[data-health]', err.message);
+    noteOutcome('scorecard-data-health', { ok: false, error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── System status ───────────────────────────────────────────────────────────
+// Jobs, scorecards, feeds, scrapers, running code and stray processes, each
+// ok / warn / fail / unknown. See backend/systemStatus.js. Cached briefly
+// because the frontend banner polls it; GitHub separately for longer, since
+// the unauthenticated API allows 60 requests an hour.
+let systemStatusCache = null;
+let workflowCache = null;
+app.get('/api/system-status', async (req, res) => {
+  try {
+    const force = Boolean(req.query.force);
+    if (!force && systemStatusCache && Date.now() - systemStatusCache.ts < 5 * 60 * 1000) {
+      return res.json({ ...systemStatusCache.data, cached: true });
+    }
+    const status = require('./systemStatus');
+    if (force || !workflowCache || Date.now() - workflowCache.ts > 15 * 60 * 1000) {
+      workflowCache = { data: await status.fetchWorkflows(status.repoSlug()), ts: Date.now() };
+    }
+    const data = await status.systemStatus({
+      workflows: workflowCache.data,
+      // The feed check reads the index from Yahoo and several tables; share
+      // the data-health route's cache rather than doing it twice.
+      checkDataHealth: async () => {
+        if (dataHealthCache && Date.now() - dataHealthCache.ts < DATA_HEALTH_TTL) return dataHealthCache.data;
+        const d = await checkDataHealth();
+        dataHealthCache = { data: d, ts: Date.now() };
+        return d;
+      },
+    });
+    systemStatusCache = { data, ts: Date.now() };
+    res.json(data);
+  } catch (err) {
+    console.error('[system-status]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -5725,9 +5764,11 @@ app.get('/api/stock-picks/scorecard', async (req, res) => {
     }
     const data = await scorecardRunning; // concurrent requests share one run
     scorecardCache = { data, ts: Date.now() };
+    noteOutcome('scorecard-india-picks', { ok: true });
     res.json(data);
   } catch (err) {
     console.error('[stock-picks/scorecard]', err.message);
+    noteOutcome('scorecard-india-picks', { ok: false, error: err.message });
     res.status(500).json({ error: err.message });
   }
 });
@@ -5753,9 +5794,11 @@ app.get('/api/signals/scorecard', async (req, res) => {
     }
     const data = await signalScoreRunning; // concurrent requests share one run
     signalScoreCache = { data, ts: Date.now() };
+    noteOutcome('scorecard-india-signals', { ok: true, detail: `${data.signals.length} entries` });
     res.json(data);
   } catch (err) {
     console.error('[signals/scorecard]', err.message);
+    noteOutcome('scorecard-india-signals', { ok: false, error: err.message });
     res.status(500).json({ error: err.message });
   }
 });
@@ -6063,8 +6106,11 @@ app.get('/api/risk-regime', async (req, res) => {
 // backend/rrg/scorecard.js. Built lazily and cached there for 12h.
 app.get('/api/rrg/scorecard', async (req, res) => {
   try {
-    res.json(await require('./rrg/scorecard').getUsRotationScorecard());
+    const data = await require('./rrg/scorecard').getUsRotationScorecard();
+    if (!data.cached) noteOutcome('scorecard-rrg', data.recordedError ? { ok: false, error: `recorded half unreadable: ${data.recordedError}` } : { ok: true });
+    res.json(data);
   } catch (err) {
+    noteOutcome('scorecard-rrg', { ok: false, error: err.message });
     res.status(502).json({ error: err.message });
   }
 });
@@ -6376,3 +6422,11 @@ async function stopWorker() {
 }
 process.once('SIGTERM', stopWorker);
 process.once('SIGINT', stopWorker);
+// A worker belongs to one gateway. It is forked detached (so the gateway can
+// kill its whole process group), which also means it does NOT die with the
+// gateway: a gateway that crashed, was killed, or was restarted without a
+// clean shutdown left its workers running. On 2026-11-19 there were 23 of
+// them, the oldest from 8 October, each still holding its old code and its
+// own 30-minute job timer. The IPC channel closes when the parent exits for
+// any reason, so that is the signal to go.
+process.once('disconnect', stopWorker);

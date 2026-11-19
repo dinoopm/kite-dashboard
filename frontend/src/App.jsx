@@ -39,6 +39,8 @@ import StockPicks from './pages/marketData/StockPicks'
 import MacroEconomics from './pages/marketData/MacroEconomics'
 import ExpiryStudy from './pages/marketData/ExpiryStudy'
 import TrackRecord from './pages/TrackRecord'
+import SystemStatus from './pages/SystemStatus'
+import SystemStatusBanner from './components/SystemStatusBanner'
 import EventsCalendar from './pages/marketData/EventsCalendar'
 import OilTracker from './pages/marketData/OilTracker'
 import Navbar from './components/Navbar'
@@ -283,6 +285,7 @@ function App() {
     <BrowserRouter key={identity.appUserId}>
       <div style={{ maxWidth: '1600px', width: '95%', margin: '0 auto', padding: '2rem 1rem' }}>
         <Navbar onDisconnect={handleDisconnect} />
+        <SystemStatusBanner />
         {loginMsg && <p role="alert">{loginMsg}</p>}
         <Routes>
           <Route path="/" element={<Dashboard />} />
@@ -296,6 +299,7 @@ function App() {
           <Route path="/crypto" element={<Crypto />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/track-record" element={<TrackRecord />} />
+          <Route path="/status" element={<SystemStatus />} />
           <Route path="/market-data/stock-picks" element={<StockPicks />} />
           <Route path="/market-data/fii-dii" element={<FiiDii />} />
           <Route path="/market-data/large-deals" element={<LargeDeals />} />
