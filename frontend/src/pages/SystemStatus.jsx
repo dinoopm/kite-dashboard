@@ -11,7 +11,7 @@ import { loadSystemStatus, STATE_META } from '../lib/systemStatus'
 // check says what it is.
 
 const GREY = 'var(--text-secondary)'
-const GROUP_ORDER = ['Daily jobs', 'Scorecards', 'Data feeds', 'Scrapers (GitHub Actions)', 'Running code']
+const GROUP_ORDER = ['Daily jobs', 'Scorecards', 'Data feeds', 'Backups', 'Scrapers (GitHub Actions)', 'Running code']
 
 function Check({ c }) {
   const m = STATE_META[c.state] || STATE_META.unknown

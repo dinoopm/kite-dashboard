@@ -282,7 +282,16 @@ function logOutcomes(out) {
 
 async function runDailyJobs({ force = false, privateOnly = false } = {}) {
   const out = await runDailyJobsInner({ force, privateOnly });
-  if (!privateOnly) logOutcomes(out);
+  if (!privateOnly) {
+    logOutcomes(out);
+    // Then look at the whole system and tell someone if anything has newly
+    // broken (alerts.js). The gateway's pass only: it runs whether or not
+    // anyone is signed in, which is exactly when nobody is looking.
+    try {
+      const status = await require('./systemStatus').systemStatus();
+      out.alerts = await require('./alerts').notifyFromStatus(status);
+    } catch (err) { out.alerts = { error: err.message }; }
+  }
   return out;
 }
 
@@ -384,7 +393,26 @@ async function runDailyJobsInner({ force = false, privateOnly = false } = {}) {
     }
   }
 
-  if (privateOnly) return out;
+  // Personal tables can only be read by a signed-in account (auth/database.js),
+  // so each session backs up its own, into backups/users/<account>/.
+  if (privateOnly) {
+    try {
+      const me = require('./auth/identity').getIdentity();
+      if (me?.appUserId) {
+        const b = require('./backup/backup');
+        const root = b.privateRoot(me.appUserId);
+        if (!force && !b.backupDue(new Date(), b.readManifest(root))) out.backup = { skipped: 'not due' };
+        else {
+          const r = await b.runBackup({ scope: 'private', root });
+          out.backup = r.failed.length ? { error: `${r.failed.length} table(s) failed: ${r.failed.map(f => `${f.table} (${f.error})`).join('; ')}` } : { saved: r.rows };
+        }
+      }
+    } catch (err) {
+      out.backup = { error: err.message };
+      console.warn('[daily] personal backup failed (will retry next tick):', err.message);
+    }
+    return out;
+  }
 
   // Independent of page views; transitions are versioned and insert-only.
   try { out.usRiskSeverity = (await require('./usRiskSeverity').getAndRecordUsRiskSeverity()).recording; }
@@ -422,6 +450,21 @@ async function runDailyJobsInner({ force = false, privateOnly = false } = {}) {
   } catch (err) {
     out.rrgRotation = { error: err.message };
     console.warn('[daily] RRG rotation recording failed (will retry next tick):', err.message);
+  }
+
+  // Backups of the market tables that cannot be re-fetched (backup/backup.js).
+  // Once a UTC day after 23:00, decided by the backup's own manifest.
+  try {
+    const b = require('./backup/backup');
+    if (!force && !b.backupDue()) out.backup = { skipped: 'not due' };
+    else {
+      const r = await b.runBackup({ scope: 'public' });
+      out.backup = r.failed.length ? { error: `${r.failed.length} table(s) failed: ${r.failed.map(f => `${f.table} (${f.error})`).join('; ')}` } : { saved: r.rows };
+      console.log(`[daily] backup: ${r.rows} rows, ${(r.bytes / 1e6).toFixed(1)} MB${r.failed.length ? `, ${r.failed.length} table(s) failed` : ''}`);
+    }
+  } catch (err) {
+    out.backup = { error: err.message };
+    console.warn('[daily] backup failed (will retry next tick):', err.message);
   }
 
 

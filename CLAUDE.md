@@ -50,6 +50,16 @@ attached, so it shows as visibly unvalidated instead of quietly unvalidated.
   job or scorecard should call `noteOutcome` and be listed in `JOBS` /
   `SCORECARDS`, or its failures are silent again. Warnings never raise the
   banner — an alarm that is always on is one nobody reads.
+- `backend/alerts.js` — after each gateway pass, a check that newly enters
+  `fail` sends a macOS notification (and a POST to `NOTIFY_WEBHOOK_URL` if set);
+  one reminder a day while it stays broken; one message on recovery.
+- `backend/backup/backup.js` — nightly copies of every table that cannot be
+  re-fetched, to `backups/` (git-ignored). Market tables from the gateway;
+  personal tables (the `PRIVATE_TABLES` in `auth/database.js`) from each
+  signed-in session into `backups/users/<account>/`, because the database layer
+  will not serve them to anything else. `node backup/verify.js [table]` checks
+  every file against the database and prints a restore dry run. A new table
+  holding data that cannot be re-fetched belongs in its `TABLES` list.
 
 ### rule versions
 

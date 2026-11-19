@@ -37,6 +37,7 @@ const JOBS = {
   usRiskSeverity: { label: 'US risk severity recording',  quietHours: 6 },
   riskRegime:     { label: 'Money Flow recording',        quietHours: 30 },
   rrgRotation:    { label: 'RRG entry recording',         quietHours: 30 },
+  backup:         { label: 'Market data backup (job)',    quietHours: 30 },
 };
 const SCORECARDS = {
   'scorecard-india-signals': 'Indian signal scorecard',
@@ -111,6 +112,18 @@ function evaluate(inputs, now = Date.now()) {
       else if (f.gaps?.length) checks.push({ ...base, state: 'fail', summary: `Missing ${f.gaps.length} traded session(s): ${f.gaps.slice(0, 6).join(', ')}${f.gaps.length > 6 ? '…' : ''}` });
       else checks.push({ ...base, state: 'ok', summary: `Current — last ${f.last}` });
     }
+  }
+
+  // ── Backups (backup/backup.js) ──────────────────────────────────────────
+  for (const bk of inputs.backups || []) {
+    const base = { id: bk.id, group: 'Backups', label: bk.label };
+    const m = bk.manifest;
+    if (!m?.lastRunAt) { checks.push({ ...base, state: 'unknown', summary: bk.never }); continue; }
+    const ageH = (now - Date.parse(m.lastRunAt)) / 3600e3;
+    const rows = Object.values(m.tables || {}).reduce((s, t) => s + (t.parts || []).reduce((a, p) => a + (t.mode === 'full' ? 0 : p.rows), 0) + (t.mode === 'full' ? (t.parts?.at(-1)?.rows || 0) : 0), 0);
+    if (m.lastFailed?.length) checks.push({ ...base, state: 'fail', summary: `Last run ${ago(m.lastRunAt, now)}: ${m.lastFailed.length} table(s) not copied — ${m.lastFailed.join(', ')}.`, action: 'Run `node backup/verify.js` in backend/ for details.' });
+    else if (ageH > 48) checks.push({ ...base, state: 'fail', summary: `No backup for ${Math.round(ageH)} hours (last ${ago(m.lastRunAt, now)}).` });
+    else checks.push({ ...base, state: 'ok', summary: `${Object.keys(m.tables || {}).length} tables, ${rows.toLocaleString()} rows — last run ${ago(m.lastRunAt, now)}.` });
   }
 
   // ── Scrapers on GitHub Actions ──────────────────────────────────────────
@@ -243,6 +256,17 @@ async function fetchWorkflows(slug, { fetchImpl = fetch } = {}) {
 
 const WORKER_STARTED = new Date(Date.now() - process.uptime() * 1000).toISOString();
 
+/** The market-data backup's manifest, and this session's own, if signed in. */
+function backupManifests() {
+  try {
+    const b = require('./backup/backup');
+    const out = [{ id: 'backup-public', label: 'Market data backup', manifest: b.readManifest(), never: 'No backup yet. The gateway makes one after 23:00 UTC.' }];
+    const me = process.env.KITE_SESSION_WORKER === '1' ? require('./auth/identity').getIdentity() : null;
+    if (me?.appUserId) out.push({ id: 'backup-mine', label: 'Your personal data backup', manifest: b.readManifest(b.privateRoot(me.appUserId)), never: 'No backup yet. Your session makes one daily while you are signed in.' });
+    return out;
+  } catch { return []; }
+}
+
 async function gather({ checkDataHealth = require('./dataHealth').checkDataHealth, workflows } = {}) {
   const outcomes = readAll('');
   let feeds;
@@ -257,6 +281,7 @@ async function gather({ checkDataHealth = require('./dataHealth').checkDataHealt
     processes: listProcesses(),
     feeds,
     workflows: workflows || await fetchWorkflows(repoSlug()),
+    backups: backupManifests(),
   };
 }
 

@@ -119,3 +119,20 @@ test('fetchWorkflows keeps the latest completed run per workflow and reads faile
   assert.deepEqual(r.runs.map(w => [w.name, w.conclusion, w.failedSteps]), [['Macro Data Sync', 'success', []], ['Market Data Sync', 'failure', ['Run FII/DII Scraper']]]);
   assert.equal((await fetchWorkflows(null)).error, 'no GitHub remote configured');
 });
+
+describe('backup checks', () => {
+  const bk = (manifest) => ({ ...healthy(), backups: [{ id: 'backup-public', label: 'Market data backup', manifest, never: 'No backup yet.' }] });
+  const tables = { trade_log: { mode: 'incremental', parts: [{ rows: 2 }, { rows: 1 }] }, fii: { mode: 'full', parts: [{ rows: 140 }, { rows: 143 }] } };
+  test('a recent clean run is ok and counts rows once per full table', () => {
+    const c = find(evaluate(bk({ lastRunAt: iso(3), tables, lastFailed: [] }), NOW), 'backup-public');
+    assert.equal(c.state, 'ok');
+    assert.match(c.summary, /2 tables, 146 rows/);
+  });
+  test('a table that failed to copy, or no run for two days, is broken', () => {
+    assert.equal(find(evaluate(bk({ lastRunAt: iso(3), tables, lastFailed: ['trade_log'] }), NOW), 'backup-public').state, 'fail');
+    assert.equal(find(evaluate(bk({ lastRunAt: iso(60), tables, lastFailed: [] }), NOW), 'backup-public').state, 'fail');
+  });
+  test('never having run is unknown, not an alarm', () => {
+    assert.equal(find(evaluate(bk({ tables: {} }), NOW), 'backup-public').state, 'unknown');
+  });
+});
